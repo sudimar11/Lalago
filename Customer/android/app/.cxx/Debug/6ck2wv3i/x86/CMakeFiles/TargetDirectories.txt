@@ -1,0 +1,2 @@
+C:/Users/xwarr/Documents/Github/LalaGo-Customer/android/app/.cxx/Debug/6ck2wv3i/x86/CMakeFiles/edit_cache.dir
+C:/Users/xwarr/Documents/Github/LalaGo-Customer/android/app/.cxx/Debug/6ck2wv3i/x86/CMakeFiles/rebuild_cache.dir

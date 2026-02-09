@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Temporary rules for testing - allow all reads and writes
+    // WARNING: These rules are NOT for production use
+    match /{document=**} {
+      allow read, write: if true;
+    }
+    
+    // Specific rules for daily notes and reactions
+    match /daily_summaries/{date}/notes/{noteId} {
+      allow read, write: if request.auth != null;
+      
+      // Allow reactions on notes
+      match /reactions/{userId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+    
+    // Driver collection records - immutable audit trail
+    // Records can only be created, never updated or deleted
+    match /driver_collections/{collectionId} {
+      // Allow read for authenticated users
+      allow read: if request.auth != null;
+      
+      // Allow create only with required fields and immutable flag
+      // Ensure all required fields are present and immutable flag is set
+      allow create: if request.auth != null
+        && request.resource.data.immutable == true
+        && request.resource.data.collectionId is string
+        && request.resource.data.driverId is string
+        && request.resource.data.driverName is string
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.walletBalanceBefore is number
+        && request.resource.data.walletBalanceAfter is number
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.status is string
+        && request.resource.data.collectionType is string;
+      
+      // Prevent updates - records are immutable
+      allow update: if false;
+      
+      // Prevent deletes - records are immutable
+      allow delete: if false;
+    }
+    
+    // TODO: Replace with proper security rules before production deployment
+    // Example of proper rules:
+    // match /users/{userId} {
+    //   allow read, write: if request.auth != null && request.auth.uid == userId;
+    // }
+    // 
+    // match /sms_campaigns/{campaignId} {
+    //   allow read, write: if request.auth != null;
+    // }
+    // 
+    // match /sms_results/{resultId} {
+    //   allow read, write: if request.auth != null;
+    // }
+    // 
+    // match /sms_logs/{logId} {
+    //   allow read, write: if request.auth != null;
+    // }
+  }
+}

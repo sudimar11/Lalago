@@ -1,0 +1,824 @@
+//import 'package:audioplayers/audioplayers.dart';
+import 'dart:async';
+import 'dart:developer';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:foodie_driver/constants.dart';
+import 'package:foodie_driver/main.dart';
+import 'package:foodie_driver/model/CurrencyModel.dart';
+import 'package:foodie_driver/model/User.dart';
+import 'package:foodie_driver/services/FirebaseHelper.dart';
+import 'package:foodie_driver/services/session_service.dart';
+import 'package:foodie_driver/services/driver_performance_service.dart';
+import 'package:foodie_driver/services/order_location_service.dart';
+import 'package:foodie_driver/services/attendance_service.dart';
+import 'package:foodie_driver/services/notification_service.dart';
+import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:foodie_driver/ui/profile/ProfileScreen.dart';
+//import 'package:foodie_driver/ui/wallet/sample.dart';
+//import 'package:foodie_driver/ui/wallet/wallet.dart';
+import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
+import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
+import 'package:foodie_driver/ui/heat_map/DriverHeatMapScreen.dart';
+import 'package:foodie_driver/widgets/shared_bottom_navigation_bar.dart';
+import 'package:foodie_driver/widgets/shared_app_bar.dart';
+import 'package:geolocator/geolocator.dart' hide LocationAccuracy;
+import 'package:location/location.dart';
+import 'package:provider/provider.dart';
+
+enum BottomNavSelection {
+  MyOrders,
+  Wallet,
+  CreditWallet,
+  Incentive,
+  Profile,
+  Hotspots,
+}
+
+class ContainerScreen extends StatefulWidget {
+  ContainerScreen({Key? key}) : super(key: key);
+
+  @override
+  _ContainerScreen createState() {
+    return _ContainerScreen();
+  }
+}
+
+class _ContainerScreen extends State<ContainerScreen> {
+  String _appBarTitle = 'Orders';
+  final fireStoreUtils = FireStoreUtils();
+  late Widget _currentWidget;
+  BottomNavSelection _bottomNavSelection = BottomNavSelection.MyOrders;
+  int _currentIndex = 0;
+
+  bool isLoading = true;
+
+  bool isPop = false;
+
+  Timer? _closingTimeCheckTimer;
+  bool? _lastCheckedInStatus;
+  bool _isSuspended = false;
+  bool _hasShownAbsenceWarning = false;
+  bool _remittanceDialogDismissed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    setCurrency();
+
+    /// On iOS, we request notification permissions, Does nothing and returns null on Android
+    FireStoreUtils.firebaseMessaging.requestPermission(
+      alert: true,
+      announcement: false,
+      badge: true,
+      carPlay: false,
+      criticalAlert: false,
+      provisional: false,
+      sound: true,
+    );
+
+    // Also check immediately on launch
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _updateClosingTimeTimer();
+      _checkClosingTime();
+      Future.delayed(const Duration(milliseconds: 800), () {
+        if (mounted) {
+          NotificationService.showEnableNotificationsDialogIfNeeded(context);
+        }
+      });
+      // Run detection in background after UI loads
+      Future.delayed(Duration(seconds: 2), () {
+        _detectMissingAbsences();
+      });
+      _checkAttendanceStatus();
+      // Start remittance enforcement listener
+      final userId = MyAppState.currentUser?.userID;
+      if (userId != null && userId.isNotEmpty) {
+        final remittanceService =
+            Provider.of<RemittanceEnforcementService>(context, listen: false);
+        remittanceService.startListening(userId);
+      }
+    });
+  }
+
+  void _checkClosingTime() async {
+    if (MyAppState.currentUser == null || !mounted) return;
+
+    final hasPassed = await SessionService.hasPassedClosingTime();
+    if (hasPassed) {
+      print(
+          '⏰ Closing time passed during periodic check, performing automatic checkout...');
+      await MyAppState.performAutomaticCheckout();
+    }
+  }
+
+  void _updateClosingTimeTimer() {
+    final isCheckedIn = MyAppState.currentUser?.checkedInToday == true;
+
+    if (isCheckedIn && _closingTimeCheckTimer == null) {
+      // Start timer when checked in and timer is not running
+      _closingTimeCheckTimer = Timer.periodic(
+        Duration(minutes: 15),
+        (timer) => _checkClosingTime(),
+      );
+    } else if (!isCheckedIn && _closingTimeCheckTimer != null) {
+      // Cancel timer when not checked in and timer is running
+      _closingTimeCheckTimer?.cancel();
+      _closingTimeCheckTimer = null;
+    }
+  }
+
+  void _detectMissingAbsences() async {
+    if (MyAppState.currentUser == null || !mounted) return;
+
+    try {
+      final driverId = MyAppState.currentUser!.userID;
+      final absentDaysMarked =
+          await DriverPerformanceService.detectAndMarkMissingAbsences(driverId);
+
+      if (absentDaysMarked > 0 && mounted) {
+        final pointsDeducted =
+            absentDaysMarked * DriverPerformanceService.ADJUSTMENT_ABSENT;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '$absentDaysMarked absent day(s) detected and marked. Performance deducted: ${pointsDeducted.toStringAsFixed(1)} points',
+            ),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'View',
+              textColor: Colors.white,
+              onPressed: () {
+                // Navigate to attendance history if needed
+              },
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      // Handle errors gracefully - don't block app startup
+      print(
+          '⚠️ Error detecting missing absences on app start (non-blocking): $e');
+    }
+  }
+
+  Future<void> _checkAttendanceStatus() async {
+    if (MyAppState.currentUser == null || !mounted) return;
+
+    final latestUser = await AttendanceService.fetchLatestUser(
+      MyAppState.currentUser!.userID,
+    );
+    if (latestUser != null) {
+      MyAppState.currentUser = latestUser;
+    }
+
+    final currentUser = latestUser ?? MyAppState.currentUser!;
+    final status =
+        await AttendanceService.evaluateAndUpdateAttendance(currentUser);
+    await AttendanceService.touchLastActiveDate(currentUser);
+
+    if (!mounted) return;
+    setState(() {
+      _isSuspended = currentUser.suspended == true || status.isSuspended;
+    });
+
+    if (status.showWarning && !_hasShownAbsenceWarning && mounted) {
+      _hasShownAbsenceWarning = true;
+      _showAbsenceWarningDialog();
+    }
+  }
+
+  @override
+  void dispose() {
+    _closingTimeCheckTimer?.cancel();
+    OrderLocationService.stopMonitoring();
+    // Stop remittance enforcement listener
+    try {
+      final remittanceService =
+          Provider.of<RemittanceEnforcementService>(context, listen: false);
+      remittanceService.stopListening();
+    } catch (_) {}
+    super.dispose();
+  }
+
+  void setPop(bool value) {
+    setState(() {
+      isPop = value;
+    });
+  }
+
+  setCurrency() async {
+    _currentWidget = OrdersBlankScreen();
+
+    // Ensure screen shows even if network/location is very slow (max 12s)
+    Future.delayed(const Duration(seconds: 12), () {
+      if (mounted && isLoading) {
+        setState(() => isLoading = false);
+      }
+    });
+
+    try {
+      final currency = await FireStoreUtils()
+          .getCurrency()
+          .timeout(const Duration(seconds: 5));
+      if (mounted) {
+        setState(() {
+          currencyModel = currency ??
+              CurrencyModel(
+                id: "",
+                code: "USD",
+                decimal: 2,
+                name: "US Dollar",
+                symbol: "\$",
+                symbolatright: false,
+              );
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          currencyModel = CurrencyModel(
+            id: "",
+            code: "USD",
+            decimal: 2,
+            name: "US Dollar",
+            symbol: "\$",
+            symbolatright: false,
+          );
+        });
+      }
+    }
+
+    try {
+      final driverNearBy = await FireStoreUtils.firestore
+          .collection(Setting)
+          .doc("DriverNearBy")
+          .get()
+          .timeout(const Duration(seconds: 5));
+      final data = driverNearBy.data();
+      if (mounted) {
+        setState(() {
+          minimumDepositToRideAccept =
+              data?['minimumDepositToRideAccept'] ?? "0";
+          driverLocationUpdate = data?['driverLocationUpdate'] ?? "2";
+          singleOrderReceive = data?['singleOrderReceive'] ?? false;
+          mapType = data?['mapType'] ?? "normal";
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          minimumDepositToRideAccept = "0";
+          driverLocationUpdate = "2";
+          singleOrderReceive = false;
+          mapType = "normal";
+        });
+      }
+    }
+
+    if (mounted) setState(() => isLoading = false);
+
+    _loadRemainingSettings();
+  }
+
+  Future<void> _loadRemainingSettings() async {
+    try {
+      await updateCurrentLocation().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {},
+      );
+    } catch (e, st) {
+      // Location/background slow or failed; continue loading payment settings
+    }
+    try {
+      await FireStoreUtils.getPaypalSettingData();
+      await FireStoreUtils.getStripeSettingData();
+      await FireStoreUtils.getPayStackSettingData();
+      await FireStoreUtils.getFlutterWaveSettingData();
+      await FireStoreUtils.getPaytmSettingData();
+      await FireStoreUtils.getWalletSettingData();
+      await FireStoreUtils.getPayFastSettingData();
+      await FireStoreUtils.getMercadoPagoSettingData();
+      await FireStoreUtils.getReferralAmount();
+    } catch (_) {}
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection(Setting)
+          .doc('placeHolderImage')
+          .get()
+          .timeout(const Duration(seconds: 5));
+      final value = doc.data()?['image'] ?? '';
+      if (mounted) setState(() => placeholderImage = value);
+    } catch (_) {}
+  }
+
+  DateTime preBackpress = DateTime.now();
+
+  //final audioPlayer = AudioPlayer(playerId: "playerId");
+  Location location = Location();
+
+  // Location update optimization variables
+  Duration _minLocationUpdateInterval = Duration(seconds: 25);
+  double _minMovementThresholdMeters = 30.0;
+  double _duplicateThresholdMeters = 5.0;
+  DateTime? _lastAcceptedLocationUpdate;
+  UserLocation? _lastAcceptedLocation;
+  UserLocation? _lastStoredLocation;
+
+  // Debug logging counters
+  int _rawLocationEventCount = 0;
+  int _acceptedLocationUpdateCount = 0;
+  int _skippedLocationUpdateCount = 0;
+  int _firestoreWriteCount = 0;
+
+  // User data cache to reduce Firestore reads
+  User? _cachedDriverUser;
+  DateTime? _cachedDriverUserFetchedAt;
+
+  void _adjustLocationThresholds(bool hasActiveOrder) {
+    if (hasActiveOrder) {
+      // Active delivery: Precise tracking
+      _minLocationUpdateInterval = Duration(seconds: 25);
+      _minMovementThresholdMeters = 30.0;
+      _duplicateThresholdMeters = 5.0;
+    } else {
+      // No active order: Relaxed tracking (2x intervals)
+      _minLocationUpdateInterval = Duration(seconds: 60);
+      _minMovementThresholdMeters = 100.0;
+      _duplicateThresholdMeters = 10.0;
+    }
+  }
+
+  updateCurrentLocation() async {
+    log("-------->$driverLocationUpdate");
+
+    // Check if current user is null
+    if (MyAppState.currentUser == null) {
+      log('MyAppState.currentUser is null. Cannot update location.');
+      return;
+    }
+
+    // Inner function to listen and update location (non-blocking; failures
+    // must not block screen)
+    void startLocationListener() {
+      try {
+        location.enableBackgroundMode(enable: true);
+        location.changeSettings(
+          accuracy: LocationAccuracy.balanced,
+          distanceFilter: double.tryParse(driverLocationUpdate) ?? 10,
+        );
+      } catch (e, st) {
+        log('Location enableBackgroundMode/changeSettings failed: $e');
+        return;
+      }
+
+      location.onLocationChanged.listen((locationData) async {
+        // Increment raw location event counter
+        _rawLocationEventCount++;
+        locationDataFinal = locationData;
+
+        final userId = MyAppState.currentUser?.userID;
+        if (userId == null) {
+          log('User ID is null. Skipping location update.');
+          _skippedLocationUpdateCount++;
+          return;
+        }
+
+        // Create new location object (needed for movement checks)
+        final newLocation = UserLocation(
+          latitude: locationData.latitude ?? 0.0,
+          longitude: locationData.longitude ?? 0.0,
+        );
+
+        // Fix #1: Rate Limiter Check (before Firestore read)
+        final now = DateTime.now();
+        if (_lastAcceptedLocationUpdate != null) {
+          final timeSinceLastUpdate =
+              now.difference(_lastAcceptedLocationUpdate!);
+          if (timeSinceLastUpdate < _minLocationUpdateInterval) {
+            // Skip update - too soon since last accepted update
+            _skippedLocationUpdateCount++;
+            return;
+          }
+        }
+
+        // Fix #2: Movement Threshold Check (before Firestore read)
+        if (_lastAcceptedLocation != null) {
+          final distanceMoved = Geolocator.distanceBetween(
+            _lastAcceptedLocation!.latitude,
+            _lastAcceptedLocation!.longitude,
+            newLocation.latitude,
+            newLocation.longitude,
+          );
+
+          if (distanceMoved < _minMovementThresholdMeters) {
+            // Skip update - movement too small
+            _skippedLocationUpdateCount++;
+            return;
+          }
+        }
+
+        // Fix #3: Prevent Duplicate Firestore Writes (before Firestore read)
+        if (_lastStoredLocation != null) {
+          final distanceFromLastWrite = Geolocator.distanceBetween(
+            _lastStoredLocation!.latitude,
+            _lastStoredLocation!.longitude,
+            newLocation.latitude,
+            newLocation.longitude,
+          );
+
+          if (distanceFromLastWrite < _duplicateThresholdMeters) {
+            // Skip write - location essentially unchanged
+            _skippedLocationUpdateCount++;
+            return;
+          }
+        }
+
+        // Active status check using cached or MyAppState data (before Firestore read)
+        final cachedOrGlobalUser = _cachedDriverUser ?? MyAppState.currentUser;
+        if (cachedOrGlobalUser != null) {
+          final hasActiveOrder = cachedOrGlobalUser.inProgressOrderID != null &&
+              cachedOrGlobalUser.inProgressOrderID!.isNotEmpty;
+          
+          // NEW: Adjust thresholds based on active order status
+          _adjustLocationThresholds(hasActiveOrder);
+          
+          if (!hasActiveOrder && !cachedOrGlobalUser.isActive) {
+            // Skip location processing when no active delivery
+            _skippedLocationUpdateCount++;
+            OrderLocationService.stopMonitoring();
+            return;
+          }
+        }
+
+        // Guard: Invalidate cache if active order state changed
+        if (_cachedDriverUser != null && MyAppState.currentUser != null) {
+          final cachedOrderIds =
+              _cachedDriverUser!.inProgressOrderID ?? <String>[];
+          final currentOrderIds =
+              MyAppState.currentUser!.inProgressOrderID ?? <String>[];
+
+          if (cachedOrderIds.length != currentOrderIds.length ||
+              !cachedOrderIds.every((id) => currentOrderIds.contains(id))) {
+            _cachedDriverUser = null;
+            _cachedDriverUserFetchedAt = null;
+          }
+        }
+
+        // Fetch user data from cache or Firestore (only after cheap checks pass)
+        User? value;
+        final cacheAge = _cachedDriverUserFetchedAt != null
+            ? now.difference(_cachedDriverUserFetchedAt!)
+            : null;
+        final isCacheValid = _cachedDriverUser != null &&
+            cacheAge != null &&
+            cacheAge.inSeconds < 60;
+
+        if (isCacheValid) {
+          // Use cached user data
+          value = _cachedDriverUser;
+        } else {
+          // Cache is stale or missing - fetch from Firestore
+          value = await FireStoreUtils.getCurrentUser(userId);
+          if (value != null) {
+            _cachedDriverUser = value;
+            _cachedDriverUserFetchedAt = now;
+          }
+        }
+
+        if (value == null) {
+          log('User not found. Skipping location update.');
+          _skippedLocationUpdateCount++;
+          OrderLocationService.stopMonitoring();
+          return;
+        }
+
+        // Fix #4: Active Delivery Guard (verify with fresh data if needed)
+        // Only process if has active order OR is explicitly tracking
+        final hasActiveOrder = value.inProgressOrderID != null &&
+            value.inProgressOrderID!.isNotEmpty;
+        
+        // NEW: Adjust thresholds based on fresh data (may differ from cached)
+        _adjustLocationThresholds(hasActiveOrder);
+        
+        if (!hasActiveOrder && !value.isActive) {
+          // Skip location processing when no active delivery
+          _skippedLocationUpdateCount++;
+          OrderLocationService.stopMonitoring();
+          return;
+        }
+
+        // Fix #5: Reduce accuracy when high precision is unnecessary
+        // Update accuracy based on active order status
+        final accuracy =
+            hasActiveOrder ? LocationAccuracy.high : LocationAccuracy.balanced;
+        // Dynamic distance filter: larger when no active order
+        final distanceFilterValue = hasActiveOrder
+            ? (double.tryParse(driverLocationUpdate) ?? 10)
+            : 50.0;
+        location.changeSettings(
+          accuracy: accuracy,
+          distanceFilter: distanceFilterValue,
+        );
+
+        // All checks passed - accept this location update
+        _acceptedLocationUpdateCount++;
+        _lastAcceptedLocationUpdate = now;
+        _lastAcceptedLocation = newLocation;
+
+        // Update user location
+        value.location = newLocation;
+        value.rotation = locationData.heading;
+
+        // Write to Firestore
+        await FireStoreUtils.updateCurrentUser(value);
+        _firestoreWriteCount++;
+        _lastStoredLocation = newLocation;
+
+        log('📍 Location updated for user: $userId');
+
+        // Fix #6: Isolate Background Tracking from Paid APIs
+        // Only call OrderLocationService after all filters pass
+        String? activeOrderId;
+        if (value.inProgressOrderID != null &&
+            value.inProgressOrderID!.isNotEmpty) {
+          activeOrderId = value.inProgressOrderID!.first.toString();
+        }
+        await OrderLocationService.onLocationUpdate(newLocation, activeOrderId);
+
+        // Fix #7: Debug Logging (periodic summary)
+        if (_rawLocationEventCount % 10 == 0) {
+          log('📍 Location Stats: raw=$_rawLocationEventCount, accepted=$_acceptedLocationUpdateCount, skipped=$_skippedLocationUpdateCount, writes=$_firestoreWriteCount');
+        }
+      });
+    }
+
+    try {
+      final permissionStatus = await location.hasPermission().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => PermissionStatus.denied,
+      );
+      if (permissionStatus == PermissionStatus.granted) {
+        startLocationListener();
+        return;
+      }
+      final requestedPermission = await location.requestPermission().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => PermissionStatus.denied,
+      );
+      if (requestedPermission == PermissionStatus.granted) {
+        startLocationListener();
+      } else {
+        log('Location permission denied.');
+      }
+    } catch (e, st) {
+      log('Location permission check failed: $e');
+    }
+  }
+
+  void _onBottomNavTap(int index) {
+    // Prevent navigation if account is suspended
+    if (MyAppState.currentUser?.suspended == true) {
+      return;
+    }
+
+    setState(() {
+      _currentIndex = index;
+      switch (index) {
+        case 0:
+          _bottomNavSelection = BottomNavSelection.MyOrders;
+          _appBarTitle = 'Orders';
+          _currentWidget = OrdersBlankScreen();
+          break;
+        case 1:
+          _bottomNavSelection = BottomNavSelection.Wallet;
+          _appBarTitle = 'Wallet';
+          _currentWidget = const WalletDetailPage(
+            walletType: 'earning',
+          );
+          break;
+        case 2:
+          _bottomNavSelection = BottomNavSelection.Hotspots;
+          _appBarTitle = 'Hotspots';
+          _currentWidget = const DriverHeatMapScreen();
+          break;
+        case 3:
+          _bottomNavSelection = BottomNavSelection.Profile;
+          _appBarTitle = 'My Profile';
+          _currentWidget = ProfileScreen(
+            user: MyAppState.currentUser!,
+          );
+          break;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      onPopInvokedWithResult: (isPop, dynamic) async {
+        final timegap = DateTime.now().difference(preBackpress);
+        final cantExit = timegap >= Duration(seconds: 2);
+        preBackpress = DateTime.now();
+        if (cantExit) {
+          final snack = SnackBar(
+            content: Text(
+              'Press Back button again to Exit',
+              style: TextStyle(color: Colors.white),
+            ),
+            duration: Duration(seconds: 2),
+            backgroundColor: Colors.black,
+          );
+          ScaffoldMessenger.of(context).showSnackBar(snack);
+          return setPop(false); // false will do nothing when back press
+        } else {
+          return setPop(true); // true will exit the app
+        }
+      },
+      child: ChangeNotifierProvider.value(
+        value: MyAppState.currentUser,
+        child: Consumer<User>(
+          builder: (context, user, _) {
+            final remittanceService =
+                context.watch<RemittanceEnforcementService>();
+            if (!remittanceService.isBlockedByRemittance) {
+              _remittanceDialogDismissed = false;
+            }
+            // Monitor check-in status changes and update timer
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              final currentCheckedIn = user.checkedInToday == true;
+              if (_lastCheckedInStatus != currentCheckedIn) {
+                _updateClosingTimeTimer();
+                _lastCheckedInStatus = currentCheckedIn;
+              }
+            });
+
+            return Scaffold(
+              appBar: SharedAppBar(
+                title: _appBarTitle,
+                user: user,
+                automaticallyImplyLeading: false,
+                centerTitle: _bottomNavSelection == BottomNavSelection.Wallet,
+              ),
+              body: isLoading == true
+                  ? const Center(child: CircularProgressIndicator())
+                  : Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Column(
+                          children: [
+                            if (_isSuspended) _SuspensionBanner(),
+                            Expanded(child: _currentWidget),
+                          ],
+                        ),
+                        if (remittanceService.isBlockedByRemittance &&
+                            !_remittanceDialogDismissed)
+                          _RemittanceBlockingOverlay(
+                            onGoToWallet: () {
+                              setState(() {
+                                _remittanceDialogDismissed = true;
+                                _currentIndex = 1;
+                                _bottomNavSelection =
+                                    BottomNavSelection.Wallet;
+                                _appBarTitle = 'Wallet';
+                                _currentWidget = const WalletDetailPage(
+                                  walletType: 'credit',
+                                );
+                              });
+                            },
+                          ),
+                      ],
+                    ),
+              bottomNavigationBar: SharedBottomNavigationBar(
+                currentIndex: _currentIndex,
+                onTap: _onBottomNavTap,
+                isDisabled: user.suspended == true,
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  void _showAbsenceWarningDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Attendance Warning'),
+        content: SelectableText.rich(
+          TextSpan(
+            text:
+                'You have been absent for one full day. Another day of '
+                'absence will result in automatic suspension.',
+            style: const TextStyle(color: Colors.orange),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SuspensionBanner extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      color: Colors.red.withOpacity(0.1),
+      child: SelectableText.rich(
+        TextSpan(
+          text:
+              'Your account is suspended due to two consecutive days of '
+              'absence. Please contact the administrator to restore access.',
+          style: const TextStyle(color: Colors.red),
+        ),
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+}
+
+class _RemittanceBlockingOverlay extends StatelessWidget {
+  final VoidCallback onGoToWallet;
+
+  const _RemittanceBlockingOverlay({required this.onGoToWallet});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black54,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Card(
+            elevation: 8,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.account_balance_wallet,
+                    size: 48,
+                    color: Colors.orange.shade700,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Daily Remittance Required',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  SelectableText.rich(
+                    TextSpan(
+                      text:
+                          'You have an unremitted credit wallet balance from '
+                          'a previous day. Please remit your credit wallet '
+                          'before accepting orders. Go to Wallet to submit a '
+                          'transmit request.',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 14,
+                      ),
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: onGoToWallet,
+                      icon: const Icon(Icons.account_balance_wallet),
+                      label: const Text('Go to Wallet'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Color(COLOR_PRIMARY),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

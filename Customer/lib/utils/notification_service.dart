@@ -1,0 +1,890 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:developer';
+import 'dart:io';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:foodie_customer/model/User.dart';
+import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/helper.dart';
+import 'package:foodie_customer/ui/chat_screen/chat_screen.dart';
+import 'package:foodie_customer/main.dart';
+import 'package:foodie_customer/ui/container/ContainerScreen.dart';
+import 'package:foodie_customer/ui/home/HomeScreen.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+// #region agent log
+void _debugLog(String location, String message, Map<String, dynamic> data,
+    String hypothesisId) {
+  try {
+    final payload = <String, dynamic>{
+      'location': location,
+      'message': message,
+      'data': data,
+      'hypothesisId': hypothesisId,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    };
+    File('/Users/sudimard/Downloads/Lalago/.cursor/debug.log').writeAsStringSync(
+      '${jsonEncode(payload)}\n',
+      mode: FileMode.append,
+    );
+  } catch (_) {}
+}
+// #endregion
+
+Future<void> firebaseMessageBackgroundHandle(RemoteMessage message) async {
+  // TEMP DIAGNOSTIC: full FCM payload in background handler
+  debugPrint(
+      '[FCM_TRACE] ========== firebaseMessageBackgroundHandle TRIGGERED ==========');
+  debugPrint('[FCM_TRACE] messageId=${message.messageId}');
+  debugPrint('[FCM_TRACE] notification=${message.notification != null}');
+  if (message.notification != null) {
+    debugPrint(
+        '[FCM_TRACE] notification.title=${message.notification!.title}');
+    debugPrint(
+        '[FCM_TRACE] notification.body=${message.notification!.body}');
+  }
+  debugPrint('[FCM_TRACE] message.data=${message.data}');
+  debugPrint('[FCM_TRACE] data keys=${message.data.keys.toList()}');
+  debugPrint('[TOKEN_DEBUG] Customer: firebaseMessageBackgroundHandle received messageId=${message.messageId} dataKeys=${message.data.keys.toList()}');
+  log("BackGround Message :: ${message.messageId}");
+  await NotificationService.showBackgroundNotification(message);
+}
+
+class NotificationService {
+  // Singleton pattern
+  static final NotificationService instance = NotificationService._internal();
+  factory NotificationService() => instance;
+  NotificationService._internal();
+
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
+  FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  // Initialization guards
+  bool _isInitialized = false;
+  bool _listenersRegistered = false;
+  static bool _backgroundHandlerRegistered = false;
+  bool _settingsPromptShown = false;
+
+  // Stream subscriptions
+  StreamSubscription<RemoteMessage>? _onMessageSubscription;
+  StreamSubscription<RemoteMessage>? _onMessageOpenedAppSubscription;
+
+  static const String _chatChannelId = 'chat_messages';
+  static const String _chatChannelName = 'Chat Messages';
+  static const String _promoChannelId = 'promo_system';
+  static const String _promoChannelName = 'Promo & System';
+
+  static bool _notificationPermissionDialogShown = false;
+
+  /// Returns true if notification permission is granted (enables pop-up display).
+  static Future<bool> isNotificationPermissionGranted() async {
+    if (Platform.isAndroid) {
+      final status = await Permission.notification.status;
+      return status.isGranted;
+    }
+    final settings = await FirebaseMessaging.instance.getNotificationSettings();
+    return settings.authorizationStatus == AuthorizationStatus.authorized ||
+        settings.authorizationStatus == AuthorizationStatus.provisional;
+  }
+
+  /// Shows a dialog to enable notifications when permission is denied.
+  /// Call when the app has context (e.g. from ContainerScreen/HomeScreen).
+  static Future<void> showEnableNotificationsDialogIfNeeded(
+      BuildContext context) async {
+    if (_notificationPermissionDialogShown) return;
+    if (!await isNotificationPermissionGranted()) {
+      _notificationPermissionDialogShown = true;
+      if (!context.mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Enable Notifications'),
+          content: const Text(
+            'To receive pop-up notifications when riders send you chat '
+            'messages, please enable notifications for this app.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Later'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await openAppSettings();
+              },
+              child: const Text('Open Settings'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  initInfo() async {
+    // #region agent log
+    _debugLog(
+      'notification_service.dart:initInfo',
+      'initInfo called',
+      {'_isInitialized': _isInitialized},
+      'A',
+    );
+    // #endregion
+    if (_isInitialized) return;
+
+    // Register background handler exactly once
+    if (!_backgroundHandlerRegistered) {
+      FirebaseMessaging.onBackgroundMessage(firebaseMessageBackgroundHandle);
+      _backgroundHandlerRegistered = true;
+    }
+    try {
+      if (Platform.isAndroid) {
+        final status = await Permission.notification.status;
+        debugPrint(
+            '[FCM_DEBUG] Android POST_NOTIFICATIONS status=$status');
+        if (status.isDenied || status.isPermanentlyDenied) {
+          debugPrint(
+              '[FCM_DEBUG] requesting POST_NOTIFICATIONS permission');
+          await Permission.notification.request();
+          final after = await Permission.notification.status;
+          debugPrint(
+              '[FCM_DEBUG] POST_NOTIFICATIONS after request=$after');
+        }
+      }
+
+      final request = await FirebaseMessaging.instance.requestPermission(
+        alert: true,
+        announcement: false,
+        badge: true,
+        carPlay: false,
+        criticalAlert: false,
+        provisional: false,
+        sound: true,
+      );
+      debugPrint(
+          '[FCM_DEBUG] iOS permission status: ${request.authorizationStatus}');
+
+      if (Platform.isIOS) {
+        String? apnsToken;
+        const delays = [0, 2, 5];
+        for (var i = 0; i < delays.length; i++) {
+          if (i > 0) {
+            await Future<void>.delayed(Duration(seconds: delays[i]));
+          }
+          apnsToken = await FirebaseMessaging.instance.getAPNSToken();
+          debugPrint(
+              '[FCM_DEBUG] APNs getAPNSToken attempt ${i + 1}/${delays.length}: '
+              '${apnsToken != null && apnsToken.isNotEmpty ? "received" : "null"}');
+          if (apnsToken != null && apnsToken.isNotEmpty) break;
+        }
+        if (apnsToken != null && apnsToken.isNotEmpty) {
+          final preview = apnsToken.length > 20
+              ? '${apnsToken.substring(0, 12)}...${apnsToken.substring(apnsToken.length - 4)}'
+              : '***';
+          debugPrint('[FCM_CONFIRM] APNs token received: $preview');
+          log('APNs token received (len=${apnsToken.length})');
+        } else {
+          debugPrint(
+              '[FCM_DEBUG] APNs token still unavailable after ${delays.length} attempts. '
+              'Ensure app runs on a real device, Push capability and '
+              'Background Modes > Remote notifications are enabled.');
+          log('APNs token unavailable after retries.');
+        }
+
+        final fcmToken = await FirebaseMessaging.instance.getToken();
+        if (fcmToken != null && fcmToken.isNotEmpty) {
+          final preview = fcmToken.length > 20
+              ? '${fcmToken.substring(0, 12)}...${fcmToken.substring(fcmToken.length - 4)}'
+              : '***';
+          debugPrint('[FCM_CONFIRM] FCM token generated: $preview');
+          log('FCM token generated (len=${fcmToken.length})');
+          if (MyAppState.currentUser != null) {
+            MyAppState.currentUser!.fcmToken = fcmToken;
+            await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
+            unawaited(FireStoreUtils.updateActiveOrdersFcmTokenForUser(
+                MyAppState.currentUser!.userID, fcmToken));
+            debugPrint(
+                '[FCM_CONFIRM] FCM token saved to Firestore: '
+                'users/${MyAppState.currentUser!.userID}');
+          }
+        } else {
+          debugPrint(
+              '[FCM_DEBUG] FCM token null/empty (APNs may still be pending)');
+        }
+      }
+
+      await FirebaseMessaging.instance
+          .setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+      // Always initialize local notifications and FCM listeners so pop-ups
+      // work. If permission denied, system may not display, but we stay ready.
+      const AndroidInitializationSettings initializationSettingsAndroid =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const iosInitializationSettings = DarwinInitializationSettings();
+      final InitializationSettings initializationSettings =
+          InitializationSettings(
+        android: initializationSettingsAndroid,
+        iOS: iosInitializationSettings,
+      );
+      await flutterLocalNotificationsPlugin.initialize(
+        initializationSettings,
+        onDidReceiveNotificationResponse: (NotificationResponse response) {
+          _handleNotificationTap(response.payload);
+        },
+      );
+      await _ensureAndroidDefaultChannel();
+      await _ensureAndroidChatChannel();
+      await _ensureAndroidPromoChannel();
+      debugPrint(
+          '[FCM_DEBUG] flutter_local_notifications initialized once '
+          '(channels: high_importance_channel, chat_messages, promo_system)');
+      setupInteractedMessage();
+      _isInitialized = true;
+      // #region agent log
+      _debugLog(
+        'notification_service.dart:initInfo',
+        'initInfo completed',
+        {'permission': request.authorizationStatus.toString()},
+        'A',
+      );
+      // #endregion
+      debugPrint('[TOKEN_DEBUG] Customer: initInfo completed - FCM listeners registered');
+
+      // Only show settings prompt when permission is granted (so user can
+      // enable pop-ups in system settings)
+      if (request.authorizationStatus == AuthorizationStatus.authorized ||
+          request.authorizationStatus == AuthorizationStatus.provisional) {
+        _showAndroidChatSettingsPrompt();
+      }
+    } catch (e) {
+      // #region agent log
+      _debugLog(
+        'notification_service.dart:initInfo',
+        'initInfo FAILED',
+        {'error': e.toString()},
+        'A',
+      );
+      // #endregion
+      debugPrint('[TOKEN_DEBUG] Customer: initInfo FAILED $e');
+      log('Notification init failed: $e');
+    }
+  }
+
+  /// Strict check: used for navigation to chat (tap). Keeps original semantics.
+  static bool isRiderChatNotification(Map<String, dynamic> data) {
+    final type = data['type']?.toString();
+    final senderRole = data['senderRole']?.toString();
+    final messageType = data['messageType']?.toString();
+    if (senderRole != 'rider') {
+      return false;
+    }
+    final isChatType = type == 'chat' || type == 'chat_message';
+    if (!isChatType) {
+      return false;
+    }
+    return messageType == null ||
+        messageType.isEmpty ||
+        messageType == 'chat' ||
+        messageType == 'status_update';
+  }
+
+  /// Tolerant check: show popup if message has notification or non-empty data.
+  /// Ensures any valid FCM from rider (or with title/body) always triggers popup.
+  static bool shouldShowPopupForMessage(RemoteMessage message) {
+    if (message.notification != null) {
+      debugPrint(
+          '[FCM_DEBUG] shouldShowPopupForMessage=true (notification present)');
+      return true;
+    }
+    if (message.data.isEmpty) {
+      debugPrint('[FCM_DEBUG] shouldShowPopupForMessage=false (empty data)');
+      return false;
+    }
+    debugPrint(
+        '[FCM_DEBUG] shouldShowPopupForMessage=true (data keys='
+        '${message.data.keys.toList()})');
+    return true;
+  }
+
+  static bool isHappyHourNotification(Map<String, dynamic> data) {
+    return data['type'] == 'happy_hour';
+  }
+
+  static Future<void> showBackgroundNotification(
+    RemoteMessage message,
+  ) async {
+    final service = NotificationService.instance;
+    debugPrint(
+        '[FCM_DEBUG] showBackgroundNotification dataKeys=${message.data.keys.toList()}');
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+
+    await service.flutterLocalNotificationsPlugin
+        .initialize(initializationSettings);
+    await service._ensureAndroidDefaultChannel();
+    await service._ensureAndroidChatChannel();
+    await service._ensureAndroidPromoChannel();
+
+    if (shouldShowPopupForMessage(message)) {
+      log("Rider/displayable notification received in background");
+      await service._showChatNotification(message);
+      return;
+    }
+    if (isHappyHourNotification(message.data) ||
+        service._hasDisplayableNotification(message)) {
+      await service._showPromoSystemNotification(message);
+    }
+  }
+
+  void _handleNotificationTap(String? payload) {
+    if (payload == null || payload.isEmpty) return;
+
+    try {
+      final Map<String, dynamic> data = jsonDecode(payload);
+      if (isRiderChatNotification(data)) {
+        _navigateToChat(data);
+      } else if (data['type'] == 'happy_hour') {
+        _navigateToHome();
+      }
+    } catch (e) {
+      log('Error handling notification tap: $e');
+    }
+  }
+
+  Future<void> _navigateToHome() async {
+    try {
+      BuildContext? context = navigatorKey.currentContext;
+
+      // If context is not available yet, wait a bit and try again
+      if (context == null) {
+        await Future.delayed(const Duration(seconds: 1));
+        context = navigatorKey.currentContext;
+        if (context == null) {
+          log('No context available for navigation to home');
+          return;
+        }
+      }
+
+      // Navigate to ContainerScreen with HomeScreen as current widget
+      // Use pushAndRemoveUntil to ensure clean navigation stack
+      pushAndRemoveUntil(
+        context,
+        ContainerScreen(
+          user: MyAppState.currentUser,
+          currentWidget: HomeScreen(user: MyAppState.currentUser),
+        ),
+        false, // Remove all previous routes
+      );
+    } catch (e) {
+      log('Error navigating to home: $e');
+    }
+  }
+
+  Future<void> _navigateToChat(Map<String, dynamic> data) async {
+    try {
+      final BuildContext? context = navigatorKey.currentContext;
+      if (context == null) {
+        log('No context available for navigation');
+        return;
+      }
+
+      final String? orderId = data['orderId']?.toString();
+      final String? customerId = data['customerId']?.toString();
+      String? restaurantId = data['restaurantId']?.toString();
+      final String? chatType = data['chatType']?.toString() ?? 'Driver';
+
+      // Fallback: fetch driver ID from order when restaurantId is missing
+      if ((restaurantId == null || restaurantId.isEmpty) &&
+          orderId != null &&
+          orderId.isNotEmpty) {
+        try {
+          final orderDoc = await FirebaseFirestore.instance
+              .collection('restaurant_orders')
+              .doc(orderId)
+              .get();
+          if (orderDoc.exists) {
+            final orderData = orderDoc.data();
+            restaurantId = orderData?['driverID'] as String? ??
+                orderData?['driverId'] as String?;
+          }
+        } catch (e) {
+          log('Error fetching order for restaurantId fallback: $e');
+        }
+      }
+
+      if (orderId == null ||
+          orderId.isEmpty ||
+          customerId == null ||
+          restaurantId == null ||
+          restaurantId.isEmpty) {
+        log('Missing required chat data');
+        return;
+      }
+
+      // Validate customer ID matches current user
+      if (MyAppState.currentUser == null) {
+        log('⚠️ Current user not available, ignoring push notification');
+        return;
+      }
+
+      final currentId = MyAppState.currentUser!.userID.toString();
+      if (customerId != currentId) {
+        log('⚠️ Push notification customer ID mismatch, ignoring - '
+            'Expected: $currentId, Received: $customerId');
+        return;
+      }
+
+      User? customer =
+          await FireStoreUtils.getCurrentUser(customerId.toString());
+      User? restaurantUser =
+          await FireStoreUtils.getCurrentUser(restaurantId.toString());
+
+      if (customer == null || restaurantUser == null) {
+        log('Could not fetch user data');
+        return;
+      }
+
+      // Log rider message push notification receipt (safe logging - metadata only)
+      if (isRiderChatNotification(data)) {
+        log('📨 Rider message push notification received - '
+            'Order: $orderId, '
+            'CustomerId: $customerId, '
+            'ChatType: $chatType');
+      }
+
+      push(
+        context,
+        ChatScreens(
+          customerName: '${customer.firstName} ${customer.lastName}',
+          restaurantName:
+              '${restaurantUser.firstName} ${restaurantUser.lastName}',
+          orderId: orderId,
+          restaurantId: restaurantUser.userID,
+          customerId: customer.userID,
+          customerProfileImage: customer.profilePictureURL,
+          restaurantProfileImage: restaurantUser.profilePictureURL,
+          token: restaurantUser.fcmToken,
+          chatType: chatType,
+        ),
+      );
+    } catch (e) {
+      log('Error navigating to chat: $e');
+    }
+  }
+
+  Future<void> _ensureAndroidChatChannel() async {
+    final androidPlugin =
+        flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    if (androidPlugin == null) {
+      debugPrint('[FCM_DEBUG] _ensureAndroidChatChannel skipped (not Android)');
+      return;
+    }
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      _chatChannelId,
+      _chatChannelName,
+      description: 'Driver chat notifications - enables pop-up banners',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+      enableLights: true,
+      showBadge: true,
+    );
+    await androidPlugin.createNotificationChannel(channel);
+    debugPrint('[FCM_DEBUG] notification channel created: $_chatChannelId');
+  }
+
+  Future<void> _ensureAndroidDefaultChannel() async {
+    final androidPlugin =
+        flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    if (androidPlugin == null) return;
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      'high_importance_channel',
+      'High Importance',
+      description: 'Default high-importance notifications',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+    );
+    await androidPlugin.createNotificationChannel(channel);
+    debugPrint('[FCM_DEBUG] notification channel created: high_importance_channel');
+  }
+
+  Future<void> _ensureAndroidPromoChannel() async {
+    final androidPlugin =
+        flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    if (androidPlugin == null) return;
+
+    final AndroidNotificationChannel channel = AndroidNotificationChannel(
+      _promoChannelId,
+      _promoChannelName,
+      description: 'Promo and system notifications',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+    );
+
+    await androidPlugin.createNotificationChannel(channel);
+  }
+
+  void _showAndroidChatSettingsPrompt() {
+    if (_settingsPromptShown || !Platform.isAndroid) {
+      return;
+    }
+
+    final BuildContext? context = navigatorKey.currentContext;
+    if (context == null) return;
+
+    _settingsPromptShown = true;
+    showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Enable Chat Pop-ups'),
+          content: const Text(
+            'To show chat notifications as pop-ups, set the '
+            '"Chat Messages" channel to High in your system settings.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Later'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                await openAppSettings();
+              },
+              child: const Text('Open Settings'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> setupInteractedMessage() async {
+    // Guard against duplicate listener registration
+    if (_listenersRegistered) return;
+
+    // Cancel existing subscriptions before re-registering (defensive)
+    _onMessageSubscription?.cancel();
+    _onMessageOpenedAppSubscription?.cancel();
+
+    RemoteMessage? initialMessage =
+        await FirebaseMessaging.instance.getInitialMessage();
+    if (initialMessage != null) {
+      _handleInitialMessage(initialMessage);
+    }
+
+    _onMessageSubscription =
+        FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      // TEMP DIAGNOSTIC: full FCM payload in foreground
+      debugPrint(
+          '[FCM_TRACE] ========== onMessage TRIGGERED (foreground) ==========');
+      debugPrint('[FCM_TRACE] messageId=${message.messageId}');
+      debugPrint('[FCM_TRACE] notification=${message.notification != null}');
+      if (message.notification != null) {
+        debugPrint(
+            '[FCM_TRACE] notification.title=${message.notification!.title}');
+        debugPrint(
+            '[FCM_TRACE] notification.body=${message.notification!.body}');
+      }
+      debugPrint('[FCM_TRACE] message.data=${message.data}');
+      debugPrint('[FCM_TRACE] data keys=${message.data.keys.toList()}');
+      debugPrint(
+          '[FCM_DEBUG] onMessage TRIGGERED dataKeys=${message.data.keys.toList()} '
+          'notification=${message.notification != null}');
+      log("::::::::::::onMessage:::::::::::::::::");
+      final isRider = isRiderChatNotification(message.data);
+      _debugLog(
+        'notification_service.dart:onMessage',
+        'FCM onMessage received',
+        {
+          'dataKeys': message.data.keys.toList(),
+          'isRiderChatNotification': isRider,
+          'shouldShowPopup': shouldShowPopupForMessage(message),
+        },
+        'B_C',
+      );
+      if (shouldShowPopupForMessage(message)) {
+        debugPrint(
+            '[FCM_TRACE] ========== ABOUT TO CALL display(message) ==========');
+        display(message);
+        return;
+      }
+      if (isHappyHourNotification(message.data) ||
+          _hasDisplayableNotification(message)) {
+        _showPromoSystemNotification(message);
+      }
+    });
+
+    _onMessageOpenedAppSubscription =
+        FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      log("::::::::::::onMessageOpenedApp:::::::::::::::::");
+      if (isRiderChatNotification(message.data)) {
+        final payloadCustomerId = message.data['customerId']?.toString();
+        final currentId = MyAppState.currentUser?.userID.toString();
+        if (MyAppState.currentUser != null &&
+            payloadCustomerId != null &&
+            payloadCustomerId != currentId) {
+          log('⚠️ Message opened app customer ID mismatch, ignoring');
+          return;
+        }
+        _navigateToChat(message.data);
+      } else if (message.data['type'] == 'happy_hour') {
+        _navigateToHome();
+      } else if (message.notification != null) {
+        log(message.notification.toString());
+        display(message);
+      }
+    });
+
+    _listenersRegistered = true;
+  }
+
+  void _handleInitialMessage(RemoteMessage message) {
+    if (isRiderChatNotification(message.data)) {
+      final payloadCustomerId = message.data['customerId']?.toString();
+      final currentId = MyAppState.currentUser?.userID.toString();
+      if (MyAppState.currentUser != null &&
+          payloadCustomerId != null &&
+          payloadCustomerId != currentId) {
+        log('⚠️ Initial message customer ID mismatch, ignoring');
+        return;
+      }
+
+      Future.delayed(const Duration(seconds: 1), () {
+        _navigateToChat(message.data);
+      });
+    } else if (message.data['type'] == 'happy_hour') {
+      Future.delayed(const Duration(seconds: 1), () {
+        _navigateToHome();
+      });
+    }
+  }
+
+  static Future<String?> getToken() async {
+    return FireStoreUtils.safeGetFcmToken();
+  }
+
+  bool _hasDisplayableNotification(RemoteMessage message) {
+    if (message.notification != null) {
+      return true;
+    }
+    return message.data['title'] != null ||
+        message.data['body'] != null ||
+        message.data['message'] != null;
+  }
+
+  String _resolveTitle(RemoteMessage message, String fallback) {
+    final title = message.notification?.title ??
+        message.data['title']?.toString() ??
+        message.data['subject']?.toString();
+    if (title == null || title.trim().isEmpty) {
+      return fallback;
+    }
+    return title;
+  }
+
+  String _resolveBody(RemoteMessage message, String fallback) {
+    final body = message.notification?.body ??
+        message.data['body']?.toString() ??
+        message.data['message']?.toString() ??
+        message.data['text']?.toString();
+    if (body == null || body.trim().isEmpty) {
+      return fallback;
+    }
+    return body;
+  }
+
+  Future<void> _showPromoSystemNotification(RemoteMessage message) async {
+    final body = _resolveBody(message, 'You have a new update.');
+    final title = _resolveTitle(message, body);
+    await _showLocalNotification(
+      channelId: _promoChannelId,
+      channelName: _promoChannelName,
+      channelDescription: 'Promo and system notifications',
+      title: title,
+      body: body,
+      payload: jsonEncode(message.data),
+    );
+  }
+
+  Future<void> _showChatNotification(RemoteMessage message) async {
+    // #region agent log
+    _debugLog(
+      'notification_service.dart:_showChatNotification',
+      'showing chat notification',
+      {'channelId': _chatChannelId},
+      'E',
+    );
+    // #endregion
+    final title = _resolveTitle(message, 'New message');
+    final body = _resolveBody(
+      message,
+      'You have a new message from a rider.',
+    );
+    await _showLocalNotification(
+      channelId: _chatChannelId,
+      channelName: _chatChannelName,
+      channelDescription: 'Notifications for driver messages',
+      title: title,
+      body: body,
+      payload: jsonEncode(message.data),
+    );
+  }
+
+  Future<void> _showLocalNotification({
+    required String channelId,
+    required String channelName,
+    required String channelDescription,
+    required String title,
+    required String body,
+    required String payload,
+  }) async {
+    try {
+      final AndroidNotificationDetails notificationDetails =
+          AndroidNotificationDetails(
+        channelId,
+        channelName,
+        channelDescription: channelDescription,
+        importance: Importance.max,
+        priority: Priority.max,
+        ticker: 'ticker',
+        visibility: NotificationVisibility.public,
+        category: AndroidNotificationCategory.message,
+      );
+
+      const DarwinNotificationDetails darwinNotificationDetails =
+          DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+        presentBanner: true,
+        presentList: true,
+        interruptionLevel: InterruptionLevel.timeSensitive,
+      );
+
+      final NotificationDetails notificationDetailsBoth = NotificationDetails(
+        android: notificationDetails,
+        iOS: darwinNotificationDetails,
+      );
+
+      final notificationId =
+          DateTime.now().millisecondsSinceEpoch.remainder(100000);
+
+      debugPrint(
+          '[FCM_TRACE] ========== ABOUT TO CALL flutterLocalNotificationsPlugin.show() ==========');
+      debugPrint(
+          '[FCM_TRACE] channelId=$channelId title=$title body=$body '
+          'notificationId=$notificationId');
+      debugPrint(
+          '[FCM_DEBUG] flutterLocalNotificationsPlugin.show() EXECUTION '
+          'channelId=$channelId notificationId=$notificationId title=$title');
+      _debugLog(
+        'notification_service.dart:_showLocalNotification',
+        'calling flutterLocalNotificationsPlugin.show',
+        {'channelId': channelId, 'title': title, 'notificationId': notificationId},
+        'E',
+      );
+      await flutterLocalNotificationsPlugin.show(
+        notificationId,
+        title,
+        body,
+        notificationDetailsBoth,
+        payload: payload,
+      );
+      debugPrint(
+          '[FCM_DEBUG] flutterLocalNotificationsPlugin.show() COMPLETED '
+          'channelId=$channelId');
+      _debugLog(
+        'notification_service.dart:_showLocalNotification',
+        'show() completed successfully',
+        {'channelId': channelId},
+        'E',
+      );
+    } on Exception catch (e) {
+      debugPrint('[FCM_DEBUG] flutterLocalNotificationsPlugin.show() FAILED $e');
+      // #region agent log
+      _debugLog(
+        'notification_service.dart:_showLocalNotification',
+        'show() threw exception',
+        {'error': e.toString(), 'channelId': channelId},
+        'E',
+      );
+      // #endregion
+      log(e.toString());
+    }
+  }
+
+  void display(RemoteMessage message) async {
+    try {
+      // TEMP DIAGNOSTIC: full payload at display() entry
+      debugPrint('[FCM_TRACE] ========== display() ENTRY ==========');
+      debugPrint('[FCM_TRACE] messageId=${message.messageId}');
+      debugPrint('[FCM_TRACE] notification=${message.notification != null}');
+      if (message.notification != null) {
+        debugPrint(
+            '[FCM_TRACE] notification.title=${message.notification!.title}');
+        debugPrint(
+            '[FCM_TRACE] notification.body=${message.notification!.body}');
+      }
+      debugPrint('[FCM_TRACE] message.data=${message.data}');
+      debugPrint(
+          '[FCM_DEBUG] display() ENTRY dataKeys=${message.data.keys.toList()}');
+      _debugLog(
+        'notification_service.dart:display',
+        'display() called',
+        {'dataKeys': message.data.keys.toList()},
+        'D',
+      );
+      log('Got a message whilst in the foreground!');
+      log('Message data: ${message.notification?.body ?? message.data['body'] ?? message.data['message']}');
+
+      final payloadCustomerId = message.data['customerId']?.toString() ??
+          message.data['customer_id']?.toString();
+      final currentUserId = MyAppState.currentUser?.userID.toString();
+      final isMismatch = MyAppState.currentUser != null &&
+          payloadCustomerId != null &&
+          payloadCustomerId != currentUserId;
+      if (isMismatch) {
+        log('⚠️ Foreground notification customer ID mismatch (showing popup '
+            'anyway; tap navigation may skip). Expected: $currentUserId, '
+            'Received: $payloadCustomerId');
+      }
+      if (isRiderChatNotification(message.data)) {
+        log('📨 Rider message notification (foreground) - '
+            'Order: ${message.data['orderId']}, '
+            'CustomerId: ${message.data['customerId']}');
+      }
+
+      await _showChatNotification(message);
+    } on Exception catch (e) {
+      debugPrint('[FCM_DEBUG] display() FAILED: $e');
+      log('Notification display failed: $e');
+    }
+  }
+
+  void dispose() {
+    _onMessageSubscription?.cancel();
+    _onMessageOpenedAppSubscription?.cancel();
+    _onMessageSubscription = null;
+    _onMessageOpenedAppSubscription = null;
+    _listenersRegistered = false;
+  }
+}

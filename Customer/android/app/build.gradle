@@ -1,0 +1,255 @@
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id "dev.flutter.flutter-gradle-plugin"
+    id "com.google.gms.google-services"
+}
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+
+def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
+if (flutterVersionCode == null) {
+    flutterVersionCode = '22'
+}
+
+def flutterVersionName = localProperties.getProperty('flutter.versionName')
+if (flutterVersionName == null) {
+    flutterVersionName = '22'
+}
+
+android {
+    namespace = "com.lalago.customer.android"
+    compileSdk = 36
+    ndkVersion = "27.0.12077973"
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+    
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+            // Ensure 16KB alignment for all native libraries
+            keepDebugSymbols = ['**/*.so']
+            // Exclude Card.io and OpenCV native libraries to resolve 16KB page size warning
+            excludes += [
+                '**/libcardioDecider.so',
+                '**/libcardioRecognizer.so',
+                '**/libcardioRecognizer_tegra2.so',
+                '**/libopencv_core.so',
+                '**/libopencv_imgproc.so'
+            ]
+        }
+        resources {
+            excludes += [
+                'META-INF/DEPENDENCIES',
+                'META-INF/LICENSE',
+                'META-INF/LICENSE.txt',
+                'META-INF/NOTICE',
+                'META-INF/NOTICE.txt'
+            ]
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = ['src/main/java', 'src/main/kotlin']
+        }
+    }
+
+    lintOptions {
+        disable 'InvalidPackage'
+    }
+
+    defaultConfig {
+        applicationId = "com.lalago.customer.android" // New unique ID
+        multiDexEnabled true
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 51
+        versionName = "3.2.21"
+    }
+
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    signingConfigs { // Ensure this block is inside the `android` block
+        release {
+            storeFile file('my-release-key.jks') // Path to your keystore (Google Play signing key)
+            storePassword '071417' // Keystore password
+            keyAlias 'my-key-alias' // Key alias (matches Google Play expected certificate)
+            keyPassword '071417' // Key password
+        }
+    }
+
+    buildTypes { // Ensure this block is also inside the `android` block
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            ndk {
+                // Generate full native debug symbols for Google Play Console
+                // With android.bundle.enableSplitDebugInfo=true, symbols will be in a separate .symbols.zip file
+                debugSymbolLevel 'FULL'
+            }
+            bundle {
+                language {
+                    enableSplit = false
+                }
+            }
+        }
+        debug {
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+    
+    // Task to extract native debug symbols for manual upload if needed
+    applicationVariants.all { variant ->
+        if (variant.buildType.name == "release") {
+            def variantName = variant.name.capitalize()
+            task "extractNativeDebugSymbols${variantName}"(type: Copy) {
+                description = "Extract native debug symbols for ${variant.name} build"
+                from("${buildDir}/intermediates/merged_native_libs/${variant.name}/out/lib") {
+                    include "**/*.so"
+                }
+                into "${buildDir}/native-debug-symbols/${variant.name}"
+                doLast {
+                    println "Native debug symbols extracted to: ${buildDir}/native-debug-symbols/${variant.name}"
+                    println "These symbols are automatically included in the app bundle."
+                    println "If Google Play Console still shows warnings, upload the .so files from this directory."
+                }
+            }
+        }
+    }
+    
+    // Task to extract SHA-1 and SHA-256 from release keystore
+    task getReleaseKeyFingerprints {
+        description = "Extract SHA-1 and SHA-256 fingerprints from release keystore for Google Sign-In configuration"
+        doLast {
+            def keystoreFile = file('my-release-key.jks')
+            if (!keystoreFile.exists()) {
+                println "ERROR: Keystore file not found: ${keystoreFile.absolutePath}"
+                return
+            }
+            
+            def storepass = '071417'
+            def alias = 'my-key-alias'
+            def keypass = '071417'
+            
+            println "Extracting SHA fingerprints from release keystore..."
+            println "Keystore: ${keystoreFile.absolutePath}"
+            println ""
+            
+            def command = [
+                'keytool',
+                '-list',
+                '-v',
+                '-keystore', keystoreFile.absolutePath,
+                '-alias', alias,
+                '-storepass', storepass,
+                '-keypass', keypass
+            ]
+            
+            def process = command.execute()
+            def output = new StringBuffer()
+            def error = new StringBuffer()
+            
+            process.consumeProcessOutput(output, error)
+            process.waitFor()
+            
+            if (process.exitValue() != 0) {
+                println "ERROR: Failed to extract fingerprints"
+                println error.toString()
+                return
+            }
+            
+            def outputText = output.toString()
+            def sha1Pattern = /SHA1:\s*([0-9A-F:]+)/
+            def sha256Pattern = /SHA256:\s*([0-9A-F:]+)/
+            
+            def sha1Matcher = (outputText =~ sha1Pattern)
+            def sha256Matcher = (outputText =~ sha256Pattern)
+            
+            if (sha1Matcher.find()) {
+                def sha1 = sha1Matcher.group(1).replaceAll(':', '').toLowerCase()
+                println "SHA-1:   ${sha1}"
+            }
+            
+            if (sha256Matcher.find()) {
+                def sha256 = sha256Matcher.group(1).replaceAll(':', '').toLowerCase()
+                println "SHA-256: ${sha256}"
+            }
+            
+            println ""
+            println "IMPORTANT: Add these fingerprints to Firebase Console:"
+            println "1. Go to Firebase Console > Project Settings"
+            println "2. Select your Android app (com.lalago.customer.android)"
+            println "3. Scroll to 'SHA certificate fingerprints'"
+            println "4. Click 'Add fingerprint' and paste the SHA-1 and SHA-256 values above"
+            println "5. Download updated google-services.json and replace the current file"
+        }
+    }
+}
+
+// Global exclusion to prevent SafetyNet from being pulled transitively
+// This eliminates Play Console warnings while keeping Play Integrity as the active API
+configurations.all {
+    exclude group: 'com.google.android.gms', module: 'play-services-safetynet'
+}
+
+flutter {
+    source '../..'
+}
+
+dependencies {
+    implementation("androidx.activity:activity-ktx:1.9.0")
+    implementation("androidx.core:core-ktx:1.15.0") {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    // Material Components updated to address Android 15 edge-to-edge deprecations.
+    implementation("com.google.android.material:material:1.13.0") {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    implementation("com.squareup.okhttp3:okhttp:4.9.1") {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    // Single Firebase BoM declaration
+    implementation('com.google.android.gms:play-services-location:21.0.1') {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    implementation('androidx.multidex:multidex:2.0.1') {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    implementation('androidx.window:window:1.2.0') {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    implementation('androidx.window:window-java:1.2.0') {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    // ML Kit: migrate to standalone ML Kit dependency
+    implementation('com.google.mlkit:barcode-scanning:17.3.0') {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    implementation(platform('com.google.firebase:firebase-bom:33.0.0')) {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    implementation("com.google.auth:google-auth-library-oauth2-http:1.3.0") {
+        exclude group: 'com.google.android.play', module: 'core'
+    }
+    // Play Integrity API - latest version without core dependency
+    implementation 'com.google.android.play:integrity:1.5.0'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.3'
+}
+

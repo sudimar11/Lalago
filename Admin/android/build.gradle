@@ -1,0 +1,48 @@
+buildscript {
+    ext.kotlin_version = '1.9.10'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        // Keep these aligned with your Gradle wrapper (gradle-wrapper.properties)
+        classpath 'com.android.tools.build:gradle:8.10.1'
+        classpath 'com.google.gms:google-services:4.3.14'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = '../build'
+
+// Give each subproject its own build dir under ../build
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+    // ❌ Remove this to avoid "already evaluated" / evaluation-order issues:
+    // project.evaluationDependsOn(':app')
+}
+
+// ✅ Use plain 'subprojects { }' (not configureEach) and guard the namespace
+subprojects {
+    plugins.withId('com.android.library') {
+        def androidExt = project.extensions.findByName('android')
+        if (androidExt != null && androidExt.hasProperty('namespace')) {
+            if (!androidExt.namespace) {
+                // Fallback namespace if the library forgot to declare one
+                def fallback = (project.group ?: "com.${rootProject.name}.${project.name}")
+                        .toString()
+                        .replaceAll('[^A-Za-z0-9_.]', '_')
+                androidExt.namespace = fallback
+            }
+        }
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
