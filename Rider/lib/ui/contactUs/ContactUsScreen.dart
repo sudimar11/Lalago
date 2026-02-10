@@ -258,11 +258,7 @@ class _ContactUsScreenState extends State<ContactUsScreen> {
     bool isDark,
   ) {
     if (isLoading) {
-      return Center(
-        child: CircularProgressIndicator.adaptive(
-          valueColor: AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
-        ),
-      );
+      return _ContactUsSkeleton(isDark: isDark);
     }
 
     if (errorMessage != null) {
@@ -446,6 +442,179 @@ class _AddressSection extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: content,
+    );
+  }
+}
+
+class _SkeletonLine extends StatelessWidget {
+  const _SkeletonLine({
+    this.width,
+    this.height = 12,
+    this.borderRadius = 4,
+    required this.isDark,
+  });
+
+  final double? width;
+  final double height;
+  final double borderRadius;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isDark ? Colors.grey.shade700 : Colors.grey.shade300;
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(borderRadius),
+      ),
+    );
+  }
+}
+
+class _ContactUsSkeleton extends StatefulWidget {
+  const _ContactUsSkeleton({required this.isDark});
+
+  final bool isDark;
+
+  @override
+  State<_ContactUsSkeleton> createState() => _ContactUsSkeletonState();
+}
+
+class _ContactUsSkeletonState extends State<_ContactUsSkeleton>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+    _opacity = Tween<double>(begin: 0.4, end: 0.85).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: AnimatedBuilder(
+        animation: _opacity,
+        builder: (context, child) => Opacity(
+          opacity: _opacity.value,
+          child: child,
+        ),
+        child: Material(
+          elevation: 2,
+          color: isDark ? Colors.black12 : Colors.white,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 16, left: 16, top: 16),
+                child: _SkeletonLine(
+                  width: 140,
+                  height: 20,
+                  isDark: isDark,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(
+                  right: 16,
+                  left: 16,
+                  top: 16,
+                  bottom: 16,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _SkeletonLine(
+                      width: double.infinity,
+                      height: 14,
+                      isDark: isDark,
+                    ),
+                    const SizedBox(height: 8),
+                    _SkeletonLine(
+                      width: MediaQuery.of(context).size.width * 0.7,
+                      height: 14,
+                      isDark: isDark,
+                    ),
+                    const SizedBox(height: 8),
+                    _SkeletonLine(
+                      width: MediaQuery.of(context).size.width * 0.5,
+                      height: 14,
+                      isDark: isDark,
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Container(
+                  height: 180,
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.grey.shade800
+                        : Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+              _SkeletonListTile(isDark: isDark),
+              _SkeletonListTile(isDark: isDark),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SkeletonListTile extends StatelessWidget {
+  const _SkeletonListTile({required this.isDark});
+
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SkeletonLine(
+                  width: 80,
+                  height: 16,
+                  isDark: isDark,
+                ),
+                const SizedBox(height: 6),
+                _SkeletonLine(
+                  width: 160,
+                  height: 14,
+                  isDark: isDark,
+                ),
+              ],
+            ),
+          ),
+          _SkeletonLine(width: 24, height: 24, isDark: isDark),
+        ],
+      ),
     );
   }
 }

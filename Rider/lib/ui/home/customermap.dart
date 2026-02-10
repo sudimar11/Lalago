@@ -8,8 +8,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:foodie_driver/main.dart';
+import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/model/conversation_model.dart';
 import 'package:foodie_driver/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_driver/ui/home/confirm_delivery_summary_page.dart';
@@ -444,19 +444,7 @@ class _CustomerDriverLocationPageState
       return;
     }
 
-    try {
-      final uri = Uri(scheme: 'tel', path: phone);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not place call'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
+    await launchPhoneCall(context, phone);
   }
 
   @override

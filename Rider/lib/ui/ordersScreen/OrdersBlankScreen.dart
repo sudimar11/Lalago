@@ -40,8 +40,6 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
 
   int _refreshNonce = 0;
   bool _hasShownOfflineDialog = false;
-  bool _showSlowLoadRetry = false;
-  Timer? _loadingTimeoutTimer;
   Stream<QuerySnapshot>? _ordersStream;
   String? _ordersStreamUserId;
 
@@ -251,7 +249,6 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
 
   @override
   void dispose() {
-    _loadingTimeoutTimer?.cancel();
     _orderStatusSubscription?.cancel();
     super.dispose();
   }
@@ -261,8 +258,6 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
     if (uid != null && uid.isNotEmpty) {
       _ordersStream = _createOrdersStream(uid);
       _ordersStreamUserId = uid;
-      _showSlowLoadRetry = false;
-      _loadingTimeoutTimer?.cancel();
     }
   }
 
@@ -1128,73 +1123,19 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                         return _buildOfflineWarningCard();
                       }
 
-                      if (snapshot.connectionState != ConnectionState.waiting) {
-                        _loadingTimeoutTimer?.cancel();
-                        _loadingTimeoutTimer = null;
-                        _showSlowLoadRetry = false;
-                      }
                       if (snapshot.connectionState == ConnectionState.waiting) {
-                        if (!_showSlowLoadRetry) {
-                          _loadingTimeoutTimer ??= Timer(
-                            const Duration(seconds: 15),
-                            () {
-                              if (mounted) {
-                                setState(() {
-                                  _showSlowLoadRetry = true;
-                                  _loadingTimeoutTimer = null;
-                                });
-                              }
-                            },
-                          );
-                          return const Center(
-                              child: CircularProgressIndicator.adaptive());
-                        }
-                        return Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24.0),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Text(
-                                  'Taking longer than usual.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(fontSize: 16),
-                                ),
-                                const SizedBox(height: 12),
-                                TextButton.icon(
-                                  onPressed: () {
-                                    setState(() => _recreateOrdersStream());
-                                  },
-                                  icon: const Icon(Icons.refresh),
-                                  label: const Text('Retry'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
+                        return const Center(
+                            child: CircularProgressIndicator.adaptive());
                       }
 
                       if (snapshot.hasError) {
-                        return Center(
+                        return const Center(
                           child: Padding(
-                            padding: const EdgeInsets.all(24.0),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Text(
-                                  'Error loading orders.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(fontSize: 16),
-                                ),
-                                const SizedBox(height: 12),
-                                TextButton.icon(
-                                  onPressed: () {
-                                    setState(() => _recreateOrdersStream());
-                                  },
-                                  icon: const Icon(Icons.refresh),
-                                  label: const Text('Retry'),
-                                ),
-                              ],
+                            padding: EdgeInsets.all(24.0),
+                            child: Text(
+                              'Error loading orders.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 16),
                             ),
                           ),
                         );

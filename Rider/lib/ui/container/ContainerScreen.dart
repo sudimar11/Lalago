@@ -56,6 +56,7 @@ class _ContainerScreen extends State<ContainerScreen> {
   bool isPop = false;
 
   Timer? _closingTimeCheckTimer;
+  StreamSubscription? _locationSubscription;
   bool? _lastCheckedInStatus;
   bool _isSuspended = false;
   bool _hasShownAbsenceWarning = false;
@@ -192,6 +193,7 @@ class _ContainerScreen extends State<ContainerScreen> {
   @override
   void dispose() {
     _closingTimeCheckTimer?.cancel();
+    _locationSubscription?.cancel();
     OrderLocationService.stopMonitoring();
     // Stop remittance enforcement listener
     try {
@@ -373,7 +375,8 @@ class _ContainerScreen extends State<ContainerScreen> {
         return;
       }
 
-      location.onLocationChanged.listen((locationData) async {
+      _locationSubscription?.cancel();
+      _locationSubscription = location.onLocationChanged.listen((locationData) async {
         // Increment raw location event counter
         _rawLocationEventCount++;
         locationDataFinal = locationData;

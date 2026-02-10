@@ -16,11 +16,21 @@ class _PayoutPageState extends State<PayoutPage> {
   final Map<String, String> _confirmingStatus = {}; // Track status message
   final Map<String, int> _confirmingProgress = {}; // Track progress percentage
 
+  static const _tableColumnWidths = <int, FlexColumnWidth>{
+    0: FlexColumnWidth(0.8),
+    1: FlexColumnWidth(2.5),
+    2: FlexColumnWidth(1.8),
+    3: FlexColumnWidth(2.0),
+    4: FlexColumnWidth(1.3),
+    5: FlexColumnWidth(2.2),
+  };
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text('Payout Request'),
+        title: Text('Payout Request', style: theme.titleLarge),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         actions: [
@@ -46,103 +56,10 @@ class _PayoutPageState extends State<PayoutPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16.0),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Colors.black,
-                    Colors.black.withOpacity(0.8),
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    spreadRadius: 2,
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: const BoxDecoration(
-                      color: Colors.blue,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.payment,
-                      color: Colors.white,
-                      size: 16,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Payout Requests',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      SizedBox(height: 2),
-                      Text(
-                        'Pending requests',
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize: 10,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+            const _PayoutPageHeader(),
             const SizedBox(height: 16),
-
-            // Table Header
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.blue.withOpacity(0.3)),
-              ),
-              child: Table(
-                columnWidths: {
-                  0: const FlexColumnWidth(0.8), // No.
-                  1: const FlexColumnWidth(2.5), // Driver Name
-                  2: const FlexColumnWidth(1.8), // Amount
-                  3: const FlexColumnWidth(2.0), // Date
-                  4: const FlexColumnWidth(1.3), // Status
-                  5: const FlexColumnWidth(2.2), // Action
-                },
-                children: const [
-                  TableRow(
-                    children: [
-                      _HeaderCell('No.'),
-                      _HeaderCell('Driver Name'),
-                      _HeaderCell('Amount'),
-                      _HeaderCell('Date'),
-                      _HeaderCell('Status'),
-                      _HeaderCell('Action'),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+            _PayoutTableHeader(columnWidths: _tableColumnWidths),
             const SizedBox(height: 8),
-
-            // Payout Requests List
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
@@ -150,174 +67,9 @@ class _PayoutPageState extends State<PayoutPage> {
                     .where('role', isEqualTo: USER_ROLE_DRIVER)
                     .snapshots(),
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: CircularProgressIndicator(),
-                    );
-                  }
-
-                  if (snapshot.hasError) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.error_outline,
-                            size: 64,
-                            color: Colors.red,
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Error loading requests: ${snapshot.error}',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              color: Colors.red,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    );
-                  }
-
-                  // Collect all pending payout requests
-                  final List<PayoutRequest> requests = [];
-                  for (var doc in snapshot.data?.docs ?? []) {
-                    final data = doc.data() as Map<String, dynamic>;
-                    final payoutRequests =
-                        data['payoutRequests'] as List<dynamic>? ?? [];
-
-                    for (var requestData in payoutRequests) {
-                      if (requestData is Map<String, dynamic>) {
-                        final status = requestData['status'] as String? ?? '';
-                        final type = requestData['type'] as String? ?? '';
-
-                        if (status == 'pending' &&
-                            type == 'earning_wallet_payout') {
-                          requests.add(PayoutRequest(
-                            userId: doc.id,
-                            requestId: requestData['id'] as String? ?? '',
-                            driverName:
-                                '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}'
-                                    .trim(),
-                            amount:
-                                (requestData['amount'] as num?)?.toDouble() ??
-                                    0.0,
-                            createdAt: requestData['createdAt'] as Timestamp?,
-                          ));
-                        }
-                      }
-                    }
-                  }
-
-                  // Sort by date (newest first)
-                  requests.sort((a, b) {
-                    if (a.createdAt == null && b.createdAt == null) return 0;
-                    if (a.createdAt == null) return 1;
-                    if (b.createdAt == null) return -1;
-                    return b.createdAt!.compareTo(a.createdAt!);
-                  });
-
-                  if (requests.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.payment_outlined,
-                            size: 64,
-                            color: Colors.grey,
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'No pending payout requests',
-                            style: TextStyle(
-                              fontSize: 18,
-                              color: Colors.grey,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
-
-                  return Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: Colors.blue.withOpacity(0.2),
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: ListView.builder(
-                      itemCount: requests.length,
-                      itemBuilder: (context, index) {
-                        final request = requests[index];
-                        final confirmKey =
-                            '${request.userId}_${request.requestId}';
-                        final isConfirming =
-                            _confirmingIds.contains(confirmKey);
-                        final isDeleting =
-                            _deletingIds.contains(confirmKey);
-                        final status = _confirmingStatus[confirmKey];
-                        final progress = _confirmingProgress[confirmKey];
-
-                        return Container(
-                          decoration: BoxDecoration(
-                            border: Border(
-                              bottom: BorderSide(
-                                color: Colors.blue.withOpacity(0.1),
-                                width: 0.5,
-                              ),
-                            ),
-                          ),
-                          child: Table(
-                            columnWidths: {
-                              0: const FlexColumnWidth(0.8), // No.
-                              1: const FlexColumnWidth(2.5), // Driver Name
-                              2: const FlexColumnWidth(1.8), // Amount
-                              3: const FlexColumnWidth(2.0), // Date
-                              4: const FlexColumnWidth(1.3), // Status
-                              5: const FlexColumnWidth(2.2), // Action
-                            },
-                            children: [
-                              TableRow(
-                                children: [
-                                  _DataCell('${index + 1}'),
-                                  _DataCell(request.driverName),
-                                  _DataCell(
-                                    '₱${request.amount.toStringAsFixed(2)}',
-                                  ),
-                                  _DataCell(_formatDate(request.createdAt)),
-                                  _DataCell(
-                                    'Pending',
-                                    color: Colors.blue,
-                                  ),
-                                  _ActionCell(
-                                    onConfirm: isConfirming || isDeleting
-                                        ? null
-                                        : () => _confirmPayout(
-                                              request.userId,
-                                              request.requestId,
-                                              request.amount,
-                                            ),
-                                    onDelete: isConfirming || isDeleting
-                                        ? null
-                                        : () => _deletePayoutRequest(
-                                              request.userId,
-                                              request.requestId,
-                                            ),
-                                    isConfirming: isConfirming,
-                                    isDeleting: isDeleting,
-                                    status: status,
-                                    progress: progress,
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
+                  return RefreshIndicator(
+                    onRefresh: _refreshData,
+                    child: _buildPayoutListBody(context, snapshot, theme),
                   );
                 },
               ),
@@ -326,6 +78,156 @@ class _PayoutPageState extends State<PayoutPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildPayoutListBody(
+    BuildContext context,
+    AsyncSnapshot<QuerySnapshot> snapshot,
+    TextTheme theme,
+  ) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return ListView(
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 220,
+            child: const Center(child: CircularProgressIndicator()),
+          ),
+        ],
+      );
+    }
+
+    if (snapshot.hasError) {
+      return ListView(
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 220,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.error_outline,
+                    size: 64,
+                    color: Colors.red,
+                  ),
+                  const SizedBox(height: 16),
+                  SelectableText.rich(
+                    TextSpan(
+                      text: 'Error loading requests: ${snapshot.error}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Colors.red,
+                      ),
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final requests = _parsePayoutRequests(snapshot.data);
+    if (requests.isEmpty) {
+      return ListView(
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).size.height - 220,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.payment_outlined,
+                    size: 64,
+                    color: Colors.grey,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No pending payout requests',
+                    style: theme.bodyLarge?.copyWith(
+                      fontSize: 18,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.blue.withOpacity(0.2)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ListView.builder(
+        itemCount: requests.length,
+        itemBuilder: (context, index) {
+          final request = requests[index];
+          final confirmKey = '${request.userId}_${request.requestId}';
+          return _PayoutRequestRow(
+            request: request,
+            index: index,
+            isConfirming: _confirmingIds.contains(confirmKey),
+            isDeleting: _deletingIds.contains(confirmKey),
+            status: _confirmingStatus[confirmKey],
+            progress: _confirmingProgress[confirmKey],
+            formatDate: _formatDate,
+            columnWidths: _tableColumnWidths,
+            onConfirm: () => _confirmPayout(
+              request.userId,
+              request.requestId,
+              request.amount,
+            ),
+            onDelete: () => _deletePayoutRequest(
+              request.userId,
+              request.requestId,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  List<PayoutRequest> _parsePayoutRequests(QuerySnapshot? data) {
+    final List<PayoutRequest> requests = [];
+    for (var doc in data?.docs ?? []) {
+      final docData = doc.data() as Map<String, dynamic>;
+      final payoutRequests =
+          docData['payoutRequests'] as List<dynamic>? ?? [];
+
+      for (var requestData in payoutRequests) {
+        if (requestData is Map<String, dynamic>) {
+          final status = requestData['status'] as String? ?? '';
+          final type = requestData['type'] as String? ?? '';
+
+          if (status == 'pending' && type == 'earning_wallet_payout') {
+            requests.add(PayoutRequest(
+              userId: doc.id,
+              requestId: requestData['id'] as String? ?? '',
+              driverName:
+                  '${docData['firstName'] ?? ''} ${docData['lastName'] ?? ''}'
+                      .trim(),
+              amount:
+                  (requestData['amount'] as num?)?.toDouble() ?? 0.0,
+              createdAt: requestData['createdAt'] as Timestamp?,
+            ));
+          }
+        }
+      }
+    }
+    requests.sort((a, b) {
+      if (a.createdAt == null && b.createdAt == null) return 0;
+      if (a.createdAt == null) return 1;
+      if (b.createdAt == null) return -1;
+      return b.createdAt!.compareTo(a.createdAt!);
+    });
+    return requests;
   }
 
   String _formatDate(Timestamp? timestamp) {
@@ -778,6 +680,166 @@ class PayoutRequest {
     required this.amount,
     this.createdAt,
   });
+}
+
+class _PayoutPageHeader extends StatelessWidget {
+  const _PayoutPageHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16.0),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.black,
+            Colors.black.withOpacity(0.8),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            spreadRadius: 2,
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: const BoxDecoration(
+              color: Colors.blue,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.payment,
+              color: Colors.white,
+              size: 16,
+            ),
+          ),
+          SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Payout Requests',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              SizedBox(height: 2),
+              Text(
+                'Pending requests',
+                style: TextStyle(color: Colors.grey, fontSize: 10),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PayoutTableHeader extends StatelessWidget {
+  const _PayoutTableHeader({required this.columnWidths});
+
+  final Map<int, FlexColumnWidth> columnWidths;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.blue.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+      ),
+      child: Table(
+        columnWidths: columnWidths,
+        children: const [
+          TableRow(
+            children: [
+              _HeaderCell('No.'),
+              _HeaderCell('Driver Name'),
+              _HeaderCell('Amount'),
+              _HeaderCell('Date'),
+              _HeaderCell('Status'),
+              _HeaderCell('Action'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PayoutRequestRow extends StatelessWidget {
+  const _PayoutRequestRow({
+    required this.request,
+    required this.index,
+    required this.isConfirming,
+    required this.isDeleting,
+    required this.formatDate,
+    required this.columnWidths,
+    required this.onConfirm,
+    required this.onDelete,
+    this.status,
+    this.progress,
+  });
+
+  final PayoutRequest request;
+  final int index;
+  final bool isConfirming;
+  final bool isDeleting;
+  final String? status;
+  final int? progress;
+  final String Function(Timestamp?) formatDate;
+  final Map<int, FlexColumnWidth> columnWidths;
+  final VoidCallback onConfirm;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.blue.withOpacity(0.1),
+            width: 0.5,
+          ),
+        ),
+      ),
+      child: Table(
+        columnWidths: columnWidths,
+        children: [
+          TableRow(
+            children: [
+              _DataCell('${index + 1}'),
+              _DataCell(request.driverName),
+              _DataCell('₱${request.amount.toStringAsFixed(2)}'),
+              _DataCell(formatDate(request.createdAt)),
+              const _DataCell('Pending', color: Colors.blue),
+              _ActionCell(
+                onConfirm: isConfirming || isDeleting ? null : onConfirm,
+                onDelete: isConfirming || isDeleting ? null : onDelete,
+                isConfirming: isConfirming,
+                isDeleting: isDeleting,
+                status: status,
+                progress: progress,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _HeaderCell extends StatelessWidget {

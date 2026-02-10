@@ -352,52 +352,55 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
             // Calculate totals for current week
             final weekTotals = _calculateTotals(records);
 
-            return ListView(
+            return ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.all(16),
-              children: [
-                // Performance Chart Card
-                FutureBuilder<Map<String, double>>(
-                  future: _weeklyPerformanceScoresFuture,
-                  builder: (context, scoresSnapshot) {
-                    return FutureBuilder<double>(
-                      future: _currentPerformanceFuture,
-                      builder: (context, perfSnapshot) {
-                        if (scoresSnapshot.connectionState ==
-                                ConnectionState.waiting ||
-                            perfSnapshot.connectionState ==
-                                ConnectionState.waiting) {
-                          return const SizedBox.shrink();
-                        }
+              itemCount: 1 + records.length,
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FutureBuilder<Map<String, double>>(
+                        future: _weeklyPerformanceScoresFuture,
+                        builder: (context, scoresSnapshot) {
+                          return FutureBuilder<double>(
+                            future: _currentPerformanceFuture,
+                            builder: (context, perfSnapshot) {
+                              if (scoresSnapshot.connectionState ==
+                                      ConnectionState.waiting ||
+                                  perfSnapshot.connectionState ==
+                                      ConnectionState.waiting) {
+                                return const SizedBox.shrink();
+                              }
 
-                        final weeklyScores =
-                            scoresSnapshot.data ?? <String, double>{};
-                        final currentPerformance = perfSnapshot.data ?? 100.0;
+                              final weeklyScores =
+                                  scoresSnapshot.data ?? <String, double>{};
+                              final currentPerformance =
+                                  perfSnapshot.data ?? 100.0;
 
-                        return _buildPerformanceChartCard(
-                          context,
-                          weeklyScores,
-                          currentPerformance,
-                        );
-                      },
-                    );
-                  },
-                ),
-                const SizedBox(height: 16),
-                // Summary Card for Current Week
-                _buildSummaryCard(
-                  context,
-                  'This Week',
-                  weekTotals,
-                  Colors.blue,
-                ),
-                const SizedBox(height: 16),
-                // Attendance Records List
-                ...records.map((record) => _buildAttendanceCard(
-                      context,
-                      record,
-                    )),
-              ],
+                              return _buildPerformanceChartCard(
+                                context,
+                                weeklyScores,
+                                currentPerformance,
+                              );
+                            },
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      _buildSummaryCard(
+                        context,
+                        'This Week',
+                        weekTotals,
+                        Colors.blue,
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                  );
+                }
+                return _buildAttendanceCard(context, records[index - 1]);
+              },
             );
           },
         ),

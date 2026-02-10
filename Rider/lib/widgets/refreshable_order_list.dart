@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,14 +10,58 @@ import 'package:foodie_driver/utils/geo_utils.dart';
 import 'package:foodie_driver/ui/home/customermap.dart';
 import 'package:foodie_driver/widgets/replacement_search_dialog.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:foodie_driver/main.dart';
 import 'package:foodie_driver/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_driver/services/order_chat_service.dart';
 import 'package:foodie_driver/services/chat_read_service.dart';
 import 'package:intl/intl.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+
+/// Parsed data for a single order card (used by ListView.builder).
+class _OrderCardData {
+  const _OrderCardData({
+    required this.index,
+    required this.doc,
+    required this.data,
+    required this.status,
+    required this.vendor,
+    required this.vendorLatitude,
+    required this.vendorLongitude,
+    required this.author,
+    required this.authorLatitude,
+    required this.authorLongitude,
+    required this.fullAddress,
+    required this.orderedItems,
+    required this.itemsTotal,
+    required this.totalItemCount,
+    required this.deliveryCharge,
+    required this.tipAmount,
+    required this.totalPayment,
+    required this.notes,
+    required this.estimatedTimeToPrepare,
+    this.orderTime,
+  });
+
+  final int index;
+  final QueryDocumentSnapshot doc;
+  final Map<String, dynamic> data;
+  final String status;
+  final Map<String, dynamic> vendor;
+  final double vendorLatitude;
+  final double vendorLongitude;
+  final Map<String, dynamic> author;
+  final double authorLatitude;
+  final double authorLongitude;
+  final String fullAddress;
+  final List<dynamic> orderedItems;
+  final double itemsTotal;
+  final int totalItemCount;
+  final double deliveryCharge;
+  final double tipAmount;
+  final double totalPayment;
+  final String notes;
+  final String estimatedTimeToPrepare;
+  final DateTime? orderTime;
+}
 
 /// A reusable widget that displays a refreshable list of orders
 class RefreshableOrderList extends StatefulWidget {
@@ -39,28 +85,18 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
   double? _incentiveGold;
   double? _incentivePlatinum;
   double? _incentiveSilver;
+  DateTime? _now;
+  Timer? _timer;
+  final Map<String, double> _distanceCache = <String, double>{};
+  final Map<String, Future<double>> _distanceFutures = <String, Future<double>>{};
 
   @override
   void initState() {
     super.initState();
-    // #region agent log
-    http
-        .post(
-          Uri.parse(
-              'http://127.0.0.1:7244/ingest/c9ab929b-94d3-40bd-8785-7deb40c047f7'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'location': 'refreshable_order_list.dart:initState',
-            'message': 'RefreshableOrderList built',
-            'data': {'docsLength': widget.docs.length},
-            'timestamp': DateTime.now().millisecondsSinceEpoch,
-            'sessionId': 'debug-session',
-            'runId': 'run1',
-            'hypothesisId': 'E',
-          }),
-        )
-        .catchError((_) => http.Response('', 500));
-    // #endregion
+    _now = DateTime.now();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _now = DateTime.now());
+    });
     _loadPerformanceCommission();
     _loadAdminCommission();
   }
@@ -82,7 +118,7 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
 
   @override
   void dispose() {
-    // Stop monitoring orders when widget is disposed
+    _timer?.cancel();
     for (var doc in widget.docs) {
       OrderChatService.stopListeningToOrderStatus(doc.id);
     }
@@ -595,172 +631,247 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     afterUpdate();
   }
 
+  _OrderCardData _parseOrderDoc(int index, QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final status = (data['status'] ?? 'Unknown').toString();
+    final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
+    final double vendorLatitude =
+        ((vendor['latitude'] ?? 0.0) as num).toDouble();
+    final double vendorLongitude =
+        ((vendor['longitude'] ?? 0.0) as num).toDouble();
+    final author = (data['author'] ?? {}) as Map<String, dynamic>;
+    final List<Map<String, dynamic>> shippingList =
+        List<Map<String, dynamic>>.from(
+            (author['shippingAddress'] as List<dynamic>?) ?? []);
+    final Map<String, dynamic> defaultAddr = shippingList.firstWhere(
+      (a) => a['isDefault'] == true,
+      orElse: () => <String, dynamic>{},
+    );
+    final Map<String, dynamic> loc =
+        (defaultAddr['location'] as Map<String, dynamic>?) ?? {};
+    final double authorLatitude =
+        ((loc['latitude'] ?? 0.0) as num).toDouble();
+    final double authorLongitude =
+        ((loc['longitude'] ?? 0.0) as num).toDouble();
+    final String addressLine = (defaultAddr['address'] as String?) ?? '';
+    final String landmark = (defaultAddr['landmark'] as String?) ?? '';
+    final String locality = (defaultAddr['locality'] as String?) ?? '';
+    final String fullAddress = [
+      addressLine,
+      if (landmark.isNotEmpty) landmark,
+      if (locality.isNotEmpty) locality,
+    ].where((e) => e.trim().isNotEmpty).join(', ');
+    final List<dynamic> orderedItems =
+        (data['products'] as List<dynamic>?) ?? [];
+    final double itemsTotal = orderedItems.fold<double>(0.0, (sum, item) {
+      final double price =
+          double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
+      final int qty = (item['quantity'] ?? 0) as int;
+      return sum + price * qty;
+    });
+    final int totalItemCount = orderedItems.fold<int>(0, (sum, item) {
+      final int qty = (item['quantity'] ?? 0) as int;
+      return sum + qty;
+    });
+    final double deliveryCharge =
+        double.tryParse((data['deliveryCharge'] ?? '0').toString()) ?? 0.0;
+    final double tipAmount =
+        double.tryParse((data['tip_amount'] ?? '0').toString()) ?? 0.0;
+    final double effectiveItemsTotal = orderedItems.fold<double>(0.0, (sum, item) {
+      final double price =
+          double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
+      final int qty = (item['quantity'] ?? 0) as int;
+      double effectivePrice = price - _fixCommissionPerItem;
+      if (effectivePrice < 0) effectivePrice = 0;
+      return sum + (effectivePrice * qty);
+    });
+    final double totalPayment =
+        effectiveItemsTotal + deliveryCharge + tipAmount;
+    final String notes = (data['notes'] ?? '').toString();
+    final String estimatedTimeToPrepare =
+        (data['estimatedTimeToPrepare'] ?? '').toString();
+    final DateTime? orderTime = data['createdAt'] != null
+        ? (data['createdAt'] as Timestamp).toDate()
+        : data['timestamp'] != null
+            ? (data['timestamp'] as Timestamp).toDate()
+            : null;
+    return _OrderCardData(
+      index: index,
+      doc: doc,
+      data: data,
+      status: status,
+      vendor: vendor,
+      vendorLatitude: vendorLatitude,
+      vendorLongitude: vendorLongitude,
+      author: author,
+      authorLatitude: authorLatitude,
+      authorLongitude: authorLongitude,
+      fullAddress: fullAddress,
+      orderedItems: orderedItems,
+      itemsTotal: itemsTotal,
+      totalItemCount: totalItemCount,
+      deliveryCharge: deliveryCharge,
+      tipAmount: tipAmount,
+      totalPayment: totalPayment,
+      notes: notes,
+      estimatedTimeToPrepare: estimatedTimeToPrepare,
+      orderTime: orderTime,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final currentTime = _now ?? DateTime.now();
     return RefreshIndicator(
       onRefresh: () async {
         widget.onRefresh();
         await Future.delayed(const Duration(milliseconds: 200));
       },
-      child: SingleChildScrollView(
+      child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        child: Column(
-          children: widget.docs.asMap().entries.map((entry) {
-            final index = entry.key;
-            final doc = entry.value;
-            final data = doc.data() as Map<String, dynamic>;
-            final status = (data['status'] ?? 'Unknown').toString();
-
-            // Restaurant/vendor info
-            final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
-            final double vendorLatitude =
-                ((vendor['latitude'] ?? 0.0) as num).toDouble();
-            final double vendorLongitude =
-                ((vendor['longitude'] ?? 0.0) as num).toDouble();
-
-            // Customer/author info and shipping address
-            final author = (data['author'] ?? {}) as Map<String, dynamic>;
-            final List<Map<String, dynamic>> shippingList =
-                List<Map<String, dynamic>>.from(
-                    (author['shippingAddress'] as List<dynamic>?) ?? []);
-            final Map<String, dynamic> defaultAddr = shippingList.firstWhere(
-              (a) => a['isDefault'] == true,
-              orElse: () => <String, dynamic>{},
-            );
-            final Map<String, dynamic> loc =
-                (defaultAddr['location'] as Map<String, dynamic>?) ?? {};
-            final double authorLatitude =
-                ((loc['latitude'] ?? 0.0) as num).toDouble();
-            final double authorLongitude =
-                ((loc['longitude'] ?? 0.0) as num).toDouble();
-            final String addressLine =
-                (defaultAddr['address'] as String?) ?? '';
-            final String landmark = (defaultAddr['landmark'] as String?) ?? '';
-            final String locality = (defaultAddr['locality'] as String?) ?? '';
-            final String fullAddress = [
-              addressLine,
-              if (landmark.isNotEmpty) landmark,
-              if (locality.isNotEmpty) locality,
-            ].where((e) => e.trim().isNotEmpty).join(', ');
-
-            // Ordered items and simple totals
-            final List<dynamic> orderedItems =
-                (data['products'] as List<dynamic>?) ?? [];
-            final double itemsTotal =
-                orderedItems.fold<double>(0.0, (sum, item) {
-              final double price =
-                  double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
-              final int qty = (item['quantity'] ?? 0) as int;
-              return sum + price * qty;
-            });
-            // Calculate effective items total (after commission deduction)
-            final double effectiveItemsTotal =
-                orderedItems.fold<double>(0.0, (sum, item) {
-              final double price =
-                  double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
-              final int qty = (item['quantity'] ?? 0) as int;
-              double effectivePrice = price - _fixCommissionPerItem;
-              if (effectivePrice < 0) {
-                effectivePrice = 0;
-              }
-              return sum + (effectivePrice * qty);
-            });
-            // Total number of food items for restaurant commission
-            final int totalItemCount = orderedItems.fold<int>(0, (sum, item) {
-              final int qty = (item['quantity'] ?? 0) as int;
-              return sum + qty;
-            });
-            final double deliveryCharge =
-                double.tryParse((data['deliveryCharge'] ?? '0').toString()) ??
-                    0.0;
-            final double tipAmount =
-                double.tryParse((data['tip_amount'] ?? '0').toString()) ?? 0.0;
-            final double totalPayment =
-                effectiveItemsTotal + deliveryCharge + tipAmount;
-
-            // Order notes
-            final String notes = (data['notes'] ?? '').toString();
-
-            // Estimated preparation time from restaurant
-            final String estimatedTimeToPrepare =
-                (data['estimatedTimeToPrepare'] ?? '').toString();
-
-            // Order timestamp for timer
-            final DateTime? orderTime = data['createdAt'] != null
-                ? (data['createdAt'] as Timestamp).toDate()
-                : data['timestamp'] != null
-                    ? (data['timestamp'] as Timestamp).toDate()
-                    : null;
-
-            return _buildOrderCard(
-              context,
-              index,
-              doc,
-              data,
-              status,
-              vendor,
-              vendorLatitude,
-              vendorLongitude,
-              author,
-              authorLatitude,
-              authorLongitude,
-              fullAddress,
-              orderedItems,
-              itemsTotal,
-              totalItemCount,
-              deliveryCharge,
-              tipAmount,
-              totalPayment,
-              notes,
-              estimatedTimeToPrepare,
-              orderTime,
-              () {
-                widget.onRefresh();
-                setState(() {});
-              },
-            );
-          }).toList(),
-        ),
+        itemCount: widget.docs.length,
+        itemBuilder: (context, index) {
+          final doc = widget.docs[index];
+          final parsed = _parseOrderDoc(index, doc);
+          return _buildOrderCard(
+            context,
+            currentTime,
+            parsed,
+            () {
+              widget.onRefresh();
+              setState(() {});
+            },
+          );
+        },
       ),
+    );
+  }
+
+  Widget _buildDistanceOverlay(
+    String docId,
+    String status,
+    double vendorLatitude,
+    double vendorLongitude,
+    double authorLatitude,
+    double authorLongitude,
+  ) {
+    final cached = _distanceCache[docId];
+    if (cached != null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Text(
+          '${cached.toStringAsFixed(2)} km',
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
+          ),
+        ),
+      );
+    }
+    _distanceFutures[docId] ??= (status == 'Order Shipped'
+            ? GeoUtils.calculateDistance(
+                vendorLatitude, vendorLongitude, null, null)
+            : GeoUtils.calculateDistance(
+                authorLatitude,
+                authorLongitude,
+                vendorLatitude,
+                vendorLongitude,
+              ))
+        .then((v) {
+      if (mounted) setState(() => _distanceCache[docId] = v);
+      return v;
+    });
+    return FutureBuilder<double>(
+      future: _distanceFutures[docId],
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.2),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
+        }
+        final distanceKm = snap.data ?? 0.0;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.9),
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Text(
+            '${distanceKm.toStringAsFixed(2)} km',
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+          ),
+        );
+      },
     );
   }
 
   Widget _buildOrderCard(
     BuildContext context,
-    int index,
-    QueryDocumentSnapshot doc,
-    Map<String, dynamic> data,
-    String status,
-    Map<String, dynamic> vendor,
-    double vendorLatitude,
-    double vendorLongitude,
-    Map<String, dynamic> author,
-    double authorLatitude,
-    double authorLongitude,
-    String fullAddress,
-    List<dynamic> orderedItems,
-    double itemsTotal,
-    int totalItemCount,
-    double deliveryCharge,
-    double tipAmount,
-    double totalPayment,
-    String notes,
-    String estimatedTimeToPrepare,
-    DateTime? orderTime,
+    DateTime currentTime,
+    _OrderCardData parsed,
     VoidCallback afterUpdate,
   ) {
-    // Calculate effective items total (after commission deduction)
-    final double effectiveItemsTotal =
-        orderedItems.fold<double>(0.0, (sum, item) {
-      final double price =
-          double.tryParse(item['price']?.toString() ?? '0') ?? 0.0;
-      final int qty = (item['quantity'] ?? 0) as int;
-      double effectivePrice = price - _fixCommissionPerItem;
-      if (effectivePrice < 0) {
-        effectivePrice = 0;
-      }
-      return sum + (effectivePrice * qty);
-    });
+    final index = parsed.index;
+    final doc = parsed.doc;
+    final data = parsed.data;
+    final status = parsed.status;
+    final vendor = parsed.vendor;
+    final vendorLatitude = parsed.vendorLatitude;
+    final vendorLongitude = parsed.vendorLongitude;
+    final author = parsed.author;
+    final authorLatitude = parsed.authorLatitude;
+    final authorLongitude = parsed.authorLongitude;
+    final fullAddress = parsed.fullAddress;
+    final orderedItems = parsed.orderedItems;
+    final itemsTotal = parsed.itemsTotal;
+    final totalItemCount = parsed.totalItemCount;
+    final deliveryCharge = parsed.deliveryCharge;
+    final tipAmount = parsed.tipAmount;
+    final totalPayment = parsed.totalPayment;
+    final notes = parsed.notes;
+    final estimatedTimeToPrepare = parsed.estimatedTimeToPrepare;
+    final orderTime = parsed.orderTime;
+    final effectiveItemsTotal =
+        totalPayment - deliveryCharge - tipAmount;
 
     return Card(
       color: isDarkMode(context) ? Color(DARK_CARD_BG_COLOR) : Colors.white,
@@ -797,28 +908,22 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                               color: Colors.blue.shade700, size: 14),
                           const SizedBox(width: 4),
                           orderTime != null
-                              ? StreamBuilder<DateTime>(
-                                  stream: Stream.periodic(
-                                      const Duration(seconds: 1),
-                                      (_) => DateTime.now()),
-                                  builder: (context, snapshot) {
-                                    final now = DateTime.now();
-                                    final duration = now.difference(orderTime);
+                              ? Text(
+                                  () {
+                                    final duration =
+                                        currentTime.difference(orderTime);
                                     final hours = duration.inHours;
                                     final minutes =
                                         duration.inMinutes.remainder(60);
                                     final seconds =
                                         duration.inSeconds.remainder(60);
-
-                                    return Text(
-                                      '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.blue.shade700,
-                                      ),
-                                    );
-                                  },
+                                    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+                                  }(),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.blue.shade700,
+                                  ),
                                 )
                               : Text(
                                   '00:00:00',
@@ -905,7 +1010,7 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                     ],
                   ),
                 const SizedBox(height: 8),
-                // Map with Distance - Show restaurant for Order Shipped, customer for others
+                // Map placeholder with Distance - avoids multiple SurfaceViews (BLASTBufferQueue errors)
                 if (status == 'Order Shipped'
                     ? (vendorLatitude != 0.0 && vendorLongitude != 0.0)
                     : (authorLatitude != 0.0 && authorLongitude != 0.0)) ...[
@@ -917,105 +1022,46 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                         SizedBox(
                           height: 200,
                           width: double.infinity,
-                          child: GoogleMap(
-                            initialCameraPosition: CameraPosition(
-                              target: status == 'Order Shipped'
-                                  ? LatLng(vendorLatitude, vendorLongitude)
-                                  : LatLng(authorLatitude, authorLongitude),
-                              zoom: 15,
+                          child: Container(
+                            color: Colors.grey.shade200,
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    status == 'Order Shipped'
+                                        ? Icons.store
+                                        : Icons.location_on,
+                                    size: 48,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    status == 'Order Shipped'
+                                        ? 'Restaurant'
+                                        : 'Customer',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey.shade700,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                            markers: {
-                              if (status == 'Order Shipped')
-                                Marker(
-                                  markerId: const MarkerId('restaurant'),
-                                  position:
-                                      LatLng(vendorLatitude, vendorLongitude),
-                                  infoWindow: InfoWindow(title: 'Restaurant'),
-                                )
-                              else
-                                Marker(
-                                  markerId: const MarkerId('customer'),
-                                  position:
-                                      LatLng(authorLatitude, authorLongitude),
-                                  infoWindow: InfoWindow(title: 'Customer'),
-                                ),
-                            },
-                            mapToolbarEnabled: false,
-                            myLocationButtonEnabled: false,
-                            zoomControlsEnabled: false,
-                            compassEnabled: false,
-                            liteModeEnabled: true,
                           ),
                         ),
-                        // Distance overlay
+                        // Distance overlay (cached per doc.id)
                         Positioned(
                           top: 8,
                           right: 8,
-                          child: FutureBuilder<double>(
-                            future: status == 'Order Shipped'
-                                ? GeoUtils.calculateDistance(
-                                    vendorLatitude,
-                                    vendorLongitude,
-                                    null,
-                                    null,
-                                  )
-                                : GeoUtils.calculateDistance(
-                                    authorLatitude,
-                                    authorLongitude,
-                                    vendorLatitude,
-                                    vendorLongitude,
-                                  ),
-                            builder: (context, snap) {
-                              if (snap.connectionState ==
-                                  ConnectionState.waiting) {
-                                return Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.9),
-                                    borderRadius: BorderRadius.circular(8),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(alpha: 0.2),
-                                        blurRadius: 4,
-                                        offset: const Offset(0, 2),
-                                      ),
-                                    ],
-                                  ),
-                                  child: const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  ),
-                                );
-                              }
-                              final distanceKm = (snap.data ?? 0.0);
-                              return Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.9),
-                                  borderRadius: BorderRadius.circular(8),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.2),
-                                      blurRadius: 4,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: Text(
-                                  '${distanceKm.toStringAsFixed(2)} km',
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                              );
-                            },
+                          child: _buildDistanceOverlay(
+                            doc.id,
+                            status,
+                            vendorLatitude,
+                            vendorLongitude,
+                            authorLatitude,
+                            authorLongitude,
                           ),
                         ),
                       ],
@@ -1565,49 +1611,40 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  StreamBuilder<DateTime>(
-                    stream: Stream.periodic(
-                        const Duration(seconds: 1), (_) => DateTime.now()),
-                    builder: (context, snapshot) {
-                      if (orderTime == null) {
-                        return const SizedBox.shrink();
-                      }
-
-                      final now = DateTime.now();
-                      final duration = now.difference(orderTime);
-                      final totalMinutes = duration.inMinutes;
-
-                      // Check if 5 minutes have passed
-                      final isReady = totalMinutes >= 5;
-
-                      if (!isReady) {
-                        return const SizedBox.shrink();
-                      }
-
-                      return Center(
-                        child: ElevatedButton.icon(
-                          onPressed: () => _markOrderAsShipped(doc.id, author),
-                          icon: const Icon(Icons.check_circle,
-                              color: Colors.white, size: 16),
-                          label: const Text(
-                            'Order is Ready',
-                            style: TextStyle(fontSize: 12),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 8),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
+                  if (orderTime != null) ...[
+                    Builder(
+                      builder: (context) {
+                        final duration =
+                            currentTime.difference(orderTime!);
+                        final totalMinutes = duration.inMinutes;
+                        final isReady = totalMinutes >= 5;
+                        if (!isReady) return const SizedBox.shrink();
+                        return Center(
+                          child: ElevatedButton.icon(
+                            onPressed: () =>
+                                _markOrderAsShipped(doc.id, author),
+                            icon: const Icon(Icons.check_circle,
+                                color: Colors.white, size: 16),
+                            label: const Text(
+                              'Order is Ready',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 8),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
                             ),
                           ),
-                        ),
-                      );
-                    },
-                  ),
+                        );
+                      },
+                    ),
+                  ],
                 ],
                 if (status == 'Order Shipped') ...[
                   const SizedBox(height: 12),
@@ -1802,23 +1839,8 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     }
   }
 
-  void _makePhoneCall(String phoneNumber) async {
-    try {
-      final Uri phoneUri = Uri(scheme: 'tel', path: phoneNumber);
-      await launchUrl(
-        phoneUri,
-        mode: LaunchMode.externalApplication,
-      );
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to make phone call: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
+  void _makePhoneCall(dynamic phoneNumber) async {
+    await launchPhoneCall(context, phoneNumber);
   }
 
   void _openChat(

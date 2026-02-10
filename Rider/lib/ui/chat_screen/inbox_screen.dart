@@ -128,9 +128,14 @@ class _InboxScreenState extends State<InboxScreen> {
                                       ),
                                   errorWidget: (context, url, error) => ClipRRect(
                                       borderRadius: BorderRadius.circular(5),
-                                      child: Image.network(
-                                        placeholderImage,
-                                        fit: BoxFit.cover,
+                                      child: Container(
+                                        width: 50,
+                                        height: 50,
+                                        color: Colors.grey.shade200,
+                                        child: Icon(
+                                            Icons.person,
+                                            size: 28,
+                                            color: Colors.grey),
                                       ))),
                             ),
                             if (hasUnread)

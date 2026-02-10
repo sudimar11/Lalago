@@ -26,7 +26,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 // Dark map style JSON (cached to avoid repeated string operations)
 const String _darkMapStyle = '[{"featureType": "all","elementType": "geometry","stylers": [{"color": "#242f3e"}]},{"featureType": "all","elementType": "labels.text.stroke","stylers": [{"lightness": -80}]},{"featureType": "administrative","elementType": "labels.text.fill","stylers": [{"color": "#746855"}]},{"featureType": "administrative.locality","elementType": "labels.text.fill","stylers": [{"color": "#d59563"}]},{"featureType": "poi","elementType": "labels.text.fill","stylers": [{"color": "#d59563"}]},{"featureType": "poi.park","elementType": "geometry","stylers": [{"color": "#263c3f"}]},{"featureType": "poi.park","elementType": "labels.text.fill","stylers": [{"color": "#6b9a76"}]},{"featureType": "road","elementType": "geometry.fill","stylers": [{"color": "#2b3544"}]},{"featureType": "road","elementType": "labels.text.fill","stylers": [{"color": "#9ca5b3"}]},{"featureType": "road.arterial","elementType": "geometry.fill","stylers": [{"color": "#38414e"}]},{"featureType": "road.arterial","elementType": "geometry.stroke","stylers": [{"color": "#212a37"}]},{"featureType": "road.highway","elementType": "geometry.fill","stylers": [{"color": "#746855"}]},{"featureType": "road.highway","elementType": "geometry.stroke","stylers": [{"color": "#1f2835"}]},{"featureType": "road.highway","elementType": "labels.text.fill","stylers": [{"color": "#f3d19c"}]},{"featureType": "road.local","elementType": "geometry.fill","stylers": [{"color": "#38414e"}]},{"featureType": "road.local","elementType": "geometry.stroke","stylers": [{"color": "#212a37"}]},{"featureType": "transit","elementType": "geometry","stylers": [{"color": "#2f3948"}]},{"featureType": "transit.station","elementType": "labels.text.fill","stylers": [{"color": "#d59563"}]},{"featureType": "water","elementType": "geometry","stylers": [{"color": "#17263c"}]},{"featureType": "water","elementType": "labels.text.fill","stylers": [{"color": "#515c6d"}]},{"featureType": "water","elementType": "labels.text.stroke","stylers": [{"lightness": -20}]}]';
@@ -219,28 +218,29 @@ class HomeScreenState extends State<HomeScreen> {
             .getOrderByID(_driverModel!.inProgressOrderID!.first.toString());
         _orderSubscription?.cancel();
         _orderSubscription = ordersFuture.listen((event) {
-          setState(() {
-            currentOrder = event;
-            if (mapType == "inappmap") {
-              getDirections();
-            } else {
-              isShow = true;
-            }
-            // Start proximity monitoring for this order
-            if (event != null && event.id.isNotEmpty) {
-              // If arrival was already confirmed, mark it in service
-              if (event.restaurantArrivalConfirmed == true) {
-                OrderLocationService.markArrivalDialogShown(event.id);
+          final orderChanged = event?.id != currentOrder?.id ||
+              event?.status != currentOrder?.status;
+          if (orderChanged) {
+            setState(() {
+              currentOrder = event;
+              if (mapType == "inappmap") {
+                getDirections();
+              } else {
+                isShow = true;
               }
-              // If customer arrival was already detected, mark it in service
-              if (event.customerArrivalDetected == true) {
-                OrderLocationService.markCustomerArrivalDetected(event.id);
-              }
-              _startProximityMonitoring(event.id);
-            } else {
-              _stopProximityMonitoring();
+            });
+          }
+          if (event != null && event.id.isNotEmpty) {
+            if (event.restaurantArrivalConfirmed == true) {
+              OrderLocationService.markArrivalDialogShown(event.id);
             }
-          });
+            if (event.customerArrivalDetected == true) {
+              OrderLocationService.markCustomerArrivalDetected(event.id);
+            }
+            _startProximityMonitoring(event.id);
+          } else {
+            _stopProximityMonitoring();
+          }
         });
       } else if (_driverModel!.orderRequestData != null &&
           _driverModel!.orderRequestData!.isNotEmpty) {
@@ -248,6 +248,38 @@ class HomeScreenState extends State<HomeScreen> {
             .getOrderByID(_driverModel!.orderRequestData!.first.toString());
         _orderSubscription?.cancel();
         _orderSubscription = ordersFuture.listen((event) {
+          final orderChanged = event?.id != currentOrder?.id ||
+              event?.status != currentOrder?.status;
+          if (orderChanged) {
+            setState(() {
+              currentOrder = event;
+              if (mapType == "inappmap") {
+                getDirections();
+              } else {
+                isShow = true;
+              }
+            });
+          }
+          if (event != null && event.id.isNotEmpty) {
+            if (event.restaurantArrivalConfirmed == true) {
+              OrderLocationService.markArrivalDialogShown(event.id);
+            }
+            if (event.customerArrivalDetected == true) {
+              OrderLocationService.markCustomerArrivalDetected(event.id);
+            }
+            _startProximityMonitoring(event.id);
+          } else {
+            _stopProximityMonitoring();
+          }
+        });
+      }
+    } else {
+      ordersFuture = FireStoreUtils().getOrderByID(widget.orderModel!.id);
+      _orderSubscription?.cancel();
+      _orderSubscription = ordersFuture.listen((event) {
+        final orderChanged = event?.id != currentOrder?.id ||
+            event?.status != currentOrder?.status;
+        if (orderChanged) {
           setState(() {
             currentOrder = event;
             if (mapType == "inappmap") {
@@ -255,35 +287,8 @@ class HomeScreenState extends State<HomeScreen> {
             } else {
               isShow = true;
             }
-            // Start proximity monitoring for this order
-            if (event != null && event.id.isNotEmpty) {
-              // If arrival was already confirmed, mark it in service
-              if (event.restaurantArrivalConfirmed == true) {
-                OrderLocationService.markArrivalDialogShown(event.id);
-              }
-              // If customer arrival was already detected, mark it in service
-              if (event.customerArrivalDetected == true) {
-                OrderLocationService.markCustomerArrivalDetected(event.id);
-              }
-              _startProximityMonitoring(event.id);
-            } else {
-              _stopProximityMonitoring();
-            }
           });
-        });
-      }
-    } else {
-      ordersFuture = FireStoreUtils().getOrderByID(widget.orderModel!.id);
-      _orderSubscription?.cancel();
-      _orderSubscription = ordersFuture.listen((event) {
-        setState(() {
-          currentOrder = event;
-          if (mapType == "inappmap") {
-            getDirections();
-          } else {
-            isShow = true;
-          }
-        });
+        }
       });
     }
   }
@@ -292,17 +297,22 @@ class HomeScreenState extends State<HomeScreen> {
     driverStream = FireStoreUtils().getDriver(MyAppState.currentUser!.userID);
     _driverSubscription?.cancel();
     _driverSubscription = driverStream.listen((event) async {
-      setState(() {
-        _driverModel = event;
-        MyAppState.currentUser = _driverModel;
-      });
-      log(_driverModel!.toJson().toString());
-      if (mapType == "inappmap") {
-        getDirections();
-      } else {
-        isShow = true;
+      final driverChanged = event.userID != _driverModel?.userID ||
+          event.location.latitude != _driverModel?.location.latitude ||
+          event.location.longitude != _driverModel?.location.longitude;
+      if (driverChanged) {
+        setState(() {
+          _driverModel = event;
+          MyAppState.currentUser = _driverModel;
+        });
+        log(_driverModel!.toJson().toString());
+        if (mapType == "inappmap") {
+          getDirections();
+        } else {
+          isShow = true;
+        }
+        getCurrentOrder();
       }
-      getCurrentOrder();
     });
   }
 
@@ -845,11 +855,8 @@ class HomeScreenState extends State<HomeScreen> {
                           backgroundColor: Color(0xffFFFFFF),
                         ),
                         onPressed: () async {
-                          final Uri launchUri = Uri(
-                            scheme: 'tel',
-                            path: currentOrder!.vendor.phonenumber,
-                          );
-                          await launchUrl(launchUri);
+                          await launchPhoneCall(
+                              context, currentOrder?.vendor.phonenumber);
                         },
                         icon: Image.asset(
                           'assets/images/call3x.png',
@@ -977,11 +984,8 @@ class HomeScreenState extends State<HomeScreen> {
                               backgroundColor: Color(0xffFFFFFF),
                             ),
                             onPressed: () async {
-                              final Uri launchUri = Uri(
-                                scheme: 'tel',
-                                path: currentOrder!.author.phoneNumber,
-                              );
-                              await launchUrl(launchUri);
+                              await launchPhoneCall(context,
+                                  currentOrder?.author.phoneNumber);
                             },
                             icon: Image.asset(
                               'assets/images/call3x.png',
@@ -1170,13 +1174,10 @@ class HomeScreenState extends State<HomeScreen> {
                                                           Color(0xffFFFFFF),
                                                     ),
                                                     onPressed: () async {
-                                                      final Uri launchUri = Uri(
-                                                        scheme: 'tel',
-                                                        path: currentOrder!
-                                                            .author.phoneNumber,
-                                                      );
-                                                      await launchUrl(
-                                                          launchUri);
+                                                      await launchPhoneCall(
+                                                          context,
+                                                          currentOrder?.author
+                                                              .phoneNumber);
                                                     },
                                                     icon: Image.asset(
                                                       'assets/images/call3x.png',

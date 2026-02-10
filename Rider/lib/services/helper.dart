@@ -13,6 +13,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:location/location.dart';
 import 'package:progress_dialog_null_safe/progress_dialog_null_safe.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 String? validateName(String? value) {
   String pattern = r'(^[a-zA-Z ]*$)';
@@ -74,6 +75,54 @@ String? validateConfirmPassword(String? password, String? confirmPassword) {
 
 String? validateEmptyField(String? text) =>
     text == null || text.isEmpty ? "NotEmpty" : null;
+
+/// Validates [phoneNumber], builds a tel: URI, checks [canLaunchUrl], then
+/// launches the dialer. Returns false if invalid/empty or launch fails.
+Future<bool> launchPhoneCall(
+  BuildContext? context,
+  dynamic phoneNumber,
+) async {
+  final raw = (phoneNumber?.toString().trim() ?? '');
+  final normalized = raw.replaceAll(RegExp(r'[^\d+]'), '');
+  if (normalized.isEmpty) {
+    if (context != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No phone number available'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+    return false;
+  }
+  final uri = Uri(scheme: 'tel', path: normalized);
+  try {
+    final canLaunch = await canLaunchUrl(uri);
+    if (!canLaunch) {
+      if (context != null && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Cannot open dialer'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return false;
+    }
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    return true;
+  } catch (e) {
+    if (context != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to make phone call: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+    return false;
+  }
+}
 
 //helper method to show progress
 late ProgressDialog progressDialog;

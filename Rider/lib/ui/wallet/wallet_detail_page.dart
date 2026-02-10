@@ -104,6 +104,24 @@ class _WalletDetailPageState extends State<WalletDetailPage> {
         _isTransmitting = false;
       });
       print('❌ Transmit Error: Pending request already exists');
+      if (mounted) {
+        showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Cannot submit transmit request'),
+            content: const Text(
+              'You already have a pending transmit request. Please wait for '
+              'admin to confirm it before submitting another.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
       return;
     }
 
@@ -479,6 +497,24 @@ class _WalletDetailPageState extends State<WalletDetailPage> {
         _isRequestingPayout = false;
       });
       print('❌ Payout Error: Pending request already exists');
+      if (mounted) {
+        showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Cannot submit payout request'),
+            content: const Text(
+              'You already have a pending payout request. Please wait for '
+              'admin to confirm it before submitting another.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
       return;
     }
 
@@ -1371,8 +1407,9 @@ class _WalletDetailPageState extends State<WalletDetailPage> {
               ),
             ),
             const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   'Transaction History',
@@ -1381,12 +1418,11 @@ class _WalletDetailPageState extends State<WalletDetailPage> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+                const SizedBox(height: 8),
                 Wrap(
-                  spacing: 4,
+                  spacing: 8,
                   runSpacing: 8,
-                  alignment: WrapAlignment.start,
                   children: [
-                    // Button to view today's pending transactions
                     TextButton.icon(
                       onPressed: () {
                         Navigator.push(
@@ -1398,14 +1434,8 @@ class _WalletDetailPageState extends State<WalletDetailPage> {
                           ),
                         );
                       },
-                      icon: const Icon(
-                        Icons.receipt_long,
-                        size: 16,
-                      ),
-                      label: const Text(
-                        'Today',
-                        style: TextStyle(fontSize: 12),
-                      ),
+                      icon: const Icon(Icons.receipt_long, size: 16),
+                      label: const Text('Today', style: TextStyle(fontSize: 12)),
                       style: TextButton.styleFrom(
                         foregroundColor: Colors.blue,
                         padding: const EdgeInsets.symmetric(
@@ -1414,7 +1444,6 @@ class _WalletDetailPageState extends State<WalletDetailPage> {
                         ),
                       ),
                     ),
-                    // Button to view paid transactions history
                     TextButton.icon(
                       onPressed: () {
                         Navigator.push(
@@ -1426,14 +1455,8 @@ class _WalletDetailPageState extends State<WalletDetailPage> {
                           ),
                         );
                       },
-                      icon: const Icon(
-                        Icons.history,
-                        size: 16,
-                      ),
-                      label: const Text(
-                        'Paid',
-                        style: TextStyle(fontSize: 12),
-                      ),
+                      icon: const Icon(Icons.history, size: 16),
+                      label: const Text('Paid', style: TextStyle(fontSize: 12)),
                       style: TextButton.styleFrom(
                         foregroundColor: Color(COLOR_PRIMARY),
                         padding: const EdgeInsets.symmetric(
@@ -1441,21 +1464,6 @@ class _WalletDetailPageState extends State<WalletDetailPage> {
                           vertical: 6,
                         ),
                       ),
-                    ),
-                    if (_isDeletingHistory)
-                      const SizedBox(
-                        height: 24,
-                        width: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      tooltip: 'Delete history',
-                      padding: const EdgeInsets.all(8),
-                      constraints: const BoxConstraints(),
-                      onPressed: _isDeletingHistory
-                          ? null
-                          : () => _confirmDelete(context, user.uid),
                     ),
                   ],
                 ),

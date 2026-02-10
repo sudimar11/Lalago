@@ -330,7 +330,17 @@ class FireStoreUtils {
 
   static const String _defaultContactEmail = 'alshidarabdelnasir19@gmail.com';
 
+  static Map<String, dynamic>? _contactUsCache;
+  static DateTime? _contactUsCachedAt;
+  static const Duration _contactUsCacheValidity = Duration(hours: 1);
+
   getContactUs() async {
+    final now = DateTime.now();
+    if (_contactUsCache != null &&
+        _contactUsCachedAt != null &&
+        now.difference(_contactUsCachedAt!) < _contactUsCacheValidity) {
+      return _contactUsCache!;
+    }
     final defaults = <String, dynamic>{
       'Address': '',
       'Phone': '',
@@ -340,14 +350,21 @@ class FireStoreUtils {
     final snapshot =
         await firestore.collection(Setting).doc(CONTACT_US).get();
     final data = snapshot.data();
-    if (data == null || data.isEmpty) return defaults;
+    if (data == null || data.isEmpty) {
+      _contactUsCache = defaults;
+      _contactUsCachedAt = now;
+      return defaults;
+    }
     final email = data['Email']?.toString().trim() ?? '';
-    return {
+    final result = {
       'Address': data['Address']?.toString() ?? '',
       'Phone': data['Phone']?.toString() ?? '',
       'Location': data['Location']?.toString() ?? '',
       'Email': email.isEmpty ? _defaultContactEmail : email,
     };
+    _contactUsCache = result;
+    _contactUsCachedAt = now;
+    return result;
   }
 
   static Future createPaymentId({collectionName = "wallet"}) async {

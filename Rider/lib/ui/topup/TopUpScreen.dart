@@ -74,18 +74,19 @@ class TopUpScreenState extends State<TopUpScreen> {
                 style: TextStyle(fontSize: 18),
               ));
         } else {
-          return ListView(
-            physics: BouncingScrollPhysics(),
-            children: snapshot.data!.docs.map((DocumentSnapshot document) {
-
-              final topUpData = TopupTranHistoryModel.fromJson(document.data() as Map<String, dynamic>);
-
-              //Map<String, dynamic> data = document.data()! as Map<String, dynamic>;
+          final docs = snapshot.data!.docs;
+          return ListView.builder(
+            physics: const BouncingScrollPhysics(),
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+              final document = docs[index];
+              final topUpData = TopupTranHistoryModel.fromJson(
+                  document.data() as Map<String, dynamic>);
               return buildTransactionCard(
                 topupTranHistory: topUpData,
                 date: topUpData.date.toDate(),
               );
-            }).toList(),
+            },
           );
         }
       },

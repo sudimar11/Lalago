@@ -16,3 +16,15 @@ For help getting started with Flutter, view our
 mobile development, and a full API reference.
 
 # Foodies_driver
+
+## Android: hide noisy logs
+
+To run the app **without** BLASTBufferQueue and ScrollIdentify logs in the same terminal:
+
+```bash
+sh scripts/run_android.sh
+```
+
+Optional: `sh scripts/run_android.sh -d <device_id>`
+
+Or use filtered logcat in a separate terminal: `sh scripts/filtered_logcat.sh`
