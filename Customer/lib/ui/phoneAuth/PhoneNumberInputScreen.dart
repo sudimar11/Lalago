@@ -28,8 +28,8 @@ import 'package:foodie_customer/ui/location_permission_screen.dart';
 import 'package:foodie_customer/utils/extensions/context_extension.dart';
 
 import 'package:image_picker/image_picker.dart';
-
 import 'package:intl_phone_number_input/intl_phone_number_input.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'package:pin_code_fields/pin_code_fields.dart';
 
@@ -728,14 +728,20 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
-
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.gallery);
-
-            if (image != null)
-              setState(() {
-                _image = File(image.path);
-              });
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.gallery);
+              if (!mounted) return;
+              if (image != null) {
+                setState(() {
+                  _image = File(image.path);
+                });
+              }
+            } catch (e, s) {
+              debugPrint('PhoneNumberInputScreen gallery picker: $e $s');
+            }
           },
         ),
         CupertinoActionSheetAction(
@@ -743,14 +749,26 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
-
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.camera);
-
-            if (image != null)
-              setState(() {
-                _image = File(image.path);
-              });
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            var status = await Permission.camera.status;
+            if (!status.isGranted) {
+              status = await Permission.camera.request();
+            }
+            if (!status.isGranted) return;
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.camera);
+              if (!mounted) return;
+              if (image != null) {
+                setState(() {
+                  _image = File(image.path);
+                });
+              }
+            } catch (e, s) {
+              debugPrint('PhoneNumberInputScreen camera picker: $e $s');
+            }
           },
         )
       ],

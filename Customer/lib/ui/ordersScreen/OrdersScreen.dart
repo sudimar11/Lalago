@@ -10,6 +10,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/OrderDetailsScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
+import 'package:foodie_customer/ui/auth/AuthScreen.dart';
 import 'package:provider/provider.dart';
 
 class OrdersScreen extends StatefulWidget {
@@ -123,6 +124,47 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Show guest placeholder if user is not logged in
+    if (MyAppState.currentUser == null) {
+      return Scaffold(
+        backgroundColor:
+            isDarkMode(context) ? Color(DARK_COLOR) : Color(0xffFFFFFF),
+        appBar: AppBar(
+          backgroundColor: Color(COLOR_PRIMARY),
+          elevation: 0,
+          centerTitle: false,
+          titleSpacing: 0,
+          leading: IconButton(
+            icon: Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () => Navigator.maybePop(context),
+          ),
+          title: Text(
+            'Orders',
+            style: TextStyle(
+              fontFamily: "Poppinsm",
+              fontSize: 18,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.receipt_long_outlined, size: 80, color: Colors.grey),
+              SizedBox(height: 16),
+              Text('Login to view your orders', style: TextStyle(fontSize: 18)),
+              SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () => push(context, AuthScreen()),
+                child: Text('Login / Register'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
     return Scaffold(
       backgroundColor:
           isDarkMode(context) ? Color(DARK_COLOR) : Color(0xffFFFFFF),

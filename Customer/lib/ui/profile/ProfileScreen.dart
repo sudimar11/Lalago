@@ -23,6 +23,7 @@ import 'package:foodie_customer/ui/deliveryAddressScreen/DeliveryAddressScreen.d
 import 'package:foodie_customer/services/referral_reward_service.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class ProfileScreen extends StatefulWidget {
   final User user;
@@ -595,15 +596,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
           onPressed: () async {
             print('🔄 DEBUG: Gallery option selected');
             Navigator.pop(context);
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.gallery);
-            if (image != null) {
-              print('🔄 DEBUG: Image selected from gallery: ${image.path}');
-              await _imagePicked(File(image.path));
-            } else {
-              print('❌ DEBUG: No image selected from gallery');
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.gallery);
+              if (!mounted) return;
+              if (image != null) {
+                print('🔄 DEBUG: Image selected from gallery: ${image.path}');
+                await _imagePicked(File(image.path));
+              } else {
+                print('❌ DEBUG: No image selected from gallery');
+              }
+              if (!mounted) return;
+              setState(() {});
+            } catch (e, s) {
+              print('ProfileScreen gallery picker: $e $s');
             }
-            setState(() {});
           },
         ),
         CupertinoActionSheetAction(
@@ -611,15 +620,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
           onPressed: () async {
             print('🔄 DEBUG: Camera option selected');
             Navigator.pop(context);
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.camera);
-            if (image != null) {
-              print('🔄 DEBUG: Image captured from camera: ${image.path}');
-              await _imagePicked(File(image.path));
-            } else {
-              print('❌ DEBUG: No image captured from camera');
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            var status = await Permission.camera.status;
+            if (!status.isGranted) {
+              status = await Permission.camera.request();
             }
-            setState(() {});
+            if (!status.isGranted) return;
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.camera);
+              if (!mounted) return;
+              if (image != null) {
+                print('🔄 DEBUG: Image captured from camera: ${image.path}');
+                await _imagePicked(File(image.path));
+              } else {
+                print('❌ DEBUG: No image captured from camera');
+              }
+              if (!mounted) return;
+              setState(() {});
+            } catch (e, s) {
+              print('ProfileScreen camera picker: $e $s');
+            }
           },
         ),
       ],

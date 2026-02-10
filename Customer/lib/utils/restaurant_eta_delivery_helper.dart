@@ -58,53 +58,29 @@ class RestaurantEtaDeliveryHelper {
     if (distanceKm == null || distanceKm <= 0) return null;
     if (deliveryChargeModel == null) return null;
 
-    // Extract and sanitize charge details - matching CartScreen exactly
-    double deliveryChargePerKm =
-        deliveryChargeModel.deliveryChargesPerKm.toDouble();
-    double minimumDeliveryCharge =
-        deliveryChargeModel.minimumDeliveryCharges.toDouble();
-    double minimumDeliveryChargeWithinKm =
-        deliveryChargeModel.minimumDeliveryChargesWithinKm.toDouble();
-    final double flatAmount = deliveryChargeModel.amount.toDouble();
+    // New_DeliveryCharge formula: < 1km = baseDeliveryCharge,
+    // >= 1km = baseDeliveryCharge + distance * deliveryChargePerKm
+    final double baseCharge =
+        deliveryChargeModel.baseDeliveryCharge.toDouble();
+    final double perKm =
+        deliveryChargeModel.deliveryChargePerKm.toDouble();
+    final double thresholdKm =
+        deliveryChargeModel.minimumDistanceKm.toDouble();
 
-    // If minimum is not configured but a flat amount exists, use it as minimum
-    // This matches CartScreen logic at line 1356-1359
-    if (minimumDeliveryCharge <= 0 && flatAmount > 0) {
-      minimumDeliveryCharge = flatAmount;
-    }
-
-    // Calculate delivery charges - matching CartScreen logic exactly (lines 1367-1388)
     double calculatedDeliveryCharges = 0.0;
+    final double effectiveThreshold = thresholdKm > 0 ? thresholdKm : 1;
 
-    if (deliveryChargePerKm > 0 && distanceKm <= deliveryChargePerKm) {
-      // Within base distance (CartScreen line 1367-1371)
-      calculatedDeliveryCharges = minimumDeliveryCharge;
+    if (distanceKm < effectiveThreshold) {
+      calculatedDeliveryCharges = baseCharge;
     } else {
-      // Beyond base distance or no threshold configured (CartScreen line 1372-1388)
-      final double extraDistanceKm =
-          (distanceKm - deliveryChargePerKm) > 0
-              ? (distanceKm - deliveryChargePerKm)
-              : 0;
-      final double extraDistanceInMeters = extraDistanceKm * 1000.0;
-      final int extraUnits = (extraDistanceInMeters / 100).ceil();
-      final double extraCharges = (minimumDeliveryChargeWithinKm > 0)
-          ? extraUnits * minimumDeliveryChargeWithinKm
-          : 0.0;
-      calculatedDeliveryCharges =
-          (minimumDeliveryCharge > 0 ? minimumDeliveryCharge : 0.0) +
-              extraCharges;
+      calculatedDeliveryCharges = baseCharge + (distanceKm * perKm);
     }
 
-    // Final fallback to avoid 0 when configuration intends a non-free delivery
-    // This matches CartScreen logic at lines 1390-1396
-    if (calculatedDeliveryCharges <= 0 &&
-        (minimumDeliveryCharge > 0 || flatAmount > 0)) {
-      calculatedDeliveryCharges = minimumDeliveryCharge > 0
-          ? minimumDeliveryCharge
-          : flatAmount;
+    if (calculatedDeliveryCharges <= 0 && baseCharge > 0) {
+      calculatedDeliveryCharges = baseCharge;
     }
 
-    // Return null if fee is 0 or invalid (CartScreen validates at line 1403)
+    // Return null if fee is 0 or invalid
     if (calculatedDeliveryCharges <= 0) return null;
 
     // Round to whole number (no decimal points)

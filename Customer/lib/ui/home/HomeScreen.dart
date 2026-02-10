@@ -1799,8 +1799,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Use cached vendor map instead of recreating
     final vendorMap = _cachedVendorMap ?? {};
 
-    return SafeArea(
-        child: Scaffold(
+    return Scaffold(
       backgroundColor: isDark
           ? const Color.fromARGB(255, 201, 144, 1)
           : const Color(0xffFFFFFF),
@@ -2161,7 +2160,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
-    ));
+    );
   }
 
   final StoryController controller = StoryController();

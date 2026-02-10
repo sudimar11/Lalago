@@ -476,16 +476,6 @@ class _WalletDetailPageState extends State<WalletDetailPage> {
       return;
     }
 
-    // Add minimum amount check
-    if (currentBalance < 100) {
-      setState(() {
-        _payoutError = 'Minimum payout amount is ₱100.00. Your current balance is ₱${currentBalance.toStringAsFixed(2)}';
-        _isRequestingPayout = false;
-      });
-      print('❌ Payout Error: Balance below minimum');
-      return;
-    }
-
     // Prevent duplicate: block if already has pending payout
     final hasPendingPayout = payoutRequests.any(
         (r) => (r['status'] as String? ?? '') == 'pending');

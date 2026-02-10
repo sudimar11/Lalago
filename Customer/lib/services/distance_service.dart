@@ -6,6 +6,11 @@ import 'package:http/http.dart' as http;
 
 import '../constants.dart';
 
+/// Hardcoded fallback key so Directions API is always attempted.
+/// Prevents "no valid API key" fallback to straight-line distance.
+const String _kDirectionsApiFallbackKey =
+    'AIzaSyBXNXXV60p-VYnIMD0mevMk8HeW9kSJnPs';
+
 /// Cache entry for storing distance calculations with expiration.
 class _CachedDistance {
   final double distanceKm;
@@ -38,7 +43,7 @@ class DistanceService {
   static int _apiCallCounter = 0;
 
   /// Creates a cache key from rounded coordinates.
-  /// Rounds to 3 decimal places (~110m precision) to increase cache hits.
+  /// Rounds to 5 decimal places (~1.1m precision) for checkout accuracy.
   /// Format: "lat1,lng1->lat2,lng2"
   static String _getCacheKey(
     double lat1,
@@ -46,11 +51,11 @@ class DistanceService {
     double lat2,
     double lng2,
   ) {
-    // Round to 3 decimal places (~110m precision)
-    final roundedLat1 = (lat1 * 1000).round() / 1000;
-    final roundedLng1 = (lng1 * 1000).round() / 1000;
-    final roundedLat2 = (lat2 * 1000).round() / 1000;
-    final roundedLng2 = (lng2 * 1000).round() / 1000;
+    // Round to 5 decimal places (~1.1m precision)
+    final roundedLat1 = (lat1 * 100000).round() / 100000;
+    final roundedLng1 = (lng1 * 100000).round() / 100000;
+    final roundedLat2 = (lat2 * 100000).round() / 100000;
+    final roundedLng2 = (lng2 * 100000).round() / 100000;
 
     return '$roundedLat1,$roundedLng1->$roundedLat2,$roundedLng2';
   }
@@ -90,16 +95,17 @@ class DistanceService {
   /// [destLng] - Destination longitude
   ///
   /// Returns distance in kilometers as a Future<double>.
+  /// Set [bypassCache] true to always call API (e.g. at checkout).
   static Future<double> getRoadDistanceKm(
     double originLat,
     double originLng,
     double destLat,
-    double destLng,
-  ) async {
-    // Check cache first
+    double destLng, {
+    bool bypassCache = false,
+  }) async {
     final cacheKey = _getCacheKey(originLat, originLng, destLat, destLng);
-    
-    if (_distanceCache.containsKey(cacheKey)) {
+
+    if (!bypassCache && _distanceCache.containsKey(cacheKey)) {
       final cached = _distanceCache[cacheKey]!;
       if (cached.isValid(_cacheValidDuration)) {
         _cacheHitCounter++;
@@ -107,7 +113,6 @@ class DistanceService {
             "DistanceService: Cache HIT #$_cacheHitCounter for $cacheKey (${cached.distanceKm}km, saved \$${(_cacheHitCounter * 0.005).toStringAsFixed(4)})");
         return cached.distanceKm;
       } else {
-        // Cache expired, remove it
         final age = DateTime.now().difference(cached.timestamp);
         debugPrint(
             "DistanceService: Cache EXPIRED for $cacheKey (age: ${age.inMinutes}min)");
@@ -117,13 +122,11 @@ class DistanceService {
 
     debugPrint("DistanceService: Cache MISS for $cacheKey - calling API");
 
-    // Fallback to straight-line distance if API key is not available
-    if (GOOGLE_API_KEY.isEmpty || GOOGLE_API_KEY == 'Replace with your Server key') {
-      debugPrint(
-          "DistanceService: API key not configured, using straight-line distance");
-      return _getStraightLineDistanceKm(
-          originLat, originLng, destLat, destLng);
-    }
+    // Use Firestore key if valid, otherwise hardcoded fallback (never skip API)
+    final bool hasValidKey = GOOGLE_API_KEY.isNotEmpty &&
+        GOOGLE_API_KEY != 'Replace with your Server key';
+    final String apiKey =
+        hasValidKey ? GOOGLE_API_KEY : _kDirectionsApiFallbackKey;
 
     _apiCallCounter++;
     try {
@@ -131,7 +134,7 @@ class DistanceService {
           'https://maps.googleapis.com/maps/api/directions/json'
           '?origin=$originLat,$originLng'
           '&destination=$destLat,$destLng'
-          '&key=$GOOGLE_API_KEY';
+          '&key=$apiKey';
 
       debugPrint(
           "DistanceService: API CALL #$_apiCallCounter - Requesting road distance from Google Directions API");

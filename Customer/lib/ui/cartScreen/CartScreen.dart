@@ -25,6 +25,7 @@ import 'package:foodie_customer/ui/deliveryAddressScreen/DeliveryAddressScreen.d
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/ui/profile/ProfileScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../model/TaxModel.dart';
@@ -177,6 +178,8 @@ class _CartScreenState extends State<CartScreen> {
   // Distance calculation caching and change tracking
   String? _lastCalculatedVendorID;
   String? _lastCalculatedAddressID;
+  double? _lastCalculatedLat;
+  double? _lastCalculatedLng;
   double? _cachedDistanceKm;
   String? _cachedDeliveryCharge;
   DateTime? _cacheTimestamp;
@@ -186,6 +189,7 @@ class _CartScreenState extends State<CartScreen> {
   static const int _defaultPrepMinutes = 20;
   static const int _etaBufferMinutes = 10;
   static const double _avgSpeedKmh = 25.0;
+  static const int _cacheExpiryMinutes = 10;
 
   /// Invalidates all delivery-related cache variables
   void _invalidateDeliveryCache() {
@@ -193,6 +197,8 @@ class _CartScreenState extends State<CartScreen> {
     _cachedDeliveryCharge = null;
     _lastCalculatedVendorID = null;
     _lastCalculatedAddressID = null;
+    _lastCalculatedLat = null;
+    _lastCalculatedLng = null;
     _cacheTimestamp = null;
     _estimatedDeliveryTimeText = null;
   }
@@ -208,6 +214,46 @@ class _CartScreenState extends State<CartScreen> {
       return "Phone number must be 10 to 11 digits.";
     }
     return null;
+  }
+
+  Future<bool> _ensureUserLoggedIn(BuildContext context) async {
+    if (MyAppState.currentUser == null) {
+      final shouldLogin = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: Text('Login Required'),
+          content: Text('Please login to place your order. Your cart will be saved.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('Login'),
+            ),
+          ],
+        ),
+      );
+      
+      if (shouldLogin == true) {
+        // Navigate to LoginScreen with return flag
+        final result = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => LoginScreen(returnToCart: true),
+          ),
+        );
+        
+        // Check if user logged in successfully
+        return MyAppState.currentUser != null;
+      }
+      
+      return false;
+    }
+    
+    return true;
   }
 
   Future<bool> _ensurePhoneNumber(BuildContext context) async {
@@ -1388,6 +1434,8 @@ class _CartScreenState extends State<CartScreen> {
     return '${vendorID}_$addressKey';
   }
 
+  static const double _kCoordEpsilon = 1e-6;
+
   /// Checks if distance should be recalculated based on vendor/address changes
   bool _shouldRecalculateDistance(String vendorID, AddressModel address) {
     final hasVendorChanged = vendorID != _lastCalculatedVendorID;
@@ -1398,17 +1446,22 @@ class _CartScreenState extends State<CartScreen> {
       // If address has ID, compare IDs
       hasAddressChanged = address.id != _lastCalculatedAddressID;
     } else {
-      // If address has no ID, compare coordinates or check if we previously had an ID
+      // If address has no ID (custom/pinned), compare stored coordinates
       if (_lastCalculatedAddressID != null) {
         // Previously had ID, now we don't - treat as changed
         hasAddressChanged = true;
       } else {
-        // Both have no ID, compare coordinates using cache key
-        final currentKey = _getCacheKey(vendorID, address);
-        final lastKey = _lastCalculatedVendorID != null
-            ? _getCacheKey(_lastCalculatedVendorID!, addressModel)
-            : null;
-        hasAddressChanged = currentKey != lastKey;
+        // Both have no ID: compare current coords with stored last coords
+        final loc = address.location;
+        if (loc == null ||
+            _lastCalculatedLat == null ||
+            _lastCalculatedLng == null) {
+          hasAddressChanged = true;
+        } else {
+          hasAddressChanged =
+              (loc.latitude - _lastCalculatedLat!).abs() > _kCoordEpsilon ||
+                  (loc.longitude - _lastCalculatedLng!).abs() > _kCoordEpsilon;
+        }
       }
     }
 
@@ -1435,7 +1488,7 @@ class _CartScreenState extends State<CartScreen> {
     });
   }
 
-  Future<void> getDeliveyData() async {
+  Future<void> getDeliveyData({bool forceFresh = false}) async {
     print('🟠 [DELIVERY_DATA] getDeliveyData started');
     debugPrint("getDeliveyData started");
 
@@ -1473,8 +1526,8 @@ class _CartScreenState extends State<CartScreen> {
 
       final currentVendorID = cartProducts.first.vendorID;
 
-      // Check if we need to recalculate distance
-      final shouldRecalculate =
+      // Check if we need to recalculate distance (forceFresh skips cache)
+      final shouldRecalculate = forceFresh ||
           _shouldRecalculateDistance(currentVendorID, addressModel);
 
       // If vendor and address haven't changed, reuse cached distance
@@ -1552,15 +1605,24 @@ class _CartScreenState extends State<CartScreen> {
         // Calculate road-based distance using Google Directions API
         // Falls back to straight-line distance if API call fails
         final double distanceKm = await DistanceService.getRoadDistanceKm(
-            addressModel.location!.latitude,
-            addressModel.location!.longitude,
-            vendorModel!.latitude,
-            vendorModel!.longitude);
+          addressModel.location!.latitude,
+          addressModel.location!.longitude,
+          vendorModel!.latitude,
+          vendorModel!.longitude,
+          bypassCache: forceFresh,
+        );
 
         // Cache the calculated distance
         _cachedDistanceKm = distanceKm;
         _lastCalculatedVendorID = currentVendorID;
         _lastCalculatedAddressID = addressModel.id;
+        if (addressModel.id == null && addressModel.location != null) {
+          _lastCalculatedLat = addressModel.location!.latitude;
+          _lastCalculatedLng = addressModel.location!.longitude;
+        } else {
+          _lastCalculatedLat = null;
+          _lastCalculatedLng = null;
+        }
         _cacheTimestamp = DateTime.now();
 
         debugPrint("Calculated and cached distance: ${distanceKm}km");
@@ -1580,55 +1642,33 @@ class _CartScreenState extends State<CartScreen> {
             debugPrint(
                 "Fetched deliveryChargeModel: ${deliveryChargeModel.toJson()}");
 
-            // Extract and sanitize charge details
-            double deliveryChargePerKm =
-                deliveryChargeModel.deliveryChargesPerKm.toDouble();
-            double minimumDeliveryCharge =
-                deliveryChargeModel.minimumDeliveryCharges.toDouble();
-            double minimumDeliveryChargeWithinKm =
-                deliveryChargeModel.minimumDeliveryChargesWithinKm.toDouble();
-            final double flatAmount = deliveryChargeModel.amount.toDouble();
-
-            // If minimum is not configured but a flat amount exists, use it as minimum
-            if (minimumDeliveryCharge <= 0 && flatAmount > 0) {
-              minimumDeliveryCharge = flatAmount;
-            }
+            // New_DeliveryCharge formula: < 1km = baseDeliveryCharge,
+            // >= 1km = baseDeliveryCharge + distance * deliveryChargePerKm
+            final double baseCharge =
+                deliveryChargeModel.baseDeliveryCharge.toDouble();
+            final double perKm =
+                deliveryChargeModel.deliveryChargePerKm.toDouble();
+            final double thresholdKm =
+                deliveryChargeModel.minimumDistanceKm.toDouble();
 
             debugPrint(
-                "Delivery Charges - Base(min): $minimumDeliveryCharge, ThresholdKm: $deliveryChargePerKm, Per100m: $minimumDeliveryChargeWithinKm, Flat: $flatAmount");
+                "Delivery Charges - Base: $baseCharge, ThresholdKm: $thresholdKm, PerKm: $perKm");
 
-            // Calculate delivery charges
             double calculatedDeliveryCharges = 0.0;
+            final double effectiveThreshold = thresholdKm > 0 ? thresholdKm : 1;
 
-            if (deliveryChargePerKm > 0 && distanceKm <= deliveryChargePerKm) {
-              // Within base distance
-              calculatedDeliveryCharges = minimumDeliveryCharge;
+            if (distanceKm < effectiveThreshold) {
+              calculatedDeliveryCharges = baseCharge;
               debugPrint(
-                  "Within base distance. Charge: $calculatedDeliveryCharges");
+                  "Within base distance (<${effectiveThreshold}km). Charge: $calculatedDeliveryCharges");
             } else {
-              // Beyond base distance or no threshold configured
-              final double extraDistanceKm =
-                  (distanceKm - deliveryChargePerKm) > 0
-                      ? (distanceKm - deliveryChargePerKm)
-                      : 0;
-              final double extraDistanceInMeters = extraDistanceKm * 1000.0;
-              final int extraUnits = (extraDistanceInMeters / 100).ceil();
-              final double extraCharges = (minimumDeliveryChargeWithinKm > 0)
-                  ? extraUnits * minimumDeliveryChargeWithinKm
-                  : 0.0;
-              calculatedDeliveryCharges =
-                  (minimumDeliveryCharge > 0 ? minimumDeliveryCharge : 0.0) +
-                      extraCharges;
+              calculatedDeliveryCharges = baseCharge + (distanceKm * perKm);
               debugPrint(
-                  "Beyond base distance. Extra Units: $extraUnits, Extra Charges: $extraCharges, Total Charge: $calculatedDeliveryCharges");
+                  "Beyond base distance. Charge: $calculatedDeliveryCharges");
             }
 
-            // Final fallback to avoid 0 when configuration intends a non-free delivery
-            if (calculatedDeliveryCharges <= 0 &&
-                (minimumDeliveryCharge > 0 || flatAmount > 0)) {
-              calculatedDeliveryCharges = minimumDeliveryCharge > 0
-                  ? minimumDeliveryCharge
-                  : flatAmount;
+            if (calculatedDeliveryCharges <= 0 && baseCharge > 0) {
+              calculatedDeliveryCharges = baseCharge;
             }
 
             // Round to whole number (no decimal points)
@@ -1812,11 +1852,12 @@ class _CartScreenState extends State<CartScreen> {
           !addressChanged &&
           _cachedDistanceKm != null &&
           _cachedDeliveryCharge != null) {
-        // Check if cache has expired (24 hours)
+        // Check if cache has expired (10 minutes)
         final cacheAge = _cacheTimestamp != null
             ? DateTime.now().difference(_cacheTimestamp!)
             : null;
-        final isExpired = cacheAge == null || cacheAge.inHours >= 24;
+        final isExpired =
+            cacheAge == null || cacheAge.inMinutes >= _cacheExpiryMinutes;
 
         if (isExpired) {
           // Cache expired, invalidate and proceed with recalculation
@@ -2145,6 +2186,12 @@ class _CartScreenState extends State<CartScreen> {
                         !_isDeliveryReady) {
                       return;
                     }
+                    
+                    // Ensure user is logged in before proceeding
+                    if (!await _ensureUserLoggedIn(context)) {
+                      return;
+                    }
+                    
                     // Ensure user has first and last name before proceeding
                     if (MyAppState.currentUser != null) {
                       final user = MyAppState.currentUser!;
@@ -2388,6 +2435,11 @@ class _CartScreenState extends State<CartScreen> {
                     String auditNote = _generateDiscountAuditNote();
 
                     if (selctedOrderTypeValue == "Delivery") {
+                      // Force fresh distance calculation at checkout for accuracy
+                      _invalidateDeliveryCache();
+                      await getDeliveyData(forceFresh: true);
+
+                      if (!mounted) return;
                       push(
                         context,
                         PaymentScreen(
@@ -3177,6 +3229,7 @@ class _CartScreenState extends State<CartScreen> {
                         )
                       : _DeliveryChargesRow(
                           deliveryCharges: deliveryCharges,
+                          distanceKm: _cachedDistanceKm,
                           isDeliveryReady: _isDeliveryReady,
                           isDarkMode: isDarkMode(context),
                           fontSize: _font,
@@ -4761,12 +4814,14 @@ class _SpecialDiscountRow extends StatelessWidget {
 
 class _DeliveryChargesRow extends StatelessWidget {
   final String deliveryCharges;
+  final double? distanceKm;
   final bool isDeliveryReady;
   final bool isDarkMode;
   final double fontSize;
 
   const _DeliveryChargesRow({
     required this.deliveryCharges,
+    this.distanceKm,
     required this.isDeliveryReady,
     required this.isDarkMode,
     required this.fontSize,
@@ -4783,7 +4838,8 @@ class _DeliveryChargesRow extends StatelessWidget {
             children: [
               Text(
                 "Delivery Charges",
-                style: TextStyle(fontFamily: "Poppinsm", fontSize: fontSize),
+                style: TextStyle(
+                    fontFamily: "Poppinsm", fontSize: fontSize),
               ),
               isDeliveryReady
                   ? Text(

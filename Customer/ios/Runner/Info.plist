@@ -73,6 +73,12 @@
 	<string>Allow local network access for debugging logs.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>The microphone is not used for recording. Some system features may require temporary access for app functionality.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>LalaGO uses the camera to take profile pictures and photos for reviews and chat.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>LalaGO uses your photo library so you can choose profile pictures and share images in reviews and chat.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>LalaGO may save images to your photo library when you choose to download or save photos.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>We use your location to show nearby restaurants, improve delivery accuracy, and display maps.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

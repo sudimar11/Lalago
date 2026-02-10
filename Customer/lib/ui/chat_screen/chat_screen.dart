@@ -18,6 +18,7 @@ import 'package:foodie_customer/ui/fullScreenVideoViewer/FullScreenVideoViewer.d
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 
 class ChatScreens extends StatefulWidget {
@@ -1210,14 +1211,22 @@ class _ChatScreensState extends State<ChatScreens> {
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.gallery);
-            if (image != null) {
-              final compressed = await _compressImage(File(image.path));
-              Url url = await FireStoreUtils()
-                  .uploadChatImageToFireStorage(
-                      compressed ?? File(image.path), context);
-              _sendMessage('', url, '', 'image');
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.gallery);
+              if (!mounted) return;
+              if (image != null) {
+                final compressed =
+                    await _compressImage(File(image.path));
+                Url url = await FireStoreUtils()
+                    .uploadChatImageToFireStorage(
+                        compressed ?? File(image.path), context);
+                _sendMessage('', url, '', 'image');
+              }
+            } catch (e, s) {
+              log('ChatScreen gallery image picker: $e $s');
             }
           },
         ),
@@ -1226,14 +1235,21 @@ class _ChatScreensState extends State<ChatScreens> {
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
-            XFile? galleryVideo =
-                await _imagePicker.pickVideo(source: ImageSource.gallery);
-            if (galleryVideo != null) {
-              ChatVideoContainer videoContainer = await FireStoreUtils()
-                  .uploadChatVideoToFireStorage(
-                      File(galleryVideo.path), context);
-              _sendMessage('', videoContainer.videoUrl,
-                  videoContainer.thumbnailUrl, 'video');
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            try {
+              XFile? galleryVideo =
+                  await _imagePicker.pickVideo(source: ImageSource.gallery);
+              if (!mounted) return;
+              if (galleryVideo != null) {
+                ChatVideoContainer videoContainer = await FireStoreUtils()
+                    .uploadChatVideoToFireStorage(
+                        File(galleryVideo.path), context);
+                _sendMessage('', videoContainer.videoUrl,
+                    videoContainer.thumbnailUrl, 'video');
+              }
+            } catch (e, s) {
+              log('ChatScreen gallery video picker: $e $s');
             }
           },
         ),
@@ -1242,14 +1258,28 @@ class _ChatScreensState extends State<ChatScreens> {
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.camera);
-            if (image != null) {
-              final compressed = await _compressImage(File(image.path));
-              Url url = await FireStoreUtils()
-                  .uploadChatImageToFireStorage(
-                      compressed ?? File(image.path), context);
-              _sendMessage('', url, '', 'image');
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            var status = await Permission.camera.status;
+            if (!status.isGranted) {
+              status = await Permission.camera.request();
+            }
+            if (!status.isGranted) return;
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.camera);
+              if (!mounted) return;
+              if (image != null) {
+                final compressed =
+                    await _compressImage(File(image.path));
+                Url url = await FireStoreUtils()
+                    .uploadChatImageToFireStorage(
+                        compressed ?? File(image.path), context);
+                _sendMessage('', url, '', 'image');
+              }
+            } catch (e, s) {
+              log('ChatScreen camera picker: $e $s');
             }
           },
         ),
@@ -1258,14 +1288,27 @@ class _ChatScreensState extends State<ChatScreens> {
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
-            XFile? recordedVideo =
-                await _imagePicker.pickVideo(source: ImageSource.camera);
-            if (recordedVideo != null) {
-              ChatVideoContainer videoContainer = await FireStoreUtils()
-                  .uploadChatVideoToFireStorage(
-                      File(recordedVideo.path), context);
-              _sendMessage('', videoContainer.videoUrl,
-                  videoContainer.thumbnailUrl, 'video');
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            var status = await Permission.camera.status;
+            if (!status.isGranted) {
+              status = await Permission.camera.request();
+            }
+            if (!status.isGranted) return;
+            if (!mounted) return;
+            try {
+              XFile? recordedVideo =
+                  await _imagePicker.pickVideo(source: ImageSource.camera);
+              if (!mounted) return;
+              if (recordedVideo != null) {
+                ChatVideoContainer videoContainer = await FireStoreUtils()
+                    .uploadChatVideoToFireStorage(
+                        File(recordedVideo.path), context);
+                _sendMessage('', videoContainer.videoUrl,
+                    videoContainer.thumbnailUrl, 'video');
+              }
+            } catch (e, s) {
+              log('ChatScreen record video picker: $e $s');
             }
           },
         )

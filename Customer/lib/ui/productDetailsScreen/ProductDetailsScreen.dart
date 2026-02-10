@@ -607,28 +607,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                                 ],
                               ),
                             ),
-                            if (MyAppState.currentUser == null)
-                              TextButton.icon(
-                                onPressed: () {
-                                  push(context, AuthScreen());
-                                },
-                                icon: Icon(
-                                  Icons.add,
-                                  color: Color(COLOR_PRIMARY),
-                                  size: 18,
-                                ),
-                                label: Text(
-                                  'ADD',
-                                  style: TextStyle(
-                                      fontFamily: "Poppinsm",
-                                      color: Color(COLOR_PRIMARY)),
-                                ),
-                                style: TextButton.styleFrom(
-                                  side: BorderSide(
-                                      color: Colors.grey.shade300, width: 2),
-                                ),
-                              )
-                            else if (isOpen == false)
+                            if (isOpen == false)
                               const Center()
                             else
                               Align(
@@ -2185,18 +2164,15 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                     height: 40.0,
                     child: CommonElevatedButton(
                       onButtonPressed: () {
-                        if (MyAppState.currentUser == null) {
-                          push(context, AuthScreen());
-                        } else {
-                          pushAndRemoveUntil(
-                              context,
-                              ContainerScreen(
-                                user: MyAppState.currentUser!,
-                                currentWidget: CartScreen(),
-                                appBarTitle: 'Your Cart',
-                              ),
-                              false);
-                        }
+                        // Allow guests to view cart (login will be required at checkout)
+                        pushAndRemoveUntil(
+                            context,
+                            ContainerScreen(
+                              user: MyAppState.currentUser,
+                              currentWidget: CartScreen(),
+                              appBarTitle: 'Your Cart',
+                            ),
+                            false);
                       },
                       custom: Row(
                         spacing: 4.0,

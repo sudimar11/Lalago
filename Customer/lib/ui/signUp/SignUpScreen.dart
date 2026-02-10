@@ -22,6 +22,8 @@ import 'package:foodie_customer/ui/phoneAuth/PhoneNumberInputScreen.dart';
 import 'package:foodie_customer/utils/extensions/context_extension.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl_phone_number_input/intl_phone_number_input.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import '../../common/common_elevated_button.dart';
 import '../../common/common_image.dart';
@@ -369,14 +371,20 @@ class _SignUpState extends State<SignUpScreen> {
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
-
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.gallery);
-
-            if (image != null)
-              setState(() {
-                _image = File(image.path);
-              });
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.gallery);
+              if (!mounted) return;
+              if (image != null) {
+                setState(() {
+                  _image = File(image.path);
+                });
+              }
+            } catch (e, s) {
+              log('SignUpScreen gallery picker: $e $s');
+            }
           },
         ),
         CupertinoActionSheetAction(
@@ -384,14 +392,26 @@ class _SignUpState extends State<SignUpScreen> {
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
-
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.camera);
-
-            if (image != null)
-              setState(() {
-                _image = File(image.path);
-              });
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            var status = await Permission.camera.status;
+            if (!status.isGranted) {
+              status = await Permission.camera.request();
+            }
+            if (!status.isGranted) return;
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.camera);
+              if (!mounted) return;
+              if (image != null) {
+                setState(() {
+                  _image = File(image.path);
+                });
+              }
+            } catch (e, s) {
+              log('SignUpScreen camera picker: $e $s');
+            }
           },
         )
       ],
@@ -827,6 +847,30 @@ class _SignUpState extends State<SignUpScreen> {
               ],
             ),
           ),
+        ),
+        const SizedBox(height: 16.0),
+        FutureBuilder<bool>(
+          future: SignInWithApple.isAvailable(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const SizedBox.shrink();
+            }
+            if (snapshot.hasData && snapshot.data == true) {
+              return SizedBox(
+                height: 50.0,
+                width: context.screenWidth,
+                child: SignInWithAppleButton(
+                  onPressed: _signUpWithApple,
+                  height: 50.0,
+                  style: isDarkMode(context)
+                      ? SignInWithAppleButtonStyle.white
+                      : SignInWithAppleButtonStyle.black,
+                  borderRadius: BorderRadius.circular(24.0),
+                ),
+              );
+            }
+            return const SizedBox.shrink();
+          },
         ),
         const SizedBox(height: 16.0),
         SizedBox(
@@ -1471,6 +1515,66 @@ class _SignUpState extends State<SignUpScreen> {
     } else {
       showAlertDialog(
           context, 'error', "Couldn't sign up with google.", true);
+    }
+  }
+
+  _signUpWithApple() async {
+    await showProgress(context, "Signing up, please wait...", false);
+    bool hadError = false;
+    dynamic result;
+    try {
+      result = await FireStoreUtils.loginWithApple();
+    } catch (e, s) {
+      hadError = true;
+      log('_SignUpScreen._signUpWithApple $e $s');
+    } finally {
+      try {
+        await hideProgress();
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+
+    if (hadError) {
+      showAlertDialog(
+          context, 'error', "Couldn't sign up with Apple.", true);
+      return;
+    }
+
+    if (result != null && result is User) {
+      MyAppState.currentUser = result;
+
+      if (MyAppState.currentUser!.active == true) {
+        if (MyAppState.currentUser!.shippingAddress != null &&
+            MyAppState.currentUser!.shippingAddress!.isNotEmpty) {
+          if (MyAppState.currentUser!.shippingAddress!
+              .where((element) => element.isDefault == true)
+              .isNotEmpty) {
+            MyAppState.selectedPosotion = MyAppState
+                .currentUser!.shippingAddress!
+                .where((element) => element.isDefault == true)
+                .single;
+          } else {
+            MyAppState.selectedPosotion =
+                MyAppState.currentUser!.shippingAddress!.first;
+          }
+
+          pushAndRemoveUntil(context, ContainerScreen(user: result), false);
+        } else {
+          pushAndRemoveUntil(context, LocationPermissionScreen(), false);
+        }
+      } else {
+        showAlertDialog(
+            context,
+            "Your account has been disabled, Please contact to admin.",
+            "",
+            true);
+      }
+    } else if (result != null && result is String) {
+      showAlertDialog(context, 'error', result, true);
+    } else {
+      showAlertDialog(
+          context, 'error', "Couldn't sign up with Apple.", true);
     }
   }
 }

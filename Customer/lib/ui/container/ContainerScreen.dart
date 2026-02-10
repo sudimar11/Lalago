@@ -10,6 +10,7 @@ import 'package:foodie_customer/AppGlobal.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
 
+import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/CurrencyModel.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
@@ -126,10 +127,32 @@ class _ContainerScreen extends State<ContainerScreen> {
       }
 
       if (fbUser == null) {
-        debugPrint(
-            '[AUTH_INIT] User still null after wait, redirecting to AuthScreen');
+        debugPrint('[AUTH_INIT] No user logged in, proceeding as guest');
+        // Allow guest mode - set currentUser to null and continue
+        MyAppState.currentUser = null;
+        user = null;
+        
+        // Set default location for guests to browse restaurants
+        // Using Manila, Philippines as default (can be changed to any location)
+        if (MyAppState.selectedPosotion.location == null ||
+            (MyAppState.selectedPosotion.location!.latitude == 0 &&
+             MyAppState.selectedPosotion.location!.longitude == 0)) {
+          MyAppState.selectedPosotion = AddressModel(
+            location: UserLocation(
+              latitude: 14.5995,  // Manila, Philippines
+              longitude: 120.9842,
+            ),
+            locality: 'Metro Manila, Philippines',
+          );
+        }
+        
+        // Initialize screens for guest mode
+        await _initializeAfterUserSet();
+        
         if (mounted) {
-          pushReplacement(context, AuthScreen());
+          setState(() {
+            _isInitializing = false;
+          });
         }
         return;
       }
@@ -138,8 +161,31 @@ class _ContainerScreen extends State<ContainerScreen> {
       // 3) Fetch Firestore user record
       final fetchedUser = await FireStoreUtils.getCurrentUser(fbUser.uid);
       if (fetchedUser == null || fetchedUser.role != USER_ROLE_CUSTOMER) {
+        // Invalid user - log them out and proceed as guest
+        await auth.FirebaseAuth.instance.signOut();
+        MyAppState.currentUser = null;
+        user = null;
+        
+        // Set default location for guests to browse restaurants
+        if (MyAppState.selectedPosotion.location == null ||
+            (MyAppState.selectedPosotion.location!.latitude == 0 &&
+             MyAppState.selectedPosotion.location!.longitude == 0)) {
+          MyAppState.selectedPosotion = AddressModel(
+            location: UserLocation(
+              latitude: 14.5995,  // Manila, Philippines
+              longitude: 120.9842,
+            ),
+            locality: 'Metro Manila, Philippines',
+          );
+        }
+        
+        // Initialize screens for guest mode
+        await _initializeAfterUserSet();
+        
         if (mounted) {
-          pushReplacement(context, AuthScreen());
+          setState(() {
+            _isInitializing = false;
+          });
         }
         return;
       }
@@ -232,7 +278,9 @@ class _ContainerScreen extends State<ContainerScreen> {
             : CartScreen(fromContainer: true);
         _profileScreen = widget.currentWidget is ProfileScreen
             ? widget.currentWidget
-            : ProfileScreen(user: MyAppState.currentUser!);
+            : MyAppState.currentUser != null
+                ? ProfileScreen(user: MyAppState.currentUser!)
+                : null; // Will show guest placeholder
 
         // Set initial bottom nav selection based on currentWidget
         if (widget.currentWidget is CartScreen) {
@@ -507,11 +555,7 @@ class _ContainerScreen extends State<ContainerScreen> {
       return _buildErrorState();
     }
 
-    // Show main UI if user is available
-    if (user == null) {
-      return _buildLoadingIndicator();
-    }
-
+    // Show main UI (allow guest mode with null user)
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -543,12 +587,56 @@ class _ContainerScreen extends State<ContainerScreen> {
           }
         }
       },
-      child: ChangeNotifierProvider.value(
-        value: user!,
-        child: Consumer<User>(
-          builder: (context, user, _) {
-            return Scaffold(
-                bottomNavigationBar: BottomNavigationBar(
+      child: user != null
+          ? ChangeNotifierProvider.value(
+              value: user!,
+              child: Consumer<User>(
+                builder: (context, user, _) {
+                  return _buildMainScaffold(context);
+                },
+              ),
+            )
+          : _buildMainScaffold(context),
+    );
+  }
+
+  Widget _buildMainScaffold(BuildContext context) {
+    return Scaffold(
+        body: Column(
+          children: [
+            // Guest mode banner - only show on Home screen
+            if (MyAppState.currentUser == null && _currentBottomNav == BottomNavSelection.Home)
+              Container(
+                color: Colors.amber[100],
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Browsing as guest. Login to place orders.'),
+                    ),
+                    TextButton(
+                      onPressed: () => push(context, AuthScreen()),
+                      child: Text('Login'),
+                    ),
+                  ],
+                ),
+              ),
+            Expanded(
+              child: IndexedStack(
+                index: _currentBottomNav.index,
+                children: [
+                  _homeScreen ?? const SizedBox.shrink(),
+                  _searchScreen ?? const SizedBox.shrink(),
+                  _cartScreen ?? const SizedBox.shrink(),
+                  _profileScreen ?? _buildGuestProfilePlaceholder(),
+                ],
+              ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: BottomNavigationBar(
                   currentIndex: _currentBottomNav.index,
                   onTap: (index) =>
                       _onBottomNavTapped(BottomNavSelection.values[index]),
@@ -618,18 +706,23 @@ class _ContainerScreen extends State<ContainerScreen> {
                     ),
                   ],
                 ),
-                appBar: null,
-                body: IndexedStack(
-                  index: _currentBottomNav.index,
-                  children: [
-                    _homeScreen ?? const SizedBox.shrink(),
-                    _searchScreen ?? const SizedBox.shrink(),
-                    _cartScreen ?? const SizedBox.shrink(),
-                    _profileScreen ?? const SizedBox.shrink(),
-                  ],
-                ));
-          },
-        ),
+                appBar: null);
+  }
+
+  Widget _buildGuestProfilePlaceholder() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.person_outline, size: 80, color: Colors.grey),
+          SizedBox(height: 16),
+          Text('Sign in to view your profile', style: TextStyle(fontSize: 18)),
+          SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: () => push(context, AuthScreen()),
+            child: Text('Login / Register'),
+          ),
+        ],
       ),
     );
   }

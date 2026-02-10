@@ -164,21 +164,6 @@ class _OrderPageState extends State<OrderPage> {
         final vendor = order['vendor'] ?? {};
         final author = order['author'] ?? {};
 
-        final deliveryChargePerKm =
-            (vendor['deliveryChargePerKm'] ?? 10.0) is num
-                ? (vendor['deliveryChargePerKm'] ?? 10.0) as num
-                : 10.0;
-        final deliveryChargePerKmDouble = (deliveryChargePerKm is double
-            ? deliveryChargePerKm
-            : deliveryChargePerKm.toDouble());
-        final minimumDeliveryCharge =
-            (vendor['minimumDeliveryCharge'] ?? 50.0) is num
-                ? (vendor['minimumDeliveryCharge'] ?? 50.0) as num
-                : 50.0;
-        final minimumDeliveryChargeDouble = (minimumDeliveryCharge is double
-            ? minimumDeliveryCharge
-            : minimumDeliveryCharge.toDouble());
-
         final List<dynamic> orderedItems = order['products'] ?? [];
         final orderStatus = order['status'] ?? 'Unknown Status'; // Order status
         final preparationTime = order['estimatedTimeToPrepare'] ??
@@ -188,9 +173,7 @@ class _OrderPageState extends State<OrderPage> {
         final orderId = order['id'] as String;
         final distanceToRestaurant = _distanceCache[orderId] ?? 0.0;
         final deliveryCharge =
-            (distanceToRestaurant * deliveryChargePerKmDouble).clamp(
-                minimumDeliveryChargeDouble,
-                double.infinity); // Delivery charge calculation
+            double.tryParse((order['deliveryCharge'] ?? '0').toString()) ?? 0.0;
         final totalItemPrice = _totalItemPriceCache[orderId] ?? 0.0;
         final discountBreakdown = _discountCache[orderId] ?? {
           'discounts': <Map<String, dynamic>>[],
@@ -374,22 +357,6 @@ class _OrderPageState extends State<OrderPage> {
               final vendor = order['vendor'] ?? {};
               final author = order['author'] ?? {};
 
-              final deliveryChargePerKm =
-                  (vendor['deliveryChargePerKm'] ?? 10.0) is num
-                      ? (vendor['deliveryChargePerKm'] ?? 10.0) as num
-                      : 10.0;
-              final deliveryChargePerKmDouble = (deliveryChargePerKm is double
-                  ? deliveryChargePerKm
-                  : deliveryChargePerKm.toDouble());
-              final minimumDeliveryCharge =
-                  (vendor['minimumDeliveryCharge'] ?? 50.0) is num
-                      ? (vendor['minimumDeliveryCharge'] ?? 50.0) as num
-                      : 50.0;
-              final minimumDeliveryChargeDouble =
-                  (minimumDeliveryCharge is double
-                      ? minimumDeliveryCharge
-                      : minimumDeliveryCharge.toDouble());
-
               final List<dynamic> orderedItems = order['products'] ?? [];
               final preparationTime = order['estimatedTimeToPrepare'] ?? 'N/A';
 
@@ -401,8 +368,8 @@ class _OrderPageState extends State<OrderPage> {
               final orderId = order['id'] as String;
               final distanceToRestaurant = _distanceCache[orderId] ?? 0.0;
               final deliveryCharge =
-                  (distanceToRestaurant * deliveryChargePerKmDouble)
-                      .clamp(minimumDeliveryChargeDouble, double.infinity);
+                  double.tryParse((order['deliveryCharge'] ?? '0').toString()) ??
+                      0.0;
               final totalItemPrice = _totalItemPriceCache[orderId] ?? 0.0;
               final discountBreakdown = _discountCache[orderId] ?? {
                 'discounts': <Map<String, dynamic>>[],
@@ -933,22 +900,9 @@ class _OrderPageState extends State<OrderPage> {
       });
       _totalItemPriceCache[orderId] = totalItemPrice;
 
-      // Calculate delivery charge
-      final deliveryChargePerKm = (vendor['deliveryChargePerKm'] ?? 10.0) is num
-          ? (vendor['deliveryChargePerKm'] ?? 10.0) as num
-          : 10.0;
-      final deliveryChargePerKmDouble = (deliveryChargePerKm is double
-          ? deliveryChargePerKm
-          : deliveryChargePerKm.toDouble());
-      final minimumDeliveryCharge =
-          (vendor['minimumDeliveryCharge'] ?? 50.0) is num
-              ? (vendor['minimumDeliveryCharge'] ?? 50.0) as num
-              : 50.0;
-      final minimumDeliveryChargeDouble = (minimumDeliveryCharge is double
-          ? minimumDeliveryCharge
-          : minimumDeliveryCharge.toDouble());
-      final deliveryCharge = (distance * deliveryChargePerKmDouble)
-          .clamp(minimumDeliveryChargeDouble, double.infinity);
+      // Use stored delivery charge from order (matches Customer app)
+      final deliveryCharge =
+          double.tryParse((order['deliveryCharge'] ?? '0').toString()) ?? 0.0;
 
       // Calculate and cache discount breakdown
       final discountBreakdown =

@@ -24,6 +24,7 @@ import '../../model/getPaytmTxtToken.dart';
 import '../../services/helper.dart';
 import '../../userPrefrence.dart';
 import '../orderDetailsScreen/OrderDetailsScreen.dart';
+import '../auth/AuthScreen.dart';
 
 class WalletScreen extends StatefulWidget {
   const WalletScreen({Key? key}) : super(key: key);
@@ -103,6 +104,45 @@ class WalletScreenState extends State<WalletScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Show guest placeholder if user is not logged in
+    if (MyAppState.currentUser == null) {
+      return Scaffold(
+        appBar: AppBar(
+          backgroundColor: Color(COLOR_PRIMARY),
+          elevation: 0,
+          centerTitle: false,
+          titleSpacing: 0,
+          leading: IconButton(
+            icon: Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () => Navigator.maybePop(context),
+          ),
+          title: Text(
+            'Wallet',
+            style: TextStyle(
+              fontFamily: "Poppinsm",
+              fontSize: 18,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.account_balance_wallet_outlined, size: 80, color: Colors.grey),
+              SizedBox(height: 16),
+              Text('Login to view your wallet', style: TextStyle(fontSize: 18)),
+              SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () => push(context, AuthScreen()),
+                child: Text('Login / Register'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
     final size = MediaQuery.of(context).size;
     return Scaffold(
       key: _scaffoldKey,

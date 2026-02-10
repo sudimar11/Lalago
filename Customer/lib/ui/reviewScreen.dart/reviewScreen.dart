@@ -18,6 +18,7 @@ import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/fullScreenImageViewer/fullscreenimage.dart';
 import 'package:foodie_customer/ui/ordersScreen/OrdersScreen.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class ReviewScreen extends StatefulWidget {
   final CartProduct product;
@@ -954,13 +955,18 @@ class _ReviewScreenState extends State<ReviewScreen>
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.gallery);
-            if (image != null) {
-              // _mediaFiles.removeLast();
-              _mediaFiles.add(File(image.path));
-              // _mediaFiles.add(null);
-              setState(() {});
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.gallery);
+              if (!mounted) return;
+              if (image != null) {
+                _mediaFiles.add(File(image.path));
+                setState(() {});
+              }
+            } catch (e, s) {
+              debugPrint('ReviewScreen gallery picker: $e $s');
             }
           },
         ),
@@ -969,13 +975,24 @@ class _ReviewScreenState extends State<ReviewScreen>
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
-            XFile? image =
-                await _imagePicker.pickImage(source: ImageSource.camera);
-            if (image != null) {
-              // _mediaFiles.removeLast();
-              _mediaFiles.add(File(image.path));
-              // _mediaFiles.add(null);
-              setState(() {});
+            await Future.delayed(const Duration(milliseconds: 300));
+            if (!mounted) return;
+            var status = await Permission.camera.status;
+            if (!status.isGranted) {
+              status = await Permission.camera.request();
+            }
+            if (!status.isGranted) return;
+            if (!mounted) return;
+            try {
+              XFile? image =
+                  await _imagePicker.pickImage(source: ImageSource.camera);
+              if (!mounted) return;
+              if (image != null) {
+                _mediaFiles.add(File(image.path));
+                setState(() {});
+              }
+            } catch (e, s) {
+              debugPrint('ReviewScreen camera picker: $e $s');
             }
           },
         ),

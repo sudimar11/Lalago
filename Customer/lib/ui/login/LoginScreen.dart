@@ -31,6 +31,10 @@ import '../../resources/colors.dart';
 import '../vendorProductsScreen/widgets/ficon_button.dart';
 
 class LoginScreen extends StatefulWidget {
+  final bool returnToCart;
+  
+  const LoginScreen({Key? key, this.returnToCart = false}) : super(key: key);
+  
   @override
   State createState() {
     return _LoginScreen();
@@ -271,6 +275,20 @@ class _LoginScreen extends State<LoginScreen> {
     }
   }
 
+  /// Navigate after successful login
+  void _navigateAfterLogin(User result) {
+    if (widget.returnToCart) {
+      Navigator.pop(context, true); // Return to cart
+    } else {
+      if (MyAppState.currentUser!.shippingAddress != null &&
+          MyAppState.currentUser!.shippingAddress!.isNotEmpty) {
+        pushAndRemoveUntil(context, ContainerScreen(user: result), false);
+      } else {
+        pushAndRemoveUntil(context, LocationPermissionScreen(), false);
+      }
+    }
+  }
+
   /// login with email and password with firebase
 
   /// @param email user email
@@ -324,10 +342,9 @@ class _LoginScreen extends State<LoginScreen> {
                   MyAppState.currentUser!.shippingAddress!.first;
             }
 
-            pushAndRemoveUntil(context, ContainerScreen(user: result), false);
-          } else {
-            pushAndRemoveUntil(context, LocationPermissionScreen(), false);
           }
+          
+          _navigateAfterLogin(result);
         } else {
           showAlertDialog(
               context,
@@ -386,10 +403,9 @@ class _LoginScreen extends State<LoginScreen> {
                   MyAppState.currentUser!.shippingAddress!.first;
             }
 
-            pushAndRemoveUntil(context, ContainerScreen(user: result), false);
-          } else {
-            pushAndRemoveUntil(context, LocationPermissionScreen(), false);
           }
+          
+          _navigateAfterLogin(result);
         } else {
           showAlertDialog(
               context,
@@ -441,10 +457,9 @@ class _LoginScreen extends State<LoginScreen> {
                   MyAppState.currentUser!.shippingAddress!.first;
             }
 
-            pushAndRemoveUntil(context, ContainerScreen(user: result), false);
-          } else {
-            pushAndRemoveUntil(context, LocationPermissionScreen(), false);
           }
+          
+          _navigateAfterLogin(result);
         } else {
           showAlertDialog(
               context,
@@ -496,10 +511,9 @@ class _LoginScreen extends State<LoginScreen> {
                   MyAppState.currentUser!.shippingAddress!.first;
             }
 
-            pushAndRemoveUntil(context, ContainerScreen(user: result), false);
-          } else {
-            pushAndRemoveUntil(context, LocationPermissionScreen(), false);
           }
+          
+          _navigateAfterLogin(result);
         } else {
           showAlertDialog(
               context,

@@ -1205,13 +1205,19 @@ class FireStoreUtils {
   }
 
   Future<DeliveryChargeModel?> getDeliveryCharges() async {
+    // Prefer New_DeliveryCharge (baseDeliveryCharge + per km beyond threshold)
+    DocumentSnapshot<Map<String, dynamic>> newDoc =
+        await firestore.collection(Setting).doc('New_DeliveryCharge').get();
+    if (newDoc.data() != null) {
+      return DeliveryChargeModel.fromJson(newDoc.data()!);
+    }
+    // Fallback to legacy DeliveryCharge
     DocumentSnapshot<Map<String, dynamic>> codQuery =
         await firestore.collection(Setting).doc('DeliveryCharge').get();
     if (codQuery.data() != null) {
       return DeliveryChargeModel.fromJson(codQuery.data()!);
-    } else {
-      return null;
     }
+    return null;
   }
 
   Future<String?> getRestaurantNearBy() async {
