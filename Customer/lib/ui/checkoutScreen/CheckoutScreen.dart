@@ -9,6 +9,7 @@ import 'package:foodie_customer/model/OrderModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
+import 'package:foodie_customer/ui/auth/AuthScreen.dart';
 import 'package:foodie_customer/ui/placeOrderScreen/PlaceOrderScreen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -87,9 +88,50 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   bool? isEnableAdminCommission = false;
   bool isLoading = false; // Manage loading state
 
+  Future<void> _redirectGuestToAuth() async {
+    if (!mounted || MyAppState.currentUser != null) return;
+
+    final shouldLogin = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Login Required'),
+        content: const Text('Please login to place your order.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Login'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (shouldLogin == true) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => AuthScreen()),
+      );
+    } else {
+      Navigator.of(context).maybePop();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+
+    if (MyAppState.currentUser == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _redirectGuestToAuth();
+      });
+      return;
+    }
+
     placeAutoOrder();
     fireStoreUtils.getAdminCommission().then((value) {
       if (value != null) {
@@ -105,6 +147,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   placeAutoOrder() {
+    if (MyAppState.currentUser == null) {
+      return;
+    }
     if (widget.isPaymentDone) {
       Future.delayed(Duration(seconds: 2), () {
         placeOrder();
@@ -480,6 +525,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   Future<void> placeOrder() async {
     if (isLoading) return;
+    if (MyAppState.currentUser == null) {
+      await _redirectGuestToAuth();
+      return;
+    }
+
     setState(() {
       isLoading = true; // Show loading indicator
     });

@@ -1,7 +1,11 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'dart:async';
+
+import 'package:brgy/constants.dart';
 
 // Top-level background message handler
 @pragma('vm:entry-point')
@@ -172,9 +176,23 @@ class SMSBackgroundService {
   // Save FCM Token
   Future<void> _saveFCMToken(String token) async {
     try {
-      // Save token to local storage or database
-      // You can also send it to your backend
-      print('FCM Token saved: $token');
+      final uid = auth.FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null || uid.isEmpty) {
+        print('FCM Token not saved: no signed-in admin user');
+        return;
+      }
+
+      await FirebaseFirestore.instance.collection(USERS).doc(uid).set(
+        {
+          'fcmToken': token,
+          'role': 'admin',
+          'active': true,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      print('FCM Token saved to Firestore for admin user: $uid');
     } catch (e) {
       print('Error saving FCM token: $e');
     }

@@ -50,6 +50,7 @@ import 'package:brgy/pages/search_history_page.dart';
 import 'package:brgy/map_page.dart';
 import 'package:brgy/constants.dart';
 import 'package:brgy/services/order_sound_service.dart';
+import 'package:brgy/utils/order_ready_time_helper.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'dart:async';
@@ -959,6 +960,18 @@ class _AtAGlanceSection extends StatelessWidget {
         )
         .snapshots();
 
+    final assignmentsLogStream = FirebaseFirestore.instance
+        .collection('assignments_log')
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+        )
+        .where(
+          'createdAt',
+          isLessThanOrEqualTo: Timestamp.fromDate(endOfDay),
+        )
+        .snapshots();
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1016,6 +1029,8 @@ class _AtAGlanceSection extends StatelessWidget {
 
                 int completedToday = 0;
                 int pendingToday = 0;
+                int unassignedNearReady = 0;
+                int stuckDriverPending = 0;
                 final deliveredRiders = <String>{};
                 final ordersByHour = <int, int>{};
                 for (int i = 0; i < 24; i++) {
@@ -1024,6 +1039,76 @@ class _AtAGlanceSection extends StatelessWidget {
 
                 final Set<String> vendorsWithOrders = {};
                 double earningsToday = 0.0;
+                final atRiskItems = <_AtRiskOrderItem>[];
+
+                String normalizeOrderStatus(dynamic raw) {
+                  if (raw == null) return '—';
+                  if (raw is num) {
+                    switch (raw.toInt()) {
+                      case 0:
+                        return 'Order Placed';
+                      case 1:
+                        return 'Order Accepted';
+                      case 2:
+                        return 'In Transit';
+                      case 3:
+                        return 'Order Completed';
+                      default:
+                        return raw.toString();
+                    }
+                  }
+                  final s = raw.toString().trim();
+                  switch (s.toLowerCase()) {
+                    case 'request':
+                    case 'order placed':
+                      return 'Order Placed';
+                    case 'confirm':
+                    case 'order accepted':
+                      return 'Order Accepted';
+                    case 'driver pending':
+                      return 'Driver Pending';
+                    case 'driver assigned':
+                      return 'Driver Assigned';
+                    case 'released':
+                    case 'in transit':
+                    case 'order shipped':
+                      return 'In Transit';
+                    case 'completed':
+                    case 'order completed':
+                      return 'Order Completed';
+                    case 'driver rejected':
+                      return 'Driver Rejected';
+                    case 'order rejected':
+                      return 'Order Rejected';
+                    default:
+                      return s;
+                  }
+                }
+
+                String extractDriverId(Map<String, dynamic> data) {
+                  final raw = (data['driverID'] ??
+                          data['driverId'] ??
+                          data['driver_id'] ??
+                          '') as Object?;
+                  return raw?.toString().trim() ?? '';
+                }
+
+                DateTime? asDateTime(dynamic value) {
+                  if (value is Timestamp) return value.toDate();
+                  if (value is DateTime) return value;
+                  return null;
+                }
+
+                DateTime? computeReadyAt(Map<String, dynamic> data) {
+                  final acceptedAt = asDateTime(data['acceptedAt']);
+                  final createdAt = asDateTime(data['createdAt']);
+                  final baseTime = acceptedAt ?? createdAt;
+                  if (baseTime == null) return null;
+                  final prepMin = OrderReadyTimeHelper.parsePreparationMinutes(
+                    data['estimatedTimeToPrepare']?.toString(),
+                  );
+                  return OrderReadyTimeHelper.getReadyAt(baseTime, prepMin);
+                }
 
                 for (final doc in orders) {
                   try {
@@ -1041,6 +1126,49 @@ class _AtAGlanceSection extends StatelessWidget {
                     } else if (status != 'order rejected' &&
                         status != 'driver rejected') {
                       pendingToday++;
+                    }
+
+                    final normalizedStatus = normalizeOrderStatus(data['status']);
+                    final driverId = extractDriverId(data);
+                    final now = DateTime.now();
+
+                    if (normalizedStatus == 'Order Accepted' &&
+                        driverId.isEmpty) {
+                      final readyAt = computeReadyAt(data);
+                      if (readyAt != null) {
+                        final minutesToReady =
+                            readyAt.difference(now).inMinutes;
+                        if (minutesToReady <= 10) {
+                          unassignedNearReady++;
+                          atRiskItems.add(
+                            _AtRiskOrderItem.unassignedNearReady(
+                              orderId: doc.id,
+                              vendorName: _vendorNameFromOrder(data),
+                              readyAt: readyAt,
+                              minutesToReady: minutesToReady,
+                            ),
+                          );
+                        }
+                      }
+                    }
+
+                    if (normalizedStatus == 'Driver Pending') {
+                      final assignedAt = asDateTime(data['assignedAt']);
+                      if (assignedAt != null) {
+                        final minutesPending =
+                            now.difference(assignedAt).inMinutes;
+                        if (minutesPending >= 5) {
+                          stuckDriverPending++;
+                          atRiskItems.add(
+                            _AtRiskOrderItem.stuckDriverPending(
+                              orderId: doc.id,
+                              vendorName: _vendorNameFromOrder(data),
+                              assignedAt: assignedAt,
+                              minutesPending: minutesPending,
+                            ),
+                          );
+                        }
+                      }
                     }
 
                     final createdAt = data['createdAt'];
@@ -1082,6 +1210,11 @@ class _AtAGlanceSection extends StatelessWidget {
                         .map((h) => '${h.toString().padLeft(2, '0')}:00')
                         .join(', ');
 
+                atRiskItems.sort((a, b) => b.riskScore.compareTo(a.riskScore));
+                final topAtRisk = atRiskItems.length <= 10
+                    ? atRiskItems
+                    : atRiskItems.sublist(0, 10);
+
                 final vendorsStream = FirebaseFirestore.instance
                     .collection('vendors')
                     .orderBy('title')
@@ -1107,12 +1240,152 @@ class _AtAGlanceSection extends StatelessWidget {
                           (vendors.length - withOrders).clamp(0, vendors.length);
                     }
 
-                    return FutureBuilder<int>(
-                      future: unpublishedFoodsFuture,
-                      builder: (context, foodsSnap) {
-                        final unpublishedFoods = foodsSnap.data;
+                    DateTime? asDateTime(dynamic value) {
+                      if (value is Timestamp) return value.toDate();
+                      if (value is DateTime) return value;
+                      return null;
+                    }
 
-                        final kpiChildren = <Widget>[
+                    String formatSeconds(int seconds) {
+                      if (seconds <= 0) return '—';
+                      final minutes = seconds ~/ 60;
+                      final remSeconds = seconds % 60;
+                      if (minutes <= 0) return '${remSeconds}s';
+                      return '${minutes}m ${remSeconds.toString().padLeft(2, '0')}s';
+                    }
+
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: assignmentsLogStream,
+                      builder: (context, assignmentsSnap) {
+                        Widget avgResponseKpi() {
+                          if (assignmentsSnap.connectionState ==
+                              ConnectionState.waiting) {
+                            return const _KpiCard.loading();
+                          }
+                          if (assignmentsSnap.hasError) {
+                            return _KpiCard(
+                              icon: Icons.speed,
+                              label: 'Avg response',
+                              value: '-',
+                              helper: 'Failed to load',
+                              onTap: () => onNavigate(AssignmentsLogPage()),
+                              tone: _KpiTone.warning,
+                            );
+                          }
+
+                          final docs = assignmentsSnap.data?.docs ?? const [];
+                          int totalSeconds = 0;
+                          int responses = 0;
+
+                          for (final doc in docs) {
+                            try {
+                              final data = doc.data();
+                              if (data is! Map<String, dynamic>) continue;
+
+                              final status =
+                                  (data['status'] ?? '').toString().toLowerCase();
+                              if (status != 'accepted' && status != 'rejected') {
+                                continue;
+                              }
+
+                              final offeredAt =
+                                  asDateTime(data['offeredAt']) ??
+                                      asDateTime(data['createdAt']);
+                              final responseAt =
+                                  asDateTime(data['responseTime']) ??
+                                      asDateTime(data['acceptedAt']) ??
+                                      asDateTime(data['rejectedAt']);
+                              if (offeredAt == null || responseAt == null) continue;
+
+                              final seconds =
+                                  responseAt.difference(offeredAt).inSeconds;
+                              if (seconds <= 0) continue;
+
+                              totalSeconds += seconds;
+                              responses++;
+                            } catch (_) {
+                              continue;
+                            }
+                          }
+
+                          final avgSeconds = responses == 0
+                              ? null
+                              : (totalSeconds / responses).round();
+
+                          return _KpiCard(
+                            icon: Icons.speed,
+                            label: 'Avg response',
+                            value: avgSeconds == null ? '—' : formatSeconds(avgSeconds),
+                            helper: responses == 0 ? 'No responses' : 'Today • $responses',
+                            onTap: () => onNavigate(AssignmentsLogPage()),
+                            tone: avgSeconds == null
+                                ? _KpiTone.neutral
+                                : (avgSeconds >= 180 ? _KpiTone.warning : _KpiTone.neutral),
+                          );
+                        }
+
+                        Widget rejectionRateKpi() {
+                          if (assignmentsSnap.connectionState ==
+                              ConnectionState.waiting) {
+                            return const _KpiCard.loading();
+                          }
+                          if (assignmentsSnap.hasError) {
+                            return _KpiCard(
+                              icon: Icons.thumb_down_alt_outlined,
+                              label: 'Rejection rate',
+                              value: '-',
+                              helper: 'Failed to load',
+                              onTap: () => onNavigate(AssignmentsLogPage()),
+                              tone: _KpiTone.warning,
+                            );
+                          }
+
+                          final docs = assignmentsSnap.data?.docs ?? const [];
+                          int accepted = 0;
+                          int rejected = 0;
+
+                          for (final doc in docs) {
+                            try {
+                              final data = doc.data();
+                              if (data is! Map<String, dynamic>) continue;
+                              final status =
+                                  (data['status'] ?? '').toString().toLowerCase();
+                              if (status == 'accepted') accepted++;
+                              if (status == 'rejected') rejected++;
+                            } catch (_) {
+                              continue;
+                            }
+                          }
+
+                          final total = accepted + rejected;
+                          final rate = total == 0 ? null : rejected / total;
+                          final percent =
+                              rate == null ? '—' : '${(rate * 100).round()}%';
+
+                          final tone = rate == null
+                              ? _KpiTone.neutral
+                              : (rate >= 0.5
+                                  ? _KpiTone.danger
+                                  : (rate >= 0.2
+                                      ? _KpiTone.warning
+                                      : _KpiTone.neutral));
+
+                          return _KpiCard(
+                            icon: Icons.thumb_down_alt_outlined,
+                            label: 'Rejection rate',
+                            value: percent,
+                            helper: total == 0 ? 'No responses' : 'Today • $total',
+                            onTap: () => onNavigate(AssignmentsLogPage()),
+                            tone: tone,
+                          );
+                        }
+
+                        return FutureBuilder<int>(
+                          future: unpublishedFoodsFuture,
+                          builder: (context, foodsSnap) {
+                            final unpublishedFoods = foodsSnap.data;
+
+                            final kpiChildren = <Widget>[
                           _KpiCard(
                             icon: Icons.receipt_long,
                             label: 'Orders today',
@@ -1130,6 +1403,28 @@ class _AtAGlanceSection extends StatelessWidget {
                                 ? _KpiTone.warning
                                 : _KpiTone.neutral,
                             onTap: () => onNavigate(const OrdersTodayPage()),
+                          ),
+                          _KpiCard(
+                            icon: Icons.schedule,
+                            label: 'Near-ready unassigned',
+                            value: unassignedNearReady.toString(),
+                            helper: 'Ready ≤10m • no rider',
+                            tone: unassignedNearReady > 0
+                                ? _KpiTone.danger
+                                : _KpiTone.neutral,
+                            onTap: () => onNavigate(
+                              const OrderDispatcherPage(initialTabIndex: 1),
+                            ),
+                          ),
+                          _KpiCard(
+                            icon: Icons.hourglass_bottom,
+                            label: 'Stuck pending',
+                            value: stuckDriverPending.toString(),
+                            helper: 'Driver pending ≥5m',
+                            tone: stuckDriverPending > 0
+                                ? _KpiTone.warning
+                                : _KpiTone.neutral,
+                            onTap: () => onNavigate(AssignmentsLogPage()),
                           ),
                           _KpiCard(
                             icon: Icons.check_circle,
@@ -1200,6 +1495,8 @@ class _AtAGlanceSection extends StatelessWidget {
                             onTap: () =>
                                 onNavigate(const RestaurantOrdersEarningPage()),
                           ),
+                          avgResponseKpi(),
+                          rejectionRateKpi(),
                           _AvgDeliveryKpi(
                             future: avgDeliveryFuture,
                             onNavigate: onNavigate,
@@ -1220,6 +1517,11 @@ class _AtAGlanceSection extends StatelessWidget {
                               onNavigate: onNavigate,
                             ),
                             const SizedBox(height: 12),
+                            _AtRiskOrdersCard(
+                              items: topAtRisk,
+                              onNavigate: onNavigate,
+                            ),
+                            const SizedBox(height: 12),
                             _OrdersSparklineCard(
                               countsByHour: List<int>.generate(
                                 24,
@@ -1234,6 +1536,8 @@ class _AtAGlanceSection extends StatelessWidget {
                             const SizedBox(height: 12),
                             _DailyFinanceShortcuts(onNavigate: onNavigate),
                           ],
+                        );
+                          },
                         );
                       },
                     );
@@ -1297,6 +1601,204 @@ int _itemCountFromOrderData(Map<String, dynamic> data) {
     }
   }
   return count;
+}
+
+enum _AtRiskOrderType { unassignedNearReady, stuckDriverPending }
+
+class _AtRiskOrderItem {
+  final _AtRiskOrderType type;
+  final String orderId;
+  final String vendorName;
+
+  final DateTime? readyAt;
+  final int? minutesToReady;
+
+  final DateTime? assignedAt;
+  final int? minutesPending;
+
+  const _AtRiskOrderItem._({
+    required this.type,
+    required this.orderId,
+    required this.vendorName,
+    required this.readyAt,
+    required this.minutesToReady,
+    required this.assignedAt,
+    required this.minutesPending,
+  });
+
+  factory _AtRiskOrderItem.unassignedNearReady({
+    required String orderId,
+    required String vendorName,
+    required DateTime readyAt,
+    required int minutesToReady,
+  }) {
+    return _AtRiskOrderItem._(
+      type: _AtRiskOrderType.unassignedNearReady,
+      orderId: orderId,
+      vendorName: vendorName,
+      readyAt: readyAt,
+      minutesToReady: minutesToReady,
+      assignedAt: null,
+      minutesPending: null,
+    );
+  }
+
+  factory _AtRiskOrderItem.stuckDriverPending({
+    required String orderId,
+    required String vendorName,
+    required DateTime assignedAt,
+    required int minutesPending,
+  }) {
+    return _AtRiskOrderItem._(
+      type: _AtRiskOrderType.stuckDriverPending,
+      orderId: orderId,
+      vendorName: vendorName,
+      readyAt: null,
+      minutesToReady: null,
+      assignedAt: assignedAt,
+      minutesPending: minutesPending,
+    );
+  }
+
+  String get shortOrderId =>
+      orderId.length <= 8 ? orderId : orderId.substring(0, 8);
+
+  String get displayVendorName =>
+      vendorName.trim().isEmpty ? 'Unknown restaurant' : vendorName.trim();
+
+  String get statusText => switch (type) {
+        _AtRiskOrderType.unassignedNearReady => 'Unassigned',
+        _AtRiskOrderType.stuckDriverPending => 'Driver Pending',
+      };
+
+  String get timingText {
+    switch (type) {
+      case _AtRiskOrderType.unassignedNearReady:
+        final m = minutesToReady ?? 0;
+        if (m < 0) return 'Overdue ${-m}m';
+        return 'Ready in ${m}m';
+      case _AtRiskOrderType.stuckDriverPending:
+        final m = minutesPending ?? 0;
+        return 'Pending ${m}m';
+    }
+  }
+
+  int get riskScore {
+    switch (type) {
+      case _AtRiskOrderType.unassignedNearReady:
+        final m = minutesToReady ?? 999;
+        if (m <= 0) return 1000 + (-m).clamp(0, 120);
+        return 900 + (10 - m).clamp(0, 10);
+      case _AtRiskOrderType.stuckDriverPending:
+        final m = minutesPending ?? 0;
+        return 700 + m.clamp(0, 120);
+    }
+  }
+}
+
+String _vendorNameFromOrder(Map<String, dynamic> data) {
+  final vendor = data['vendor'];
+  if (vendor is Map<String, dynamic>) {
+    final title = vendor['title'] ?? vendor['name'];
+    final s = title?.toString().trim() ?? '';
+    if (s.isNotEmpty) return s;
+  }
+  return '';
+}
+
+class _AtRiskOrdersCard extends StatelessWidget {
+  final List<_AtRiskOrderItem> items;
+  final void Function(Widget page) onNavigate;
+
+  const _AtRiskOrdersCard({
+    required this.items,
+    required this.onNavigate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.warning_amber_outlined),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'At-risk orders',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${items.length}',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (items.isEmpty)
+              Text(
+                'No at-risk orders right now.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                ),
+              )
+            else
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(
+                      child: Text(
+                        item.timingText.replaceAll(RegExp(r'[^0-9]'), ''),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    title: Text(
+                      item.displayVendorName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: Text(
+                      'Order #${item.shortOrderId} • ${item.statusText} • ${item.timingText}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      switch (item.type) {
+                        case _AtRiskOrderType.unassignedNearReady:
+                          onNavigate(const OrderDispatcherPage(initialTabIndex: 1));
+                          return;
+                        case _AtRiskOrderType.stuckDriverPending:
+                          onNavigate(AssignmentsLogPage());
+                          return;
+                      }
+                    },
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 enum _KpiTone { neutral, brand, success, warning, danger }

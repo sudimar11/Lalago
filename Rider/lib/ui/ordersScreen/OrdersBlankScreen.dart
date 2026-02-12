@@ -8,6 +8,7 @@ import 'package:foodie_driver/ui/home/orderdetails.dart';
 import 'package:foodie_driver/main.dart';
 import 'package:foodie_driver/ui/profile/ProfileScreen.dart';
 import 'package:foodie_driver/ui/group_chat/GroupChatScreen.dart';
+import 'package:foodie_driver/ui/chat_screen/admin_driver_inbox_screen.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/services/group_chat_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
@@ -961,6 +962,70 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
             ],
           ),
         ),
+        actions: [
+          StreamBuilder<QuerySnapshot>(
+            stream: firestore
+                .collection('chat_admin_driver')
+                .where('driverId', isEqualTo: currentUserId)
+                .snapshots(),
+            builder: (context, snapshot) {
+              int totalUnread = 0;
+              for (final doc in snapshot.data?.docs ?? const []) {
+                final data = doc.data() as Map<String, dynamic>? ?? const {};
+                final raw = data['unreadForDriver'];
+                final count = raw is num
+                    ? raw.toInt()
+                    : int.tryParse(raw?.toString() ?? '') ?? 0;
+                totalUnread += count;
+              }
+
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    IconButton(
+                      tooltip: 'Admin Messages',
+                      icon: const Icon(Icons.support_agent),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const AdminDriverInboxScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    if (totalUnread > 0)
+                      Positioned(
+                        right: 4,
+                        top: 4,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Text(
+                            totalUnread > 99 ? '99+' : '$totalUnread',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
         centerTitle: true,
       ),
       backgroundColor:

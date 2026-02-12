@@ -10,6 +10,7 @@ import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
+import 'package:foodie_customer/ui/auth/AuthScreen.dart';
 import 'package:foodie_customer/ui/checkoutScreen/CheckoutScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -99,6 +100,39 @@ class PaymentScreenState extends State<PaymentScreen> {
   String? adminCommissionValue = "", addminCommissionType = "";
   bool? isEnableAdminCommission = false;
 
+  Future<void> _redirectGuestToAuth() async {
+    if (!mounted || MyAppState.currentUser != null) return;
+
+    final shouldLogin = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Login Required'),
+        content: const Text('Please login to proceed to checkout.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Login'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (shouldLogin == true) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => AuthScreen()),
+      );
+    } else {
+      Navigator.of(context).maybePop();
+    }
+  }
+
   getPaymentSettingData() async {
     userQuery = fireStore
         .collection(USERS)
@@ -123,9 +157,19 @@ class PaymentScreenState extends State<PaymentScreen> {
 
   @override
   void initState() {
+    super.initState();
+
+    futurecod = fireStoreUtils.getCod();
+
+    if (MyAppState.currentUser == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _redirectGuestToAuth();
+      });
+      return;
+    }
+
     getPaymentSettingData();
     FireStoreUtils.createOrder();
-    futurecod = fireStoreUtils.getCod();
     fireStoreUtils.getAdminCommission().then((value) {
       if (value != null) {
         setState(() {
@@ -137,8 +181,6 @@ class PaymentScreenState extends State<PaymentScreen> {
         });
       }
     });
-
-    super.initState();
   }
 
   @override
@@ -314,6 +356,11 @@ class PaymentScreenState extends State<PaymentScreen> {
               ),
             ),
             onPressed: () async {
+              if (MyAppState.currentUser == null) {
+                await _redirectGuestToAuth();
+                return;
+              }
+
               await FireStoreUtils.createPaymentId();
 
               if (wallet) {

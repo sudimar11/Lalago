@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:foodie_driver/constants.dart';
+import 'package:foodie_driver/model/notification_model.dart';
 import 'package:foodie_driver/services/helper.dart';
+import 'package:foodie_driver/services/notification_service.dart';
 import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/utils/geo_utils.dart';
 import 'package:foodie_driver/ui/home/customermap.dart';
@@ -12,9 +14,11 @@ import 'package:foodie_driver/widgets/replacement_search_dialog.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:foodie_driver/main.dart';
 import 'package:foodie_driver/ui/chat_screen/chat_screen.dart';
+import 'package:foodie_driver/ui/chat_screen/admin_driver_chat_screen.dart';
 import 'package:foodie_driver/services/order_chat_service.dart';
 import 'package:foodie_driver/services/chat_read_service.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
+import 'package:foodie_driver/utils/order_ready_time_helper.dart';
 import 'package:intl/intl.dart';
 
 /// Parsed data for a single order card (used by ListView.builder).
@@ -40,6 +44,7 @@ class _OrderCardData {
     required this.notes,
     required this.estimatedTimeToPrepare,
     this.orderTime,
+    this.acceptedAt,
   });
 
   final int index;
@@ -62,6 +67,7 @@ class _OrderCardData {
   final String notes;
   final String estimatedTimeToPrepare;
   final DateTime? orderTime;
+  final DateTime? acceptedAt;
 }
 
 /// A reusable widget that displays a refreshable list of orders
@@ -90,6 +96,14 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
   Timer? _timer;
   final Map<String, double> _distanceCache = <String, double>{};
   final Map<String, Future<double>> _distanceFutures = <String, Future<double>>{};
+  final Map<String, double> _riderToVendorDistanceCache = <String, double>{};
+  final Map<String, Future<double>> _riderToVendorDistanceFutures =
+      <String, Future<double>>{};
+
+  final NotificationService _notificationService = NotificationService();
+  final Map<String, Timer> _leaveByTimers = <String, Timer>{};
+  final Map<String, DateTime> _scheduledLeaveByByOrderId = <String, DateTime>{};
+  final Map<String, DateTime> _notifiedLeaveByByOrderId = <String, DateTime>{};
 
   @override
   void initState() {
@@ -98,6 +112,8 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
     });
+    _startMonitoringOrders();
+    _syncLeaveByReminders();
     _loadPerformanceCommission();
     _loadAdminCommission();
   }
@@ -107,6 +123,7 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     super.didUpdateWidget(oldWidget);
     // Start monitoring new orders when list updates
     _startMonitoringOrders();
+    _syncLeaveByReminders();
   }
 
   void _startMonitoringOrders() {
@@ -117,9 +134,159 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     }
   }
 
+  void _syncLeaveByReminders() {
+    final currentOrderIds = widget.docs.map((d) => d.id).toSet();
+
+    // Cancel reminders for orders no longer shown.
+    final toRemove = _leaveByTimers.keys
+        .where((orderId) => !currentOrderIds.contains(orderId))
+        .toList();
+    for (final orderId in toRemove) {
+      _cancelLeaveByReminder(orderId);
+      _scheduledLeaveByByOrderId.remove(orderId);
+      _notifiedLeaveByByOrderId.remove(orderId);
+    }
+
+    // Schedule or update reminders for visible orders.
+    for (final doc in widget.docs) {
+      _scheduleLeaveByReminderForDoc(doc);
+    }
+  }
+
+  void _cancelLeaveByReminder(String orderId) {
+    _leaveByTimers.remove(orderId)?.cancel();
+  }
+
+  DateTime? _readTimestampAsDateTime(dynamic v) {
+    if (v is Timestamp) return v.toDate();
+    return null;
+  }
+
+  DateTime? _readOrderBaseTime(Map<String, dynamic> data) {
+    final acceptedAt = _readTimestampAsDateTime(data['acceptedAt']);
+    if (acceptedAt != null) return acceptedAt;
+    final createdAt = _readTimestampAsDateTime(data['createdAt']);
+    if (createdAt != null) return createdAt;
+    final timestamp = _readTimestampAsDateTime(data['timestamp']);
+    return timestamp;
+  }
+
+  Future<void> _scheduleLeaveByReminderForDoc(QueryDocumentSnapshot doc) async {
+    final data = doc.data() as Map<String, dynamic>;
+    final status = (data['status'] ?? '').toString();
+
+    // Only relevant while the rider is waiting for the order to become ready.
+    const targetStatuses = <String>{
+      'Driver Pending',
+      'Driver Accepted',
+    };
+    if (!targetStatuses.contains(status)) {
+      _cancelLeaveByReminder(doc.id);
+      _scheduledLeaveByByOrderId.remove(doc.id);
+      return;
+    }
+
+    final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
+    final vendorTitle = (vendor['title'] ?? 'Restaurant').toString();
+    final vendorLatRaw = vendor['latitude'];
+    final vendorLngRaw = vendor['longitude'];
+    final vendorLat = vendorLatRaw is num ? vendorLatRaw.toDouble() : 0.0;
+    final vendorLng = vendorLngRaw is num ? vendorLngRaw.toDouble() : 0.0;
+    if (vendorLat == 0.0 && vendorLng == 0.0) return;
+
+    final baseTime = _readOrderBaseTime(data);
+    if (baseTime == null) return;
+
+    final prepMinutes = OrderReadyTimeHelper.parsePreparationMinutes(
+      data['estimatedTimeToPrepare']?.toString(),
+    );
+    final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+
+    double distanceKm = 0.0;
+    try {
+      distanceKm = await _getRiderToVendorDistance(
+        doc.id,
+        vendorLat,
+        vendorLng,
+      );
+    } catch (_) {
+      // If we can't calculate distance, we can't compute leave-by reliably.
+      return;
+    }
+    final leaveBy = OrderReadyTimeHelper.getLeaveBy(readyAt, distanceKm);
+
+    // Avoid rescheduling for tiny changes (distance jitter).
+    final previouslyScheduled = _scheduledLeaveByByOrderId[doc.id];
+    if (previouslyScheduled != null) {
+      final drift = previouslyScheduled.difference(leaveBy).abs();
+      if (drift < const Duration(minutes: 1)) {
+        return;
+      }
+    }
+
+    _cancelLeaveByReminder(doc.id);
+    _scheduledLeaveByByOrderId[doc.id] = leaveBy;
+
+    final now = DateTime.now();
+    if (!leaveBy.isAfter(now.add(const Duration(seconds: 10)))) {
+      // It's already time (or almost time) to leave.
+      final lastNotified = _notifiedLeaveByByOrderId[doc.id];
+      if (lastNotified == null ||
+          lastNotified.difference(leaveBy).abs() >= const Duration(minutes: 1)) {
+        _notifiedLeaveByByOrderId[doc.id] = leaveBy;
+        await _notificationService.showNotification(
+          NotificationData(
+            type: NotificationType.reminder,
+            title: 'Leave now for pickup',
+            body: '$vendorTitle • Order is almost ready. Leave now.',
+            priority: NotificationPriority.high,
+            payload: {
+              'type': 'leave_by',
+              'orderId': doc.id,
+            },
+          ),
+        );
+      }
+      return;
+    }
+
+    final delay = leaveBy.difference(now);
+    _leaveByTimers[doc.id] = Timer(delay, () async {
+      try {
+        final latest = await FirebaseFirestore.instance
+            .collection('restaurant_orders')
+            .doc(doc.id)
+            .get();
+        final latestStatus =
+            (latest.data()?['status'] ?? '').toString();
+        if (!targetStatuses.contains(latestStatus)) return;
+
+        _notifiedLeaveByByOrderId[doc.id] = leaveBy;
+        await _notificationService.showNotification(
+          NotificationData(
+            type: NotificationType.reminder,
+            title: 'Leave now for pickup',
+            body: '$vendorTitle • Leave now to arrive on time.',
+            priority: NotificationPriority.high,
+            payload: {
+              'type': 'leave_by',
+              'orderId': doc.id,
+            },
+          ),
+        );
+      } catch (_) {
+        // Ignore notification failures.
+      }
+    });
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
+    for (final timer in _leaveByTimers.values) {
+      timer.cancel();
+    }
+    _leaveByTimers.clear();
     for (var doc in widget.docs) {
       OrderChatService.stopListeningToOrderStatus(doc.id);
     }
@@ -696,6 +863,10 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
         : data['timestamp'] != null
             ? (data['timestamp'] as Timestamp).toDate()
             : null;
+    final DateTime? acceptedAt = data['acceptedAt'] != null &&
+            data['acceptedAt'] is Timestamp
+        ? (data['acceptedAt'] as Timestamp).toDate()
+        : null;
     return _OrderCardData(
       index: index,
       doc: doc,
@@ -717,12 +888,14 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
       notes: notes,
       estimatedTimeToPrepare: estimatedTimeToPrepare,
       orderTime: orderTime,
+      acceptedAt: acceptedAt,
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final currentTime = _now ?? DateTime.now();
+    final docs = _sortDocsByLeaveByPriority(widget.docs, currentTime);
     return RefreshIndicator(
       onRefresh: () async {
         widget.onRefresh();
@@ -730,9 +903,9 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
       },
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: widget.docs.length,
+        itemCount: docs.length,
         itemBuilder: (context, index) {
-          final doc = widget.docs[index];
+          final doc = docs[index];
           final parsed = _parseOrderDoc(index, doc);
           return _buildOrderCard(
             context,
@@ -746,6 +919,209 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
         },
       ),
     );
+  }
+
+  List<QueryDocumentSnapshot> _sortDocsByLeaveByPriority(
+    List<QueryDocumentSnapshot> docs,
+    DateTime now,
+  ) {
+    final indexed = docs.asMap().entries.toList();
+
+    int groupFor(String status, bool leaveNow) {
+      if (status == 'Order Shipped') return 0;
+      if (leaveNow) return 1;
+      if (status == 'Driver Pending' || status == 'Driver Accepted') return 2;
+      return 3;
+    }
+
+    DateTime? computeReadyAt(Map<String, dynamic> data) {
+      final baseTime = _readOrderBaseTime(data);
+      if (baseTime == null) return null;
+      final prepMinutes = OrderReadyTimeHelper.parsePreparationMinutes(
+        data['estimatedTimeToPrepare']?.toString(),
+      );
+      return OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    }
+
+    DateTime? computeLeaveBy(String orderId, DateTime readyAt) {
+      final distanceKm = _riderToVendorDistanceCache[orderId];
+      if (distanceKm == null) return null;
+      return OrderReadyTimeHelper.getLeaveBy(readyAt, distanceKm);
+    }
+
+    indexed.sort((a, b) {
+      final da = a.value.data() as Map<String, dynamic>;
+      final db = b.value.data() as Map<String, dynamic>;
+      final sa = (da['status'] ?? '').toString();
+      final sb = (db['status'] ?? '').toString();
+
+      final readyAtA = computeReadyAt(da);
+      final readyAtB = computeReadyAt(db);
+
+      final leaveByA =
+          readyAtA == null ? null : computeLeaveBy(a.value.id, readyAtA);
+      final leaveByB =
+          readyAtB == null ? null : computeLeaveBy(b.value.id, readyAtB);
+
+      final leaveNowA = leaveByA != null &&
+          (now.isAfter(leaveByA) || now.isAtSameMomentAs(leaveByA));
+      final leaveNowB = leaveByB != null &&
+          (now.isAfter(leaveByB) || now.isAtSameMomentAs(leaveByB));
+
+      final ga = groupFor(sa, leaveNowA);
+      final gb = groupFor(sb, leaveNowB);
+      if (ga != gb) return ga.compareTo(gb);
+
+      // Within the "active" group, sort by earliest leave-by (fallback to ready-at).
+      final ta = (leaveByA ?? readyAtA)?.millisecondsSinceEpoch;
+      final tb = (leaveByB ?? readyAtB)?.millisecondsSinceEpoch;
+      if (ta != null && tb != null && ta != tb) return ta.compareTo(tb);
+
+      // Stable fallback.
+      return a.key.compareTo(b.key);
+    });
+
+    return indexed.map((e) => e.value).toList();
+  }
+
+  Widget _buildWhenToLeaveChip({
+    required String status,
+    required DateTime? acceptedAt,
+    required DateTime? orderTime,
+    required String estimatedTimeToPrepare,
+    required String docId,
+    required double vendorLatitude,
+    required double vendorLongitude,
+    required DateTime currentTime,
+  }) {
+    if (status == 'Order Shipped') {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.green.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.green.shade300),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Ready for pickup • Leave now',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.green.shade800,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final baseTime = acceptedAt ?? orderTime;
+    if (baseTime == null) return const SizedBox.shrink();
+
+    final prepMinutes =
+        OrderReadyTimeHelper.parsePreparationMinutes(estimatedTimeToPrepare);
+    final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    final timeFormat = DateFormat.jm();
+
+    return FutureBuilder<double>(
+      future: _getRiderToVendorDistance(docId, vendorLatitude, vendorLongitude),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting ||
+            !snap.hasData) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue.shade200),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.schedule, color: Colors.blue.shade700, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Ready at ~${timeFormat.format(readyAt)} • Calculating…',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blue.shade800,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+        final distanceKm = snap.data ?? 0.0;
+        final leaveBy =
+            OrderReadyTimeHelper.getLeaveBy(readyAt, distanceKm);
+        final now = currentTime;
+        final leaveNow = now.isAfter(leaveBy) || now.isAtSameMomentAs(leaveBy);
+
+        final String label = leaveNow
+            ? 'Ready ~${timeFormat.format(readyAt)} • Leave now'
+            : 'Ready ~${timeFormat.format(readyAt)} • Leave by ${timeFormat.format(leaveBy)}';
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: leaveNow ? Colors.orange.shade50 : Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: leaveNow ? Colors.orange.shade300 : Colors.blue.shade200,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                leaveNow ? Icons.directions_run : Icons.schedule,
+                color: leaveNow ? Colors.orange.shade700 : Colors.blue.shade700,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: leaveNow
+                        ? Colors.orange.shade800
+                        : Colors.blue.shade800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<double> _getRiderToVendorDistance(
+    String docId,
+    double vendorLat,
+    double vendorLng,
+  ) {
+    _riderToVendorDistanceFutures[docId] ??= GeoUtils.calculateDistance(
+      vendorLat,
+      vendorLng,
+      null,
+      null,
+    ).then((v) {
+      if (mounted) setState(() => _riderToVendorDistanceCache[docId] = v);
+      return v;
+    });
+    return _riderToVendorDistanceFutures[docId]!;
   }
 
   Widget _buildDistanceOverlay(
@@ -1010,6 +1386,22 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                       ),
                     ],
                   ),
+                // When to leave / Ready for pickup (Driver Pending, Driver Accepted, Order Shipped)
+                if (status == 'Driver Pending' ||
+                    status == 'Driver Accepted' ||
+                    status == 'Order Shipped') ...[
+                  const SizedBox(height: 12),
+                  _buildWhenToLeaveChip(
+                    status: status,
+                    acceptedAt: parsed.acceptedAt,
+                    orderTime: orderTime,
+                    estimatedTimeToPrepare: estimatedTimeToPrepare,
+                    docId: doc.id,
+                    vendorLatitude: vendorLatitude,
+                    vendorLongitude: vendorLongitude,
+                    currentTime: currentTime,
+                  ),
+                ],
                 const SizedBox(height: 8),
                 // Map placeholder with Distance - avoids multiple SurfaceViews (BLASTBufferQueue errors)
                 if (status == 'Order Shipped'
@@ -1244,6 +1636,79 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                                   onPressed: () =>
                                       _openChat(doc.id, author),
                                   icon: const Icon(Icons.chat, size: 20),
+                                  color: Colors.white,
+                                  padding: const EdgeInsets.all(8),
+                                  constraints: const BoxConstraints(),
+                                ),
+                              ),
+                              if (unreadCount > 0)
+                                Positioned(
+                                  right: -2,
+                                  top: -2,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: const BoxDecoration(
+                                      color: Colors.red,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    constraints: const BoxConstraints(
+                                      minWidth: 16,
+                                      minHeight: 16,
+                                    ),
+                                    child: Text(
+                                      unreadCount > 99
+                                          ? '99+'
+                                          : '$unreadCount',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      StreamBuilder<DocumentSnapshot>(
+                        stream: FirebaseFirestore.instance
+                            .collection('chat_admin_driver')
+                            .doc(doc.id)
+                            .snapshots(),
+                        builder: (context, snapshot) {
+                          final raw = snapshot.data?.data()
+                                  as Map<String, dynamic>? ??
+                              const {};
+                          final unread = raw['unreadForDriver'];
+                          final unreadCount = unread is num
+                              ? unread.toInt()
+                              : int.tryParse(unread?.toString() ?? '') ?? 0;
+
+                          return Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Container(
+                                decoration: const BoxDecoration(
+                                  color: Colors.blueGrey,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: IconButton(
+                                  onPressed: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => AdminDriverChatScreen(
+                                          orderId: doc.id,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.support_agent,
+                                    size: 20,
+                                  ),
                                   color: Colors.white,
                                   padding: const EdgeInsets.all(8),
                                   constraints: const BoxConstraints(),

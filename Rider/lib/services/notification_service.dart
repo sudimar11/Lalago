@@ -309,7 +309,9 @@ class NotificationService {
   static bool _isChatMessage(Map<String, dynamic> data) {
     final type = data['type']?.toString() ?? '';
     final messageType = data['messageType']?.toString() ?? '';
-    return type == 'chat_message' || messageType == 'chat';
+    return type == 'chat_message' ||
+        type == 'admin_driver_chat' ||
+        messageType == 'chat';
   }
 
   Future<void> setupInteractedMessage() async {

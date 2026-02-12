@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:brgy/driver_location_page.dart';
+import 'package:brgy/pages/driver_information_page.dart';
 import 'package:brgy/services/driver_service.dart';
 import 'package:brgy/models/driver.dart';
 
@@ -80,6 +81,16 @@ class _DriverListDialogState extends State<DriverListDialog> {
                             final Driver d = toShow[index];
                             final bool disabled = _busy.contains(d.id);
                             return ListTile(
+                              onTap: () {
+                                Navigator.of(context).pop();
+                                Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => DriverInformationPage(
+                                      driverId: d.id,
+                                    ),
+                                  ),
+                                );
+                              },
                               title: Text(
                                 d.name.isEmpty ? 'Unknown Driver' : d.name,
                                 style: TextStyle(fontWeight: FontWeight.bold),

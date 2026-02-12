@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'services/order_follow_up_service.dart';
+
 String _formatDurationShort(Duration d) {
   if (d.inHours > 0) return '${d.inHours}h ${d.inMinutes % 60}m';
   return '${d.inMinutes} mins';
@@ -400,71 +402,107 @@ class OrdersTodayPage extends StatelessWidget {
                               ),
                               trailing: SizedBox(
                                 height: kMinInteractiveDimension,
-                                child: FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  alignment: Alignment.centerRight,
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (driverID != null &&
+                                        driverID.isNotEmpty)
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.chat_bubble_outline,
+                                          size: 22,
                                         ),
-                                        decoration: BoxDecoration(
-                                          color: _getStatusColor(status)
-                                              .withOpacity(0.1),
-                                          borderRadius:
-                                              BorderRadius.circular(8),
-                                        ),
-                                        child: Text(
-                                          status,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          softWrap: false,
-                                          style: TextStyle(
-                                            color: _getStatusColor(status),
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 11,
-                                          ),
-                                        ),
+                                        tooltip: 'Follow up to rider',
+                                        onPressed: () {
+                                          _showFollowUpDialog(
+                                            context,
+                                            orderId: doc.id,
+                                            driverId: driverID!,
+                                            restaurantName: restaurantName,
+                                          );
+                                        },
                                       ),
-                                      if (hasCompletedTime && duration != null)
-                                        Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 4,
-                                          ),
-                                          child: Text(
-                                            _formatDurationCompact(duration),
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.green[700],
+                                    if (driverID != null &&
+                                        driverID.isNotEmpty)
+                                      const SizedBox(width: 4),
+                                    FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      alignment: Alignment.centerRight,
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        children: [
+                                          Container(
+                                            padding:
+                                                const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 4,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: _getStatusColor(status)
+                                                  .withOpacity(0.1),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: Text(
+                                              status,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              softWrap: false,
+                                              style: TextStyle(
+                                                color:
+                                                    _getStatusColor(status),
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 11,
+                                              ),
                                             ),
                                           ),
-                                        )
-                                      else if (isActive)
-                                        Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 4,
+                                          if (hasCompletedTime &&
+                                              duration != null)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.only(
+                                                top: 4,
+                                              ),
+                                              child: Text(
+                                                _formatDurationCompact(
+                                                    duration),
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight:
+                                                      FontWeight.bold,
+                                                  color:
+                                                      Colors.green[700],
+                                                ),
+                                              ),
+                                            )
+                                          else if (isActive)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.only(
+                                                top: 4,
+                                              ),
+                                              child: _TrailingElapsedText(
+                                                createdAt:
+                                                    createdAt.toDate(),
+                                              ),
+                                            ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '₱${total.toStringAsFixed(2)}',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
+                                              color: Colors.orange,
+                                            ),
                                           ),
-                                          child: _TrailingElapsedText(
-                                            createdAt: createdAt.toDate(),
-                                          ),
-                                        ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        '₱${total.toStringAsFixed(2)}',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 16,
-                                          color: Colors.orange,
-                                        ),
+                                        ],
                                       ),
-                                    ],
-                                  ),
+                                    ),
+                                  ],
                                 ),
                               ),
                               children: [
@@ -723,6 +761,117 @@ class OrdersTodayPage extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+void _showFollowUpDialog(
+  BuildContext context, {
+  required String orderId,
+  required String driverId,
+  String? restaurantName,
+}) {
+  showDialog<void>(
+    context: context,
+    builder: (ctx) => _FollowUpDialog(
+      parentContext: context,
+      orderId: orderId,
+      driverId: driverId,
+      restaurantName: restaurantName,
+    ),
+  );
+}
+
+class _FollowUpDialog extends StatefulWidget {
+  final BuildContext parentContext;
+  final String orderId;
+  final String driverId;
+  final String? restaurantName;
+
+  const _FollowUpDialog({
+    required this.parentContext,
+    required this.orderId,
+    required this.driverId,
+    this.restaurantName,
+  });
+
+  @override
+  State<_FollowUpDialog> createState() => _FollowUpDialogState();
+}
+
+class _FollowUpDialogState extends State<_FollowUpDialog> {
+  final _controller = TextEditingController();
+  bool _isSending = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(widget.parentContext).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a message'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    if (_isSending) return;
+    setState(() => _isSending = true);
+
+    final ok = await OrderFollowUpService.sendFollowUpToRider(
+      orderId: widget.orderId,
+      driverId: widget.driverId,
+      message: text,
+    );
+
+    if (!mounted) return;
+    Navigator.of(context).pop();
+
+    ScaffoldMessenger.of(widget.parentContext).showSnackBar(
+      SnackBar(
+        content: Text(ok ? 'Message sent to rider' : 'Failed to send'),
+        backgroundColor: ok ? Colors.green : Colors.red,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final suffix = (widget.restaurantName == null ||
+            widget.restaurantName!.trim().isEmpty)
+        ? ''
+        : ' • ${widget.restaurantName!.trim()}';
+
+    return AlertDialog(
+      title: Text('Follow-up to rider$suffix'),
+      content: TextField(
+        controller: _controller,
+        maxLines: 4,
+        textCapitalization: TextCapitalization.sentences,
+        enabled: !_isSending,
+        decoration: const InputDecoration(
+          hintText: 'Message...',
+          border: OutlineInputBorder(),
+        ),
+        onSubmitted: (_) => _send(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSending ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: _isSending ? null : _send,
+          child: Text(_isSending ? 'Sending...' : 'Send'),
+        ),
+      ],
     );
   }
 }

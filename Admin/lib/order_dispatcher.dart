@@ -17,7 +17,9 @@ import 'package:brgy/widgets/orders/order_preparation_dialog.dart';
 import 'package:brgy/widgets/orders/order_rejection_dialog.dart';
 import 'package:brgy/widgets/orders/change_driver_dialog.dart';
 import 'package:brgy/widgets/orders/order_info_section.dart';
+import 'package:brgy/utils/order_ready_time_helper.dart';
 import 'package:brgy/services/sms_service.dart';
+import 'package:intl/intl.dart';
 
 class OrderDispatcherPage extends StatefulWidget {
   final int initialTabIndex;
@@ -242,6 +244,16 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
             final eta = asInt(data['etaMinutes']);
             final createdAt = asTimestamp(data['createdAt']);
             final deliveredAt = asTimestamp(data['deliveredAt']);
+            final acceptedAt = asTimestamp(data['acceptedAt']);
+            final estimatedTimeToPrepare =
+                data['estimatedTimeToPrepare']?.toString();
+            final baseTime = acceptedAt?.toDate() ?? createdAt?.toDate();
+            DateTime? readyAt;
+            if (baseTime != null) {
+              final prepMin = OrderReadyTimeHelper.parsePreparationMinutes(
+                  estimatedTimeToPrepare);
+              readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMin);
+            }
             final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
             final vendorName = (vendor['title'] ?? '') as String? ?? '';
 
@@ -442,6 +454,17 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                                 icon: Icons.timer,
                                 label: '$eta min',
                                 color: Colors.blue,
+                              ),
+                            if (readyAt != null &&
+                                (isOrderAccepted ||
+                                    isDriverPending ||
+                                    status == 'Driver Accepted' ||
+                                    status == 'Order Shipped'))
+                              _InfoChip(
+                                icon: Icons.schedule,
+                                label:
+                                    'Ready at ~${DateFormat.jm().format(readyAt)}',
+                                color: Colors.grey,
                               ),
                           ],
                         ),
@@ -1911,6 +1934,16 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
             final eta = asInt(data['etaMinutes']);
             final createdAt = asTimestamp(data['createdAt']);
             final deliveredAt = asTimestamp(data['deliveredAt']);
+            final acceptedAt = asTimestamp(data['acceptedAt']);
+            final estimatedTimeToPrepare =
+                data['estimatedTimeToPrepare']?.toString();
+            final baseTime = acceptedAt?.toDate() ?? createdAt?.toDate();
+            DateTime? readyAt;
+            if (baseTime != null) {
+              final prepMin = OrderReadyTimeHelper.parsePreparationMinutes(
+                  estimatedTimeToPrepare);
+              readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMin);
+            }
             final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
             final vendorName = (vendor['title'] ?? '') as String? ?? '';
 
@@ -2025,6 +2058,17 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                                 icon: Icons.timer,
                                 label: '$eta min',
                                 color: Colors.blue,
+                              ),
+                            if (readyAt != null &&
+                                (isOrderAccepted ||
+                                    status == 'Driver Pending' ||
+                                    status == 'Driver Accepted' ||
+                                    status == 'Order Shipped'))
+                              _InfoChip(
+                                icon: Icons.schedule,
+                                label:
+                                    'Ready at ~${DateFormat.jm().format(readyAt)}',
+                                color: Colors.grey,
                               ),
                           ],
                         ),

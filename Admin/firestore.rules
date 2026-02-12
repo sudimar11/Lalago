@@ -1,10 +1,29 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Temporary rules for testing - allow all reads and writes
+    // Temporary rules for testing
     // WARNING: These rules are NOT for production use
     match /{document=**} {
-      allow read, write: if true;
+      // Reads remain open for now; writes require authentication.
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Orders: require authenticated user and strict author binding
+    match /orders/{orderId} {
+      allow read: if true;
+
+      allow create: if request.auth != null
+        && request.resource.data.authorID is string
+        && request.resource.data.authorID == request.auth.uid;
+
+      // Prevent changing authorID, and only allow the author to update
+      allow update: if request.auth != null
+        && resource.data.authorID is string
+        && resource.data.authorID == request.auth.uid
+        && request.resource.data.authorID == resource.data.authorID;
+
+      allow delete: if false;
     }
     
     // Specific rules for daily notes and reactions

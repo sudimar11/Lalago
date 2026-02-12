@@ -184,6 +184,235 @@ exports.notifyCustomerOnDriverChatMessage = functions
   });
 
 /**
+ * Firestore Trigger: Notify rider/admins for private admin↔driver chat
+ *
+ * Triggered on chat_admin_driver/{orderId}/thread/{messageId} document create.
+ * - If senderRole == 'admin' -> notify assigned driver (single token)
+ * - If senderRole == 'driver' -> notify all admins (multicast)
+ */
+exports.notifyOnAdminDriverChatMessage = functions
+  .region('us-central1')
+  .firestore.document('chat_admin_driver/{orderId}/thread/{messageId}')
+  .onCreate(async (snap, context) => {
+    const orderId = context.params.orderId;
+    const messageData = snap.data() || {};
+
+    try {
+      const db = getDb();
+
+      const senderRole = String(messageData.senderRole || '');
+      const receiverRole = String(messageData.receiverRole || '');
+      const senderId = String(messageData.senderId || '');
+      const receiverId = String(messageData.receiverId || '');
+      const messageType = String(messageData.messageType || 'text');
+
+      const rawText = String(messageData.message || '');
+      let body = rawText;
+      if (messageType === 'image') body = 'Sent an image';
+      if (messageType === 'video') body = 'Sent a video';
+      if (!body) body = 'New message';
+
+      // Update metadata doc (best-effort) + maintain unread counters
+      try {
+        const metaPatch = {
+          orderId: String(orderId),
+          lastMessage: body,
+          lastSenderId: senderId || null,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        if (senderRole === 'admin') {
+          metaPatch.unreadForDriver = admin.firestore.FieldValue.increment(1);
+        }
+        if (senderRole === 'driver') {
+          metaPatch.unreadForAdmin = admin.firestore.FieldValue.increment(1);
+        }
+
+        await db.collection('chat_admin_driver').doc(orderId).set(metaPatch, {
+          merge: true,
+        });
+      } catch (e) {
+        console.error(
+          `[notifyOnAdminDriverChatMessage] Failed updating metadata for order ${orderId}:`,
+          e
+        );
+      }
+
+      // Admin -> Driver notification
+      if (senderRole === 'admin' || receiverRole === 'driver') {
+        let driverId = receiverId;
+
+        if (!driverId) {
+          try {
+            const metaSnap = await db.collection('chat_admin_driver').doc(orderId).get();
+            if (metaSnap.exists) {
+              const meta = metaSnap.data() || {};
+              driverId = String(meta.driverId || meta.driverID || '');
+            }
+          } catch (e) {
+            console.error(
+              `[notifyOnAdminDriverChatMessage] Failed resolving driverId for order ${orderId}:`,
+              e
+            );
+          }
+        }
+
+        if (!driverId) {
+          console.log(
+            `[notifyOnAdminDriverChatMessage] Missing driverId for order ${orderId}`
+          );
+          return null;
+        }
+
+        // Persist resolved driverId on metadata (best-effort)
+        try {
+          await db.collection('chat_admin_driver').doc(orderId).set(
+            {
+              driverId: String(driverId),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+        } catch (_) {}
+
+        const driverSnap = await db.collection('users').doc(driverId).get();
+        const driverToken = driverSnap.exists ? driverSnap.data()?.fcmToken : null;
+        if (!driverToken) {
+          console.log(
+            `[notifyOnAdminDriverChatMessage] No FCM token for driver ${driverId} (order ${orderId})`
+          );
+          return null;
+        }
+
+        const message = {
+          token: driverToken,
+          notification: {
+            title: 'Admin',
+            body: body,
+          },
+          data: {
+            type: 'admin_driver_chat',
+            orderId: String(orderId),
+            senderRole: 'admin',
+            messageType: messageType || 'chat',
+          },
+          android: {
+            priority: 'high',
+            notification: {
+              channelId: 'chat_messages',
+              sound: 'default',
+            },
+          },
+          apns: {
+            payload: {
+              aps: {
+                sound: 'default',
+              },
+            },
+          },
+        };
+
+        const resp = await getMessaging().send(message);
+        console.log(
+          `[notifyOnAdminDriverChatMessage] Sent FCM to driver ${driverId} for order ${orderId}: ${resp}`
+        );
+        return null;
+      }
+
+      // Driver -> Admin notification (multicast)
+      if (senderRole === 'driver' || receiverRole === 'admin') {
+        // Resolve driver display name (best-effort)
+        let driverName = 'Rider';
+        if (senderId) {
+          try {
+            const driverSnap = await db.collection('users').doc(senderId).get();
+            if (driverSnap.exists) {
+              const d = driverSnap.data() || {};
+              const first = String(d.firstName || '').trim();
+              const last = String(d.lastName || '').trim();
+              const full = `${first} ${last}`.trim();
+              if (full) driverName = full;
+            }
+          } catch (e) {
+            console.error(
+              `[notifyOnAdminDriverChatMessage] Failed to load driver name:`,
+              e
+            );
+          }
+        }
+
+        const adminsSnap = await db
+          .collection('users')
+          .where('role', '==', 'admin')
+          .get();
+
+        const adminTokens = [];
+        for (const doc of adminsSnap.docs) {
+          const data = doc.data() || {};
+          const token = data.fcmToken;
+          if (token && typeof token === 'string' && token.trim().length > 0) {
+            adminTokens.push(token.trim());
+          }
+        }
+
+        if (adminTokens.length === 0) {
+          console.log(
+            `[notifyOnAdminDriverChatMessage] No admin FCM tokens found (order ${orderId})`
+          );
+          return null;
+        }
+
+        const BATCH_SIZE = 500;
+        for (let i = 0; i < adminTokens.length; i += BATCH_SIZE) {
+          const batch = adminTokens.slice(i, i + BATCH_SIZE);
+
+          const multicast = {
+            notification: {
+              title: `New message from ${driverName}`,
+              body: body,
+            },
+            data: {
+              type: 'admin_driver_chat',
+              orderId: String(orderId),
+              senderRole: 'driver',
+              messageType: messageType || 'chat',
+              timestamp: Date.now().toString(),
+            },
+            tokens: batch,
+            android: {
+              priority: 'high',
+              notification: {
+                channelId: 'chat_messages',
+                sound: 'default',
+              },
+            },
+            apns: {
+              payload: {
+                aps: {
+                  sound: 'default',
+                },
+              },
+            },
+          };
+
+          const resp = await getMessaging().sendEachForMulticast(multicast);
+          console.log(
+            `[notifyOnAdminDriverChatMessage] Admin multicast batch: ${resp.successCount} sent, ${resp.failureCount} failed (order ${orderId})`
+          );
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error(
+        `[notifyOnAdminDriverChatMessage] Error for order ${orderId}:`,
+        error
+      );
+      return null;
+    }
+  });
+
+/**
  * AI Auto Dispatcher Cloud Function
  * 
  * Triggers on restaurant_orders document changes when status becomes 'Order Accepted'

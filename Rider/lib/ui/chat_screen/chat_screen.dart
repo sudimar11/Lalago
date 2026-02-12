@@ -690,11 +690,14 @@ class _ChatScreensState extends State<ChatScreens> {
   String _getSenderLabel(ConversationModel message) {
     if (message.senderType == 'system') {
       return 'System';
-    } else if (message.senderId == MyAppState.currentUser?.userID) {
-      return 'You';
-    } else {
-      return widget.customerName ?? 'Customer';
     }
+    if (message.senderType == 'admin') {
+      return 'Admin';
+    }
+    if (message.senderId == MyAppState.currentUser?.userID) {
+      return 'You';
+    }
+    return widget.customerName ?? 'Customer';
   }
 
   Widget chatItemView(bool isMe, ConversationModel data) {
