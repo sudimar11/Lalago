@@ -30,6 +30,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'model/User.dart';
 
@@ -164,6 +165,16 @@ void main() async {
       Firebase.app();
     }
   }
+  unawaited(() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      final crashlytics = FirebaseCrashlytics.instance;
+      crashlytics.setCustomKey('app_version', packageInfo.version);
+      crashlytics.setCustomKey('app_build_number', packageInfo.buildNumber);
+      crashlytics.setCustomKey('platform', Platform.operatingSystem);
+      crashlytics.setCustomKey('is_debug', kDebugMode);
+    } catch (_) {}
+  }());
   if (kDebugMode && Platform.isAndroid) {
     // #region agent log
     unawaited(_appendCursorDebugLog(

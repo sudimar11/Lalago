@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'dart:developer';
+import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:foodie_customer/main.dart';
@@ -13,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:foodie_customer/AppGlobal.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/TaxModel.dart';
@@ -155,15 +157,20 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
     const NotificationDetails platformChannelSpecifics =
         NotificationDetails(android: androidPlatformChannelSpecifics);
 
-    await flutterLocalNotificationsPlugin.show(
-      1, // Notification ID
-
-      'Order Status Updated', // Notification title
-
-      'Current Status: $status', // Notification body
-
-      platformChannelSpecifics,
-    );
+    try {
+      if (Platform.isAndroid) {
+        final permission = await Permission.notification.status;
+        if (!permission.isGranted) return;
+      }
+      await flutterLocalNotificationsPlugin.show(
+        1, // Notification ID
+        'Order Status Updated', // Notification title
+        'Current Status: $status', // Notification body
+        platformChannelSpecifics,
+      );
+    } catch (e) {
+      debugPrint('showStatusNotification failed: $e');
+    }
   }
 
   void initializeNotifications() async {
@@ -213,15 +220,20 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
     const NotificationDetails platformChannelSpecifics =
         NotificationDetails(android: androidPlatformChannelSpecifics);
 
-    await flutterLocalNotificationsPlugin.show(
-      0, // Notification ID (replace or update this notification)
-
-      'Auto Cancel', // Notification title including order ID
-
-      'Waiting for feedback from restaurant: ${formatTime(remainingSeconds)}', // Notification body
-
-      platformChannelSpecifics,
-    );
+    try {
+      if (Platform.isAndroid) {
+        final permission = await Permission.notification.status;
+        if (!permission.isGranted) return;
+      }
+      await flutterLocalNotificationsPlugin.show(
+        0, // Notification ID (replace or update this notification)
+        'Auto Cancel', // Notification title including order ID
+        'Waiting for feedback from restaurant: ${formatTime(remainingSeconds)}', // Notification body
+        platformChannelSpecifics,
+      );
+    } catch (e) {
+      debugPrint('showNotification failed: $e');
+    }
   }
 
   Future<OrderModel?> getOrderById(String orderId) async {
@@ -271,6 +283,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   }
 
   void _showNotification() async {
+    // Android: disable flutter_local_notifications to avoid
+    // "Too many inflation attempts" SIGABRT crashes. Rely on system FCM UI.
+    if (Platform.isAndroid) return;
     final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
     const AndroidNotificationDetails androidDetails =
@@ -285,12 +300,16 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
     const NotificationDetails notificationDetails =
         NotificationDetails(android: androidDetails);
 
-    await flutterLocalNotificationsPlugin.show(
-      0,
-      'Order Rejected',
-      'Your order has been rejected due to unavailability.',
-      notificationDetails,
-    );
+    try {
+      await flutterLocalNotificationsPlugin.show(
+        0,
+        'Order Rejected',
+        'Your order has been rejected due to unavailability.',
+        notificationDetails,
+      );
+    } catch (e) {
+      debugPrint('_showNotification failed: $e');
+    }
   }
 
   String formatTime(int seconds) {

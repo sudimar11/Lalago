@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -87,6 +88,9 @@ class _TimerPageState extends State<TimerPage> {
   // Show notification when the timer ends
   Future<void> _showTimerEndNotification() async {
     try {
+      // Android: disable flutter_local_notifications to avoid
+      // "Too many inflation attempts" SIGABRT crashes.
+      if (Platform.isAndroid) return;
       await flutterLocalNotificationsPlugin.show(
         1,
         'Timer Ended',
@@ -111,6 +115,9 @@ class _TimerPageState extends State<TimerPage> {
     final minutes = _remainingSeconds ~/ 60;
     final seconds = _remainingSeconds % 60;
     try {
+      // Android: disable flutter_local_notifications to avoid
+      // "Too many inflation attempts" SIGABRT crashes.
+      if (Platform.isAndroid) return;
       await flutterLocalNotificationsPlugin.show(
         2,
         'Timer Paused',

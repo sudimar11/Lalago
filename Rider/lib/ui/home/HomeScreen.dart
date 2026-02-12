@@ -1550,19 +1550,11 @@ class HomeScreenState extends State<HomeScreen> {
     final latestUser = await AttendanceService.fetchLatestUser(userId);
     if (latestUser == null) return true;
 
-    if (latestUser.suspended == true) {
+    final isSuspended = latestUser.suspended == true ||
+        (latestUser.attendanceStatus?.toLowerCase() == 'suspended');
+    if (isSuspended) {
       _showSuspendedDialog();
       return false;
-    }
-
-    final status =
-        await AttendanceService.evaluateAndUpdateAttendance(latestUser);
-    if (status.isSuspended) {
-      _showSuspendedDialog();
-      return false;
-    }
-    if (status.showWarning) {
-      _showWarningDialog();
     }
 
     await AttendanceService.touchLastActiveDate(latestUser);
@@ -1620,33 +1612,9 @@ class HomeScreenState extends State<HomeScreen> {
         content: SelectableText.rich(
           TextSpan(
             text:
-                'Your account is suspended due to two consecutive days of '
-                'absence. Please contact the administrator to restore '
-                'access.',
+                'Your account is currently suspended. Please contact the '
+                'administrator to restore access.',
             style: const TextStyle(color: Colors.red),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showWarningDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Attendance Warning'),
-        content: SelectableText.rich(
-          TextSpan(
-            text:
-                'You have been absent for one full day. Another day of '
-                'absence will result in automatic suspension.',
-            style: const TextStyle(color: Colors.orange),
           ),
         ),
         actions: [

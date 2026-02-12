@@ -254,136 +254,115 @@ class _ProfileScreenState extends State<ProfileScreen> {
             hoursLate: _checkIfLate()['hoursLate'],
             lateMessage: _checkIfLate()['message'],
           ),
+          // Activity Overview Section
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+            child: Text(
+              'Activity Overview',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isDarkMode(context)
+                    ? Colors.grey.shade400
+                    : Colors.grey.shade600,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
           // Excuse Button Card
           Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: FutureBuilder<int>(
               future: _getRemainingExcuses(),
               builder: (context, snapshot) {
                 final remainingExcuses = snapshot.data ?? 0;
                 final hasCredits = remainingExcuses > 0;
-
-                // Check if already excused today
-                final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+                final today =
+                    DateFormat('yyyy-MM-dd').format(DateTime.now());
                 final isAlreadyExcused =
                     MyAppState.currentUser?.excusedDays?.contains(today) ??
                         false;
 
                 return Card(
-                  elevation: 2,
+                  elevation: 1,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.event_busy,
-                              color: hasCredits
-                                  ? Color(COLOR_ACCENT)
-                                  : Colors.grey,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: hasCredits && !isAlreadyExcused
+                        ? () => _handleExcuse()
+                        : null,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: isAlreadyExcused
+                                  ? Colors.green.withValues(alpha: 0.12)
+                                  : (hasCredits
+                                      ? Color(COLOR_ACCENT)
+                                          .withValues(alpha: 0.12)
+                                      : Colors.grey.withValues(alpha: 0.12)),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(
+                              isAlreadyExcused
+                                  ? Icons.check_circle
+                                  : Icons.calendar_today_outlined,
+                              color: isAlreadyExcused
+                                  ? Colors.green
+                                  : (hasCredits
+                                      ? Color(COLOR_ACCENT)
+                                      : Colors.grey),
                               size: 24,
                             ),
-                            const SizedBox(width: 12),
-                            Text(
-                              'Excuse for Today',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: isDarkMode(context)
-                                    ? Colors.white
-                                    : Colors.black,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        if (isAlreadyExcused) ...[
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.green.shade50,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.green.shade200),
-                            ),
-                            child: Row(
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(
-                                  Icons.check_circle,
-                                  color: Colors.green,
-                                  size: 20,
+                                Text(
+                                  'Excuse for Today',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: isDarkMode(context)
+                                        ? Colors.white
+                                        : Colors.black87,
+                                  ),
                                 ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    'You have already excused yourself for today.',
-                                    style: TextStyle(
-                                      color: Colors.green.shade700,
-                                      fontWeight: FontWeight.w500,
-                                      fontSize: 14,
-                                    ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  isAlreadyExcused
+                                      ? 'You\'re excused for today'
+                                      : hasCredits
+                                          ? 'Remaining: $remainingExcuses'
+                                          : 'No credits left',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: isDarkMode(context)
+                                        ? Colors.grey.shade400
+                                        : Colors.grey.shade600,
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                        ] else ...[
-                          Text(
-                            'Remaining excuses: $remainingExcuses',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: isDarkMode(context)
-                                  ? Colors.grey.shade300
-                                  : Colors.grey.shade700,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton(
-                              onPressed:
-                                  hasCredits ? () => _handleExcuse() : null,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: hasCredits
-                                    ? Color(COLOR_ACCENT)
-                                    : Colors.grey,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                              ),
-                              child: Text(
-                                hasCredits
-                                    ? 'Excuse for Today'
-                                    : 'No Excuse Credits Available',
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                          if (!hasCredits) ...[
-                            const SizedBox(height: 8),
+                          if (!isAlreadyExcused && hasCredits)
                             Text(
-                              'You have no remaining excuse credits. Please contact support if you need assistance.',
+                              'Use',
                               style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.red.shade700,
-                                fontStyle: FontStyle.italic,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Color(COLOR_ACCENT),
                               ),
                             ),
-                          ],
                         ],
-                      ],
+                      ),
                     ),
                   ),
                 );
@@ -392,75 +371,86 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           // Performance Score Card
           Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Card(
-              elevation: 2,
+              elevation: 1,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                padding: const EdgeInsets.all(16),
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.trending_up,
-                          color: Color(COLOR_ACCENT),
-                          size: 24,
-                        ),
-                        const SizedBox(width: 12),
-                        Text(
-                          'Performance Score',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: isDarkMode(context)
-                                ? Colors.white
-                                : Colors.black,
-                          ),
-                        ),
-                      ],
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: _getPerformanceColor(
+                                MyAppState.currentUser!.driverPerformance ??
+                                    100.0)
+                            .withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.trending_up,
+                        color: _getPerformanceColor(
+                            MyAppState.currentUser!.driverPerformance ?? 100.0),
+                        size: 24,
+                      ),
                     ),
-                    const SizedBox(height: 16),
-                    Center(
+                    const SizedBox(width: 14),
+                    Expanded(
                       child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '${(MyAppState.currentUser!.driverPerformance ?? 100.0).toStringAsFixed(1)}%',
+                            'Performance Score',
                             style: TextStyle(
-                              fontSize: 48,
-                              fontWeight: FontWeight.bold,
-                              color: _getPerformanceColor(
-                                  MyAppState.currentUser!.driverPerformance ??
-                                      100.0),
+                              fontSize: 13,
+                              color: isDarkMode(context)
+                                  ? Colors.grey.shade400
+                                  : Colors.grey.shade600,
                             ),
                           ),
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: _getPerformanceColor(MyAppState
-                                          .currentUser!.driverPerformance ??
-                                      100.0)
-                                  .withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              _getPerformanceLabel(
-                                  MyAppState.currentUser!.driverPerformance ??
-                                      100.0),
-                              style: TextStyle(
-                                color: _getPerformanceColor(
-                                    MyAppState.currentUser!.driverPerformance ??
-                                        100.0),
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
+                          const SizedBox(height: 4),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: [
+                              Text(
+                                '${(MyAppState.currentUser!.driverPerformance ?? 100.0).toStringAsFixed(1)}%',
+                                style: TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                  color: _getPerformanceColor(
+                                      MyAppState.currentUser!.driverPerformance ??
+                                          100.0),
+                                ),
                               ),
-                            ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: _getPerformanceColor(MyAppState
+                                              .currentUser!.driverPerformance ??
+                                          100.0)
+                                      .withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  _getPerformanceLabel(
+                                      MyAppState.currentUser!.driverPerformance ??
+                                          100.0),
+                                  style: TextStyle(
+                                    color: _getPerformanceColor(
+                                        MyAppState.currentUser!.driverPerformance ??
+                                            100.0),
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -470,10 +460,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
           ),
-          // Today's Incentive Card
+          // Today's Bonus Card
           Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: FutureBuilder<Map<String, dynamic>>(
               future: Future.wait([
                 _getTodayIncentiveSummary(),
@@ -520,142 +509,155 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 final checkedOutToday =
                     qualifiedStatus['checkedOutToday'] as bool? ?? false;
 
+                final canClaim = totalIncentive > 0 &&
+                    isQualified &&
+                    !alreadyClaimed &&
+                    checkedOutToday;
+                final progress = qualifiedTime > 0
+                    ? (hoursOnline / qualifiedTime).clamp(0.0, 1.0)
+                    : 0.0;
+
                 return Card(
-                  elevation: 2,
+                  elevation: 1,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.all(10.0),
+                    padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Center(
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(
                                 Icons.card_giftcard,
-                                color: Colors.orange,
+                                color: Colors.orange.shade700,
                                 size: 24,
                               ),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Today\'s Bonus',
-                                style: TextStyle(
-                                  color: isDarkMode(context)
-                                      ? Colors.grey.shade300
-                                      : Colors.grey.shade700,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Column(
-                          children: [
-                            Center(
-                              child: Text(
-                                '₱${totalIncentive.toStringAsFixed(0)}',
-                                style: TextStyle(
-                                  color: Colors.green.shade700,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 30,
-                                ),
-                              ),
                             ),
-                            const SizedBox(height: 12),
-                            // Qualified Status Badge
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  isQualified
-                                      ? Icons.check_circle
-                                      : Icons.access_time,
-                                  color: isQualified
-                                      ? Colors.green.shade700
-                                      : Colors.red.shade700,
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  isQualified ? 'Qualified ✓' : 'Not Qualified',
-                                  style: TextStyle(
-                                    color: isQualified
-                                        ? Colors.green.shade700
-                                        : Colors.red.shade700,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Today\'s Bonus',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: isDarkMode(context)
+                                          ? Colors.white
+                                          : Colors.black87,
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${hoursOnline.toStringAsFixed(1)}h / ${qualifiedTime}h',
-                              style: TextStyle(
-                                color: isDarkMode(context)
-                                    ? Colors.grey.shade400
-                                    : Colors.grey.shade600,
-                                fontSize: 11,
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '₱${totalIncentive.toStringAsFixed(0)}',
+                                    style: TextStyle(
+                                      color: Colors.green.shade700,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 22,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                            if (totalIncentive > 0 &&
-                                hoursOnline >= qualifiedTime &&
-                                !alreadyClaimed &&
-                                !checkedOutToday) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                'Check out today to claim.',
-                                style: TextStyle(
-                                  color: Colors.orange.shade700,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 12),
                             SizedBox(
-                              width: double.infinity,
+                              height: 36,
                               child: ElevatedButton(
-                                onPressed: totalIncentive > 0 &&
-                                        isQualified &&
-                                        !alreadyClaimed &&
-                                        checkedOutToday
+                                onPressed: canClaim
                                     ? () => _claimIncentive(
                                           totalIncentive,
                                           isQualified,
                                         )
                                     : null,
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor:
-                                      totalIncentive > 0 &&
-                                              isQualified &&
-                                              checkedOutToday
-                                          ? Colors.orange
-                                          : Colors.grey,
-                                  foregroundColor: Colors.white,
+                                  backgroundColor: canClaim
+                                      ? Colors.orange
+                                      : Colors.grey.shade300,
+                                  foregroundColor:
+                                      canClaim ? Colors.white : Colors.grey,
                                   padding: const EdgeInsets.symmetric(
-                                    vertical: 12,
+                                    horizontal: 16,
+                                    vertical: 8,
                                   ),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(8),
                                   ),
+                                  elevation: 0,
                                 ),
                                 child: Text(
-                                  alreadyClaimed ? 'Already Claimed' : 'Claim',
+                                  alreadyClaimed
+                                      ? 'Claimed'
+                                      : 'Claim',
                                   style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
                               ),
                             ),
                           ],
                         ),
+                        const SizedBox(height: 14),
+                        // Progress bar for hours
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              '${hoursOnline.toStringAsFixed(1)}h / ${qualifiedTime}h online',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDarkMode(context)
+                                    ? Colors.grey.shade400
+                                    : Colors.grey.shade600,
+                              ),
+                            ),
+                            Text(
+                              isQualified ? 'Qualified ✓' : 'Not qualified',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: isQualified
+                                    ? Colors.green.shade700
+                                    : Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            minHeight: 6,
+                            backgroundColor: Colors.grey.shade200,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              isQualified
+                                  ? Colors.green.shade600
+                                  : Colors.orange.shade400,
+                            ),
+                          ),
+                        ),
+                        if (totalIncentive > 0 &&
+                            hoursOnline >= qualifiedTime &&
+                            !alreadyClaimed &&
+                            !checkedOutToday) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Check out today to claim your bonus.',
+                            style: TextStyle(
+                              color: Colors.orange.shade700,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),

@@ -2,11 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:brgy/model/HappyHourConfig.dart';
 import 'package:brgy/services/happy_hour_service.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-import 'dart:io';
 import 'dart:async';
-import 'package:firebase_core/firebase_core.dart';
 
 class HappyHourSettingsPage extends StatefulWidget {
   const HappyHourSettingsPage({super.key});
@@ -444,109 +440,254 @@ class _HappyHourSettingsPageState extends State<HappyHourSettingsPage> {
       const notificationTitle = 'Happy Hour is Live!';
 
       // Show loading indicator
+      VoidCallback? closeSendingDialog;
+      ValueNotifier<int>? elapsedSeconds;
+      ValueNotifier<String>? statusText;
+      ValueNotifier<int?>? sentCount;
+      ValueNotifier<int?>? failedCount;
+      ValueNotifier<int?>? totalUsers;
+      Timer? tick;
+      Stopwatch? stopwatch;
+
       if (mounted) {
-        showDialog(
+        elapsedSeconds = ValueNotifier<int>(0);
+        statusText = ValueNotifier<String>('Sending...');
+        sentCount = ValueNotifier<int?>(null);
+        failedCount = ValueNotifier<int?>(null);
+        totalUsers = ValueNotifier<int?>(null);
+        bool isOpen = true;
+
+        closeSendingDialog = () {
+          if (!mounted || !isOpen) return;
+          isOpen = false;
+          tick?.cancel();
+          stopwatch?.stop();
+          Navigator.of(context, rootNavigator: true).pop();
+          elapsedSeconds?.dispose();
+          statusText?.dispose();
+          sentCount?.dispose();
+          failedCount?.dispose();
+          totalUsers?.dispose();
+        };
+
+        // ignore: unawaited_futures
+        showDialog<void>(
           context: context,
           barrierDismissible: false,
-          builder: (context) => const Center(
-            child: CircularProgressIndicator(),
+          builder: (context) => Center(
+            child: Material(
+              color: Colors.transparent,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Sending Happy Hour notification',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(top: 2),
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                ValueListenableBuilder<String>(
+                                  valueListenable: statusText!,
+                                  builder: (context, value, _) => Text(value),
+                                ),
+                                const SizedBox(height: 6),
+                                ValueListenableBuilder<int>(
+                                  valueListenable: elapsedSeconds!,
+                                  builder: (context, value, _) => Text(
+                                    'Elapsed: ${value}s',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey[700],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                ValueListenableBuilder<int?>(
+                                  valueListenable: sentCount!,
+                                  builder: (context, sent, _) {
+                                    final failed = failedCount!.value;
+                                    final total = totalUsers!.value;
+                                    return Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Sent: ${sent ?? '-'}',
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                        Text(
+                                          'Failed: ${failed ?? '-'}',
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                        Text(
+                                          'Total: ${total ?? '-'}',
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         );
+
+        stopwatch = Stopwatch()..start();
+        tick = Timer.periodic(const Duration(seconds: 1), (_) {
+          if (!isOpen) return;
+          elapsedSeconds!.value = stopwatch!.elapsed.inSeconds;
+        });
       }
 
       try {
         // Get Firebase project ID
-        final projectId = Firebase.app().options.projectId;
+        statusText?.value = 'Queued. Waiting for server...';
 
-        // Get region dynamically from Firestore or use default
-        final region = await _getRegion();
-        
-        // Construct Cloud Function URL
-        final functionUrl =
-            'https://$region-$projectId.cloudfunctions.net/sendHappyHourNotifications';
-
-        print('[HappyHourNotification] Calling function URL: $functionUrl');
-        print('[HappyHourNotification] Payload: title=$notificationTitle, body=$notificationBody');
-
-        // Call Cloud Function
-        final response = await http.post(
-          Uri.parse(functionUrl),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
+        final jobRef =
+            FirebaseFirestore.instance.collection('notification_jobs').doc();
+        await jobRef.set({
+          'kind': 'happy_hour',
+          'payload': {
             'title': notificationTitle,
             'body': notificationBody,
-          }),
-        ).timeout(const Duration(seconds: 60));
+            'type': 'happy_hour',
+          },
+          'status': 'queued',
+          'sentCount': 0,
+          'errorCount': 0,
+          'processedCount': 0,
+          'totalUsers': 0,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
 
-        // Close loading indicator
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
+        final done = Completer<void>();
+        late final StreamSubscription<DocumentSnapshot<Map<String, dynamic>>> sub;
+        sub = jobRef.snapshots().listen((snap) async {
+          final data = snap.data();
+          if (data == null) return;
+          final status = (data['status'] ?? 'queued').toString();
 
-        print('[HappyHourNotification] Response status code: ${response.statusCode}');
+          final sent = (data['sentCount'] is num)
+              ? (data['sentCount'] as num).toInt()
+              : int.tryParse(data['sentCount']?.toString() ?? '') ?? 0;
+          final failed = (data['errorCount'] is num)
+              ? (data['errorCount'] as num).toInt()
+              : int.tryParse(data['errorCount']?.toString() ?? '') ?? 0;
+          final total = (data['totalUsers'] is num)
+              ? (data['totalUsers'] as num).toInt()
+              : int.tryParse(data['totalUsers']?.toString() ?? '') ?? 0;
 
-        if (response.statusCode == 200) {
-          try {
-            final responseData = jsonDecode(response.body) as Map<String, dynamic>;
-            final sentCount = responseData['sentCount'] ?? 0;
-            final errorCount = responseData['errorCount'] ?? 0;
-            final totalUsers = responseData['totalUsers'] ?? 0;
+          statusText?.value = status.replaceAll('_', ' ');
+          sentCount?.value = sent;
+          failedCount?.value = failed;
+          totalUsers?.value = total;
 
-            print('[HappyHourNotification] Response: sentCount=$sentCount, errorCount=$errorCount, totalUsers=$totalUsers');
-            
-            if (errorCount > 0 && responseData.containsKey('errors')) {
-              print('[HappyHourNotification] First 10 errors: ${responseData['errors']}');
-            }
-
+          if (status == 'completed') {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
-                      'Notifications sent successfully! Sent to $sentCount/$totalUsers users${errorCount > 0 ? ' ($errorCount failed)' : ''}'),
+                    'Notifications sent successfully! Sent to $sent/$total'
+                    ' users${failed > 0 ? ' ($failed failed)' : ''}',
+                  ),
                   backgroundColor: Colors.green,
                   duration: const Duration(seconds: 4),
                 ),
               );
             }
-          } catch (parseError) {
-            print('[HappyHourNotification] Error parsing response JSON: $parseError');
-            print('[HappyHourNotification] Response body: ${response.body}');
-            throw Exception('Failed to parse response: $parseError');
+            if (!done.isCompleted) done.complete();
           }
-        } else {
-          print('[HappyHourNotification] HTTP error status: ${response.statusCode}');
-          print('[HappyHourNotification] Response body: ${response.body}');
-          try {
-            final errorData = jsonDecode(response.body);
-            throw Exception(errorData['error'] ?? 'Failed to send notifications');
-          } catch (parseError) {
-            throw Exception('HTTP ${response.statusCode}: ${response.body}');
+
+          if (status == 'failed') {
+            if (!done.isCompleted) done.complete();
+            final error = data['error'] ?? 'Unknown error';
+            if (mounted) {
+              await showDialog<void>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Failed to send notifications'),
+                  content: SelectableText(
+                    error.toString(),
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                ),
+              );
+            }
           }
-        }
+        });
+
+        await done.future.timeout(const Duration(minutes: 10));
+        await sub.cancel();
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+        closeSendingDialog?.call();
       } catch (e) {
-        // Close loading indicator if still open
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
+        statusText?.value = 'Failed.';
+        closeSendingDialog?.call();
 
         // Enhanced error logging
         print('[HappyHourNotification] HTTP Error: $e');
         print('[HappyHourNotification] Error type: ${e.runtimeType}');
         
         if (e is TimeoutException) {
-          print('[HappyHourNotification] Request timed out after 60 seconds');
-        } else if (e is SocketException) {
-          print('[HappyHourNotification] Network connection error: ${e.message}');
-        } else if (e is HttpException) {
-          print('[HappyHourNotification] HTTP exception: ${e.message}');
+          print('[HappyHourNotification] Request timed out');
         }
 
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to send notifications: $e'),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 4),
+          await showDialog<void>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Failed to send notifications'),
+              content: SelectableText(
+                e.toString(),
+                style: const TextStyle(color: Colors.red),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Close'),
+                ),
+              ],
             ),
           );
         }
@@ -561,33 +702,6 @@ class _HappyHourSettingsPageState extends State<HappyHourSettingsPage> {
         );
       }
     }
-  }
-
-  Future<String> _getRegion() async {
-    try {
-      // Try to fetch region from Firestore settings
-      final regionDoc = await FirebaseFirestore.instance
-          .collection('settings')
-          .doc('cloudFunctionsRegion')
-          .get()
-          .timeout(const Duration(seconds: 5));
-      
-      if (regionDoc.exists && regionDoc.data() != null) {
-        final region = regionDoc.data()!['region'] as String?;
-        if (region != null && region.isNotEmpty) {
-          print('[HappyHourNotification] Using region from Firestore settings: $region');
-          return region;
-        }
-      }
-    } catch (e) {
-      print('[HappyHourNotification] Error fetching region from Firestore: $e');
-      // Continue to fallback
-    }
-    
-    // Fallback: Based on DEPLOY_NOW.md, database is in asia-southeast1
-    // Functions are typically deployed to the same region as the database
-    print('[HappyHourNotification] Using default region: asia-southeast1');
-    return 'asia-southeast1';
   }
 
   Future<void> _showAddEditDialog(

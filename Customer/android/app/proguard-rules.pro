@@ -106,6 +106,15 @@
 # Keep reflection-accessed members
 -keepattributes *Annotation*, Signature, Exception
 
+# Keep line numbers/source info so deobfuscated stacks are more useful.
+-keepattributes SourceFile,LineNumberTable
+
+# Flutter + FlutterFire: keep plugin classes to avoid R8 stripping
+# reflection-invoked code paths in release builds.
+-keep class io.flutter.plugins.** { *; }
+-keep class io.flutter.plugins.firebase.** { *; }
+-keep class io.flutter.plugins.firebase.firestore.** { *; }
+
 # Keep inner classes for generated code
 -keepclassmembers class *$* {
     *;

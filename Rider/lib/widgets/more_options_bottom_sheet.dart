@@ -82,19 +82,11 @@ class MoreOptionsBottomSheet extends StatelessWidget {
                 }
 
                 final current = latestUser ?? user;
-                if (current.suspended == true) {
+                final isSuspended = current.suspended == true ||
+                    (current.attendanceStatus?.toLowerCase() == 'suspended');
+                if (isSuspended) {
                   _showSuspendedDialog(context);
                   return;
-                }
-
-                final status =
-                    await AttendanceService.evaluateAndUpdateAttendance(current);
-                if (status.isSuspended) {
-                  _showSuspendedDialog(context);
-                  return;
-                }
-                if (status.showWarning) {
-                  _showWarningDialog(context);
                 }
 
                 await AttendanceService.touchLastActiveDate(current);
@@ -207,33 +199,9 @@ class MoreOptionsBottomSheet extends StatelessWidget {
         content: SelectableText.rich(
           TextSpan(
             text:
-                'Your account is suspended due to two consecutive days of '
-                'absence. Please contact the administrator to restore '
-                'access.',
+                'Your account is currently suspended. Please contact the '
+                'administrator to restore access.',
             style: const TextStyle(color: Colors.red),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showWarningDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Attendance Warning'),
-        content: SelectableText.rich(
-          TextSpan(
-            text:
-                'You have been absent for one full day. Another day of '
-                'absence will result in automatic suspension.',
-            style: const TextStyle(color: Colors.orange),
           ),
         ),
         actions: [

@@ -59,6 +59,38 @@ class OrderModel {
   // Referral wallet usage
   double? referralWalletAmountUsed; // Amount of referral wallet used in this order
 
+  double _tryParseDouble(dynamic value) {
+    if (value == null) return 0.0;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString()) ?? 0.0;
+  }
+
+  double _itemsTotal() {
+    double total = 0.0;
+    for (final p in products) {
+      final price = _tryParseDouble(p.price);
+      final extrasPrice = _tryParseDouble(p.extras_price);
+      total += p.quantity * (price + extrasPrice);
+    }
+    return total;
+  }
+
+  double get totalAmount {
+    final itemsTotal = _itemsTotal();
+    final discountAmount = _tryParseDouble(discount);
+    final specialDiscountAmount =
+        _tryParseDouble(specialDiscount?['special_discount']);
+    final deliveryAmount = _tryParseDouble(deliveryCharge);
+    final tipAmount = _tryParseDouble(tipValue);
+
+    final total = itemsTotal +
+        deliveryAmount +
+        tipAmount -
+        discountAmount -
+        specialDiscountAmount;
+    return total < 0 ? 0.0 : total;
+  }
+
   OrderModel(
       {this.address,
       author,
@@ -270,6 +302,8 @@ class OrderModel {
       "taxSetting":
           taxModel != null ? taxModel!.map((v) => v.toJson()).toList() : null,
       "deliveryCharge": this.deliveryCharge,
+      'totalAmount': totalAmount,
+      'total': totalAmount,
       "specialDiscount": this.specialDiscount,
       "estimatedTimeToPrepare": this.estimatedTimeToPrepare,
       "scheduleTime": this.scheduleTime,

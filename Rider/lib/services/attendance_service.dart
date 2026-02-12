@@ -59,86 +59,41 @@ class AttendanceService {
     User user,
   ) async {
     final today = _todayString();
-    final lastActive = _parseDate(user.lastActiveDate);
-    final overrideToday = user.lastAdminOverrideDate == today;
+    final isSuspended = user.suspended == true ||
+        (user.attendanceStatus?.toLowerCase() == 'suspended');
 
+    // IMPORTANT:
+    // Rider app should NOT auto-warn or auto-suspend accounts based on absence.
+    // We only respect the server/admin-provided suspension flags.
+
+    final lastActive = _parseDate(user.lastActiveDate);
     if (lastActive == null) {
       user.lastActiveDate = today;
-      user.attendanceStatus = 'active';
-      user.consecutiveAbsenceCount = 0;
-      await _updateUserFields(user.userID, {
+      if (!isSuspended) {
+        user.attendanceStatus = 'active';
+      }
+      final wasConsecutiveAbsenceCountNull = user.consecutiveAbsenceCount == null;
+      user.consecutiveAbsenceCount ??= 0;
+
+      final update = <String, dynamic>{
         'lastActiveDate': today,
-        'attendanceStatus': 'active',
-        'consecutiveAbsenceCount': 0,
-      });
+      };
+      if (!isSuspended) {
+        update['attendanceStatus'] = 'active';
+      }
+      if (wasConsecutiveAbsenceCountNull) {
+        update['consecutiveAbsenceCount'] = 0;
+      }
+      await _updateUserFields(user.userID, update);
+
       await _writeAttendanceRecord(
         user.userID,
         today,
         status: 'present',
-        attendanceStatus: 'active',
-        consecutiveAbsenceCount: 0,
+        attendanceStatus: (isSuspended ? 'suspended' : 'active'),
+        consecutiveAbsenceCount: user.consecutiveAbsenceCount ?? 0,
         lastActiveDate: today,
       );
-      return const AttendanceStatus(
-        isSuspended: false,
-        showWarning: false,
-      );
-    }
-
-    final dayGap = _dayGap(lastActive, _todayDateTime());
-    final isSuspended = user.suspended == true ||
-        (user.attendanceStatus?.toLowerCase() == 'suspended');
-
-    if (overrideToday) {
-      return AttendanceStatus(
-        isSuspended: isSuspended,
-        showWarning:
-            user.attendanceStatus?.toLowerCase() == 'warned' && !isSuspended,
-      );
-    }
-
-    await _backfillAbsentRecords(user.userID, lastActive, today);
-    final consecutiveAbsences = dayGap > 1 ? dayGap - 1 : 0;
-    user.consecutiveAbsenceCount = consecutiveAbsences;
-
-    if (dayGap >= 3 && !isSuspended) {
-      user.suspended = true;
-      user.attendanceStatus = 'suspended';
-      user.suspensionDate = DateTime.now().millisecondsSinceEpoch;
-      await _updateUserFields(user.userID, {
-        'suspended': true,
-        'suspension_date': user.suspensionDate,
-        'attendanceStatus': 'suspended',
-        'consecutiveAbsenceCount': consecutiveAbsences,
-      });
-      return const AttendanceStatus(
-        isSuspended: true,
-        showWarning: false,
-      );
-    }
-
-    if (dayGap == 2 &&
-        user.lastAbsenceWarningDate != today &&
-        !isSuspended) {
-      user.lastAbsenceWarningDate = today;
-      user.attendanceStatus = 'warned';
-      await _updateUserFields(user.userID, {
-        'lastAbsenceWarningDate': today,
-        'attendanceStatus': 'warned',
-        'consecutiveAbsenceCount': consecutiveAbsences,
-      });
-      return const AttendanceStatus(
-        isSuspended: false,
-        showWarning: true,
-      );
-    }
-
-    if (dayGap <= 1 && !isSuspended) {
-      user.attendanceStatus = 'active';
-      await _updateUserFields(user.userID, {
-        'attendanceStatus': 'active',
-        'consecutiveAbsenceCount': 0,
-      });
     }
 
     return AttendanceStatus(
@@ -210,7 +165,7 @@ class AttendanceService {
     int consecutiveCount = 1;
     while (cursor.isBefore(end)) {
       final date = _formatDate(cursor);
-      final status = consecutiveCount >= 2 ? 'suspended' : 'warned';
+      final status = 'warned';
       await _firestore
           .collection(USERS)
           .doc(userId)

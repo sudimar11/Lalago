@@ -11,7 +11,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/ui/auth/AuthScreen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
-import 'package:geoflutterfire2/geoflutterfire2.dart';
+import 'package:geoflutterfire3/geoflutterfire3.dart';
 import 'package:intl/intl.dart';
 
 class ViewAllRestaurant extends StatefulWidget {

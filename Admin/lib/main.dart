@@ -37,27 +37,38 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const brandYellow = Color(0xFFFFC107);
+    const bgColor = Color(0xFFF6F7F9);
+    const textPrimary = Color(0xFF111827);
+    const textSecondary = Color(0xFF6B7280);
+
     return MaterialApp(
       title: 'LalaGO',
       theme: ThemeData(
-        primarySwatch: Colors.orange,
-        primaryColor: Colors.orange,
-        scaffoldBackgroundColor: Colors.grey[50],
+        primarySwatch: Colors.amber,
+        primaryColor: brandYellow,
+        colorScheme: const ColorScheme.light(
+          primary: brandYellow,
+          onPrimary: textPrimary,
+          surface: Colors.white,
+          onSurface: textPrimary,
+        ),
+        scaffoldBackgroundColor: bgColor,
         appBarTheme: AppBarTheme(
-          backgroundColor: Colors.black,
-          foregroundColor: Colors.white,
+          backgroundColor: brandYellow,
+          foregroundColor: textPrimary,
           elevation: 0,
           centerTitle: true,
           titleTextStyle: TextStyle(
-            color: Colors.white,
+            color: textPrimary,
             fontSize: 20,
             fontWeight: FontWeight.bold,
           ),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.orange,
-            foregroundColor: Colors.white,
+            backgroundColor: brandYellow,
+            foregroundColor: textPrimary,
             elevation: 2,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
@@ -78,23 +89,24 @@ class MyApp extends StatelessWidget {
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: Colors.orange, width: 2),
+            borderSide: BorderSide(color: brandYellow, width: 2),
           ),
           contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         ),
         cardTheme: CardTheme(
-          elevation: 4,
+          elevation: 2,
+          shadowColor: Colors.black.withValues(alpha: 0.10),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
           color: Colors.white,
         ),
         bottomNavigationBarTheme: BottomNavigationBarThemeData(
-          backgroundColor: Colors.black,
-          selectedItemColor: Colors.orange,
-          unselectedItemColor: Colors.grey[400],
+          backgroundColor: Colors.white,
+          selectedItemColor: brandYellow,
+          unselectedItemColor: textSecondary,
           type: BottomNavigationBarType.fixed,
-          elevation: 8,
+          elevation: 2,
         ),
       ),
       home: const AuthCheck(),

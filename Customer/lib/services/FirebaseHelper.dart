@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/cupertino.dart';
@@ -49,6 +50,7 @@ import 'package:foodie_customer/model/notification_model.dart';
 import 'package:foodie_customer/model/offer_model.dart';
 import 'package:foodie_customer/model/paypalSettingData.dart';
 import 'package:foodie_customer/services/coupon_service.dart';
+import 'package:foodie_customer/services/firestore_tx.dart';
 import 'package:foodie_customer/model/SearchAnalyticsModel.dart';
 import 'package:foodie_customer/model/paytmSettingData.dart';
 import 'package:foodie_customer/model/referral_model.dart';
@@ -59,7 +61,7 @@ import 'package:foodie_customer/model/topupTranHistory.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/reauthScreen/reauth_user_screen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
-import 'package:geoflutterfire2/geoflutterfire2.dart';
+import 'package:geoflutterfire3/geoflutterfire3.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
@@ -253,6 +255,29 @@ class FireStoreUtils {
   /// Cached FCM token from a previous successful getToken() (e.g. at startup
   /// before user was set). Used so we can save to Firestore once user is available.
   static String? _lastFcmToken;
+  static Future<void> _referralTxChain = Future<void>.value();
+
+  static Future<T> _runSerializedReferral<T>(Future<T> Function() operation) {
+    final future = _referralTxChain.then((_) => operation());
+    _referralTxChain = future.then((_) => null, onError: (_) => null);
+    return future;
+  }
+
+  static void _setTxBreadcrumb({
+    required String name,
+    required String params,
+  }) {
+    final startedAt = DateTime.now().millisecondsSinceEpoch;
+    final stackPreview =
+        StackTrace.current.toString().split('\n').take(8).join('\n');
+
+    final crashlytics = FirebaseCrashlytics.instance;
+    crashlytics.setCustomKey('last_tx_name', name);
+    crashlytics.setCustomKey('last_tx_params', params);
+    crashlytics.setCustomKey('last_tx_started_at_ms', startedAt);
+    crashlytics.setCustomKey('last_tx_stack', stackPreview);
+    crashlytics.log('TX_START $name $params');
+  }
 
   static String _tokenPreview(String? token) {
     if (token == null || token.isEmpty) return 'null';
@@ -2825,9 +2850,8 @@ class FireStoreUtils {
         final authorID = orderData['authorID'] as String?;
 
         if (status == ORDER_STATUS_COMPLETED && authorID != null) {
-          // Process referral completion asynchronously to avoid blocking the stream
-          // Pass orderID for idempotency protection
-          processReferralCompletion(authorID, orderID);
+          // Referral awarding is handled server-side (Cloud Function) to avoid
+          // overlapping client transactions.
 
           // Update hasOrderedBefore if first-order coupon was applied
           final appliedCouponId = orderData['appliedCouponId'] as String?;
@@ -3668,157 +3692,176 @@ class FireStoreUtils {
   /// orderId is used for idempotency protection to prevent duplicate credits
   static Future<void> processReferralCompletion(
       String customerId, String orderId) async {
-    try {
-      print(
-          '🔍 Processing referral completion for customer: $customerId, order: $orderId');
+    return _runSerializedReferral(() async {
+      final txName = 'FireStoreUtils.processReferralCompletion';
+      final txParams = 'customerId=$customerId orderId=$orderId';
+      _setTxBreadcrumb(name: txName, params: txParams);
 
-      // Use atomic transaction to ensure all operations succeed or fail together
-      await firestore.runTransaction((transaction) async {
-        // Check if this specific order has already been processed for referral credits
-        DocumentReference referralCreditDoc = firestore
-            .collection('referral_credits')
-            .doc('${customerId}_${orderId}');
+      try {
+        print(
+            '🔍 Processing referral completion for customer: $customerId, order: $orderId');
 
-        DocumentSnapshot referralCreditSnapshot =
-            await transaction.get(referralCreditDoc);
+        // Use atomic transaction to ensure all operations succeed or fail together
+        await runFirestoreTransaction<void>(
+          firestore: firestore,
+          txName: txName,
+          txParams: txParams,
+          handler: (transaction) async {
+          // Check if this specific order has already been processed for referral credits
+          DocumentReference referralCreditDoc = firestore
+              .collection('referral_credits')
+              .doc('${customerId}_${orderId}');
 
-        if (referralCreditSnapshot.exists) {
+          DocumentSnapshot referralCreditSnapshot =
+              await transaction.get(referralCreditDoc);
+
+          if (referralCreditSnapshot.exists) {
+            print(
+                '⚠️ Referral credit already processed for customer: $customerId, order: $orderId');
+            return; // Already processed - idempotent exit
+          }
+
+          // Get customer data within transaction
+          DocumentReference customerDoc =
+              firestore.collection(USERS).doc(customerId);
+          DocumentSnapshot customerSnapshot = await transaction.get(customerDoc);
+
+          if (!customerSnapshot.exists) {
+            print('⚠️ Customer not found: $customerId');
+            throw Exception('Customer not found');
+          }
+
+          User customer =
+              User.fromJson(customerSnapshot.data()! as Map<String, dynamic>);
+
+          // Check if customer has a referrer and hasn't completed first order yet
+          if (customer.referredBy == null ||
+              customer.referredBy!.isEmpty ||
+              customer.hasCompletedFirstOrder) {
+            print(
+                '⚠️ Customer has no referrer or already completed first order');
+            return; // Not eligible for referral credit
+          }
+
+          // Check if there's a pending referral record for this customer
+          DocumentReference pendingReferralDoc =
+              firestore.collection(PENDING_REFERRALS).doc(customerId);
+          DocumentSnapshot pendingReferralSnapshot =
+              await transaction.get(pendingReferralDoc);
+
+          if (!pendingReferralSnapshot.exists) {
+            print(
+                '⚠️ No pending referral record found for customer: $customerId');
+            return;
+          }
+
+          PendingReferralModel pendingReferral = PendingReferralModel.fromJson(
+              pendingReferralSnapshot.data()! as Map<String, dynamic>);
+
+          if (pendingReferral.isProcessed == true) {
+            print('⚠️ Referral already processed for customer: $customerId');
+            return;
+          }
+
           print(
-              '⚠️ Referral credit already processed for customer: $customerId, order: $orderId');
-          return; // Already processed - idempotent exit
-        }
+              '✅ Processing referral for customer: $customerId, referrer: ${pendingReferral.referrerId}');
 
-        // Get customer data within transaction
-        DocumentReference customerDoc =
-            firestore.collection(USERS).doc(customerId);
-        DocumentSnapshot customerSnapshot = await transaction.get(customerDoc);
+          // Get referral amount from constants
+          double referralAmountValue = double.tryParse(referralAmount) ?? 0.0;
 
-        if (!customerSnapshot.exists) {
-          print('⚠️ Customer not found: $customerId');
-          throw Exception('Customer not found');
-        }
+          if (referralAmountValue <= 0) {
+            print('⚠️ No referral amount configured');
+            return;
+          }
 
-        User customer =
-            User.fromJson(customerSnapshot.data()! as Map<String, dynamic>);
+          // Get referrer data within transaction
+          DocumentReference referrerDoc =
+              firestore.collection(USERS).doc(pendingReferral.referrerId!);
+          DocumentSnapshot referrerSnapshot =
+              await transaction.get(referrerDoc);
 
-        // Check if customer has a referrer and hasn't completed first order yet
-        if (customer.referredBy == null ||
-            customer.referredBy!.isEmpty ||
-            customer.hasCompletedFirstOrder) {
-          print('⚠️ Customer has no referrer or already completed first order');
-          return; // Not eligible for referral credit
-        }
+          if (!referrerSnapshot.exists) {
+            print('⚠️ Referrer not found: ${pendingReferral.referrerId}');
+            throw Exception('Referrer not found');
+          }
 
-        // Check if there's a pending referral record for this customer
-        DocumentReference pendingReferralDoc =
-            firestore.collection(PENDING_REFERRALS).doc(customerId);
-        DocumentSnapshot pendingReferralSnapshot =
-            await transaction.get(pendingReferralDoc);
+          User referrer =
+              User.fromJson(referrerSnapshot.data()! as Map<String, dynamic>);
 
-        if (!pendingReferralSnapshot.exists) {
-          print(
-              '⚠️ No pending referral record found for customer: $customerId');
-          return;
-        }
+          // Calculate new wallet amount
+          double newWalletAmount =
+              (referrer.walletAmount ?? 0.0) + referralAmountValue;
 
-        PendingReferralModel pendingReferral = PendingReferralModel.fromJson(
-            pendingReferralSnapshot.data()! as Map<String, dynamic>);
+          // Perform all updates atomically:
 
-        if (pendingReferral.isProcessed == true) {
-          print('⚠️ Referral already processed for customer: $customerId');
-          return;
-        }
+          // 1. Mark pending referral as earned and processed
+          transaction.update(pendingReferralDoc, {
+            'isProcessed': true,
+            'status': 'earned',
+            'processedAt': Timestamp.now(),
+            'processedOrderId':
+                orderId, // Track which order triggered the credit
+          });
+
+          // 2. Update customer's first order completion flag
+          transaction.update(customerDoc, {
+            'hasCompletedFirstOrder': true,
+            'firstOrderCompletedAt': Timestamp.now(),
+            'firstOrderId': orderId, // Track which order was the first completed
+          });
+
+          // 3. Update referrer's wallet amount
+          transaction.update(referrerDoc, {
+            'wallet_amount': newWalletAmount,
+          });
+
+          // 4. Create idempotency record to prevent duplicate processing
+          transaction.set(referralCreditDoc, {
+            'customerId': customerId,
+            'referrerId': pendingReferral.referrerId!,
+            'orderId': orderId,
+            'amount': referralAmountValue,
+            'type': 'referral_bonus',
+            'status': 'completed',
+            'createdAt': Timestamp.now(),
+            'customerName': customer.fullName(),
+            'referrerName': referrer.fullName(),
+          });
+
+          // 5. Create audit trail transaction record
+          DocumentReference transactionDoc =
+              firestore.collection('referral_transactions').doc();
+          transaction.set(transactionDoc, {
+            'id': transactionDoc.id,
+            'referrerId': pendingReferral.referrerId!,
+            'customerId': customerId,
+            'orderId': orderId,
+            'amount': referralAmountValue,
+            'type': 'referral_bonus',
+            'status': 'completed',
+            'createdAt': Timestamp.now(),
+            'customerName': customer.fullName(),
+            'referrerName': referrer.fullName(),
+            'previousWalletAmount': referrer.walletAmount ?? 0.0,
+            'newWalletAmount': newWalletAmount,
+          });
+
+          print('✅ Atomic referral processing completed successfully');
+          },
+        );
 
         print(
-            '✅ Processing referral for customer: $customerId, referrer: ${pendingReferral.referrerId}');
-
-        // Get referral amount from constants
-        double referralAmountValue = double.tryParse(referralAmount) ?? 0.0;
-
-        if (referralAmountValue <= 0) {
-          print('⚠️ No referral amount configured');
-          return;
-        }
-
-        // Get referrer data within transaction
-        DocumentReference referrerDoc =
-            firestore.collection(USERS).doc(pendingReferral.referrerId!);
-        DocumentSnapshot referrerSnapshot = await transaction.get(referrerDoc);
-
-        if (!referrerSnapshot.exists) {
-          print('⚠️ Referrer not found: ${pendingReferral.referrerId}');
-          throw Exception('Referrer not found');
-        }
-
-        User referrer =
-            User.fromJson(referrerSnapshot.data()! as Map<String, dynamic>);
-
-        // Calculate new wallet amount
-        double newWalletAmount =
-            (referrer.walletAmount ?? 0.0) + referralAmountValue;
-
-        // Perform all updates atomically:
-
-        // 1. Mark pending referral as earned and processed
-        transaction.update(pendingReferralDoc, {
-          'isProcessed': true,
-          'status': 'earned',
-          'processedAt': Timestamp.now(),
-          'processedOrderId': orderId, // Track which order triggered the credit
-        });
-
-        // 2. Update customer's first order completion flag
-        transaction.update(customerDoc, {
-          'hasCompletedFirstOrder': true,
-          'firstOrderCompletedAt': Timestamp.now(),
-          'firstOrderId': orderId, // Track which order was the first completed
-        });
-
-        // 3. Update referrer's wallet amount
-        transaction.update(referrerDoc, {
-          'wallet_amount': newWalletAmount,
-        });
-
-        // 4. Create idempotency record to prevent duplicate processing
-        transaction.set(referralCreditDoc, {
-          'customerId': customerId,
-          'referrerId': pendingReferral.referrerId!,
-          'orderId': orderId,
-          'amount': referralAmountValue,
-          'type': 'referral_bonus',
-          'status': 'completed',
-          'createdAt': Timestamp.now(),
-          'customerName': customer.fullName(),
-          'referrerName': referrer.fullName(),
-        });
-
-        // 5. Create audit trail transaction record
-        DocumentReference transactionDoc =
-            firestore.collection('referral_transactions').doc();
-        transaction.set(transactionDoc, {
-          'id': transactionDoc.id,
-          'referrerId': pendingReferral.referrerId!,
-          'customerId': customerId,
-          'orderId': orderId,
-          'amount': referralAmountValue,
-          'type': 'referral_bonus',
-          'status': 'completed',
-          'createdAt': Timestamp.now(),
-          'customerName': customer.fullName(),
-          'referrerName': referrer.fullName(),
-          'previousWalletAmount': referrer.walletAmount ?? 0.0,
-          'newWalletAmount': newWalletAmount,
-        });
-
-        print('✅ Atomic referral processing completed successfully');
-      });
-
-      print(
-          '✅ Referral processing completed successfully for customer: $customerId, order: $orderId');
-    } catch (e) {
-      print('❌ Error processing referral completion: $e');
-      // Transaction will automatically rollback on error
-    }
+            '✅ Referral processing completed successfully for customer: $customerId, order: $orderId');
+      } catch (e, s) {
+        print('❌ Error processing referral completion: $e');
+        await FirebaseCrashlytics.instance.recordError(
+          e,
+          s,
+          reason: txName,
+        );
+        // Transaction will automatically rollback on error
+      }
+    });
   }
 
   /// Checks if a referral credit has already been processed for a specific order
@@ -5430,8 +5473,12 @@ class FireStoreUtils {
   /// Add active viewer session when user opens restaurant screen.
   Future<String?> addActiveViewerSession(String vendorId) async {
     try {
-      final userId =
-          auth.FirebaseAuth.instance.currentUser?.uid ?? 'anonymous';
+      if (vendorId.isEmpty) return null;
+
+      final userId = auth.FirebaseAuth.instance.currentUser?.uid;
+      // Avoid writes for unauthenticated users; Firestore rules often deny these.
+      if (userId == null || userId.isEmpty) return null;
+
       final sessionId = const Uuid().v4();
       await firestore
           .collection(VENDOR_VIEWERS)
@@ -5445,6 +5492,8 @@ class FireStoreUtils {
       });
       return sessionId;
     } catch (e) {
+      // Do not spam logs for expected permission issues in guest mode.
+      if (e.toString().contains('permission-denied')) return null;
       debugPrint('Error adding active viewer session: $e');
       return null;
     }
@@ -5454,6 +5503,11 @@ class FireStoreUtils {
   Future<void> removeActiveViewerSession(
       String vendorId, String sessionId) async {
     try {
+      if (vendorId.isEmpty || sessionId.isEmpty) return;
+
+      final userId = auth.FirebaseAuth.instance.currentUser?.uid;
+      if (userId == null || userId.isEmpty) return;
+
       await firestore
           .collection(VENDOR_VIEWERS)
           .doc(vendorId)
@@ -5461,6 +5515,7 @@ class FireStoreUtils {
           .doc(sessionId)
           .delete();
     } catch (e) {
+      if (e.toString().contains('permission-denied')) return;
       debugPrint('Error removing active viewer session: $e');
     }
   }
@@ -5468,6 +5523,11 @@ class FireStoreUtils {
   /// Increment weekly visit count when user opens restaurant screen.
   Future<void> incrementWeeklyVisitCount(String vendorId) async {
     try {
+      if (vendorId.isEmpty) return;
+
+      final userId = auth.FirebaseAuth.instance.currentUser?.uid;
+      if (userId == null || userId.isEmpty) return;
+
       final weekKey = _getCurrentWeekKey();
       final docId = '${vendorId}_week_$weekKey';
       await firestore.collection(VENDOR_VISITS).doc(docId).set({
@@ -5477,6 +5537,7 @@ class FireStoreUtils {
         'lastUpdated': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (e) {
+      if (e.toString().contains('permission-denied')) return;
       debugPrint('Error incrementing weekly visit count: $e');
     }
   }

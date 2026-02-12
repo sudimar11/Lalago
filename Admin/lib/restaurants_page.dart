@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class RestaurantsPage extends StatefulWidget {
   const RestaurantsPage({super.key});
@@ -11,6 +12,81 @@ class RestaurantsPage extends StatefulWidget {
 class _RestaurantsPageState extends State<RestaurantsPage> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
+
+  double? _asDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    return null;
+  }
+
+  Future<void> _openRestaurantLocation({
+    required BuildContext context,
+    required String title,
+    required double? latitude,
+    required double? longitude,
+  }) async {
+    final lat = latitude;
+    final lng = longitude;
+    if (lat == null || lng == null || lat == 0 || lng == 0) return;
+
+    final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+    );
+
+    try {
+      final ok = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (ok) return;
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Unable to open location'),
+          content: SelectableText.rich(
+            TextSpan(
+              text: 'Could not open maps for ',
+              children: [
+                TextSpan(
+                  text: title,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const TextSpan(text: '.'),
+              ],
+              style: const TextStyle(color: Colors.red),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).maybePop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Unable to open location'),
+          content: SelectableText.rich(
+            TextSpan(
+              text: 'Error opening maps for $title:\n$e',
+              style: const TextStyle(color: Colors.red),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).maybePop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
 
   @override
   void initState() {
@@ -130,6 +206,12 @@ class _RestaurantsPageState extends State<RestaurantsPage> {
                             vData['imageUrl'] ??
                             '')
                         .toString();
+                    final latitude = _asDouble(vData['latitude']);
+                    final longitude = _asDouble(vData['longitude']);
+                    final hasLocation = (latitude != null &&
+                        longitude != null &&
+                        latitude != 0 &&
+                        longitude != 0);
 
                     return FutureBuilder<int>(
                       future: _fetchOrderCountForVendor(vendorDoc),
@@ -151,6 +233,20 @@ class _RestaurantsPageState extends State<RestaurantsPage> {
                           ),
                           title: Text(title),
                           subtitle: Text(subtitle),
+                          trailing: IconButton(
+                            tooltip: hasLocation
+                                ? 'Open location'
+                                : 'No location available',
+                            onPressed: hasLocation
+                                ? () => _openRestaurantLocation(
+                                      context: context,
+                                      title: title,
+                                      latitude: latitude,
+                                      longitude: longitude,
+                                    )
+                                : null,
+                            icon: const Icon(Icons.location_on_outlined),
+                          ),
                         );
                       },
                     );

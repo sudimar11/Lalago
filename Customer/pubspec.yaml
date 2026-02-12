@@ -11,17 +11,17 @@ dependencies:
   flutter:
     sdk: flutter
   shared_preferences: ^2.2.2
-  firebase_core: ^2.32.0
-  firebase_crashlytics: ^3.5.7
-  firebase_auth: ^4.20.0
-  cloud_firestore: ^4.17.5
-  firebase_storage: ^11.7.7
-  firebase_messaging: ^14.9.4
-  cloud_functions: ^4.7.6
+  firebase_core: ^3.15.2
+  firebase_crashlytics: ^4.3.10
+  firebase_auth: ^5.7.0
+  cloud_firestore: ^5.6.12
+  firebase_storage: ^12.4.10
+  firebase_messaging: ^15.2.10
+  cloud_functions: ^5.6.2
   flutter_local_notifications: ^18.0.1
   flutter_facebook_auth: ^7.0.1
   google_sign_in: ^6.1.0
-  geoflutterfire2: ^2.3.15
+  geoflutterfire3: ^1.0.1
   geolocator: ^10.1.1
   geocoding: ^3.0.0
   permission_handler: ^11.1.0
@@ -63,7 +63,7 @@ dependencies:
   rect_getter: ^1.1.0
   story_view: ^0.16.0
   share_plus: ^7.2.1
-  flutterflow_paginate_firestore: ^1.0.3+1
+  paginate_firestore_plus: ^1.0.2+3
   bottom_picker: ^2.8.0
   mailer: ^6.0.1
   map_launcher: ^3.1.0

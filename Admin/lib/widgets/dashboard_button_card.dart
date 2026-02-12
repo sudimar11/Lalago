@@ -14,35 +14,34 @@ class DashboardButtonCard extends StatelessWidget {
     required this.onTap,
   });
 
-  /// Compact card size for dashboard sections.
-  static const double cardPadding = 3;
-  static const double iconSize = 14;
-  static const double labelFontSize = 7;
-
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Card(
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(8),
         child: Padding(
-          padding: const EdgeInsets.all(cardPadding),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
             children: [
-              Icon(icon, size: iconSize, color: Colors.orange),
-              const SizedBox(height: 1),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: labelFontSize,
-                  fontWeight: FontWeight.w600,
+              Icon(icon, size: 22, color: theme.colorScheme.primary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                textAlign: TextAlign.center,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
               ),
             ],
           ),
@@ -51,4 +50,3 @@ class DashboardButtonCard extends StatelessWidget {
     );
   }
 }
-

@@ -8,6 +8,38 @@ class OrdersTodayPage extends StatelessWidget {
     return '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
   }
 
+  double _parseAmount(dynamic value) {
+    if (value == null) return 0.0;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString()) ?? 0.0;
+  }
+
+  double _computeFallbackTotal(Map<String, dynamic> data) {
+    final products = data['products'] as List<dynamic>? ?? const [];
+    double itemsTotal = 0.0;
+    for (final product in products) {
+      if (product is! Map<String, dynamic>) continue;
+      final qtyRaw = product['quantity'];
+      final qty = qtyRaw is num
+          ? qtyRaw.toInt()
+          : int.tryParse(qtyRaw?.toString() ?? '') ?? 1;
+      final price = _parseAmount(product['price']);
+      final extras = _parseAmount(product['extras_price']);
+      itemsTotal += qty * (price + extras);
+    }
+
+    final discount = _parseAmount(data['discount']);
+    final specialDiscount = _parseAmount(
+      (data['specialDiscount'] as Map<String, dynamic>?)?['special_discount'],
+    );
+    final deliveryCharge = _parseAmount(data['deliveryCharge']);
+    final tip = _parseAmount(data['tip_amount']);
+
+    final total =
+        itemsTotal + deliveryCharge + tip - discount - specialDiscount;
+    return total < 0 ? 0.0 : total;
+  }
+
   Color _getStatusColor(String status) {
     final lowerStatus = status.toLowerCase();
     if (lowerStatus.contains('completed') || lowerStatus.contains('delivered')) {
@@ -179,9 +211,26 @@ class OrdersTodayPage extends StatelessWidget {
                           final createdAt = data['createdAt'] as Timestamp?;
                           final author = data['author'] as Map<String, dynamic>?;
                           final vendor = data['vendor'] as Map<String, dynamic>?;
-                          final total = data['total'] ?? 0.0;
                           final products = data['products'] as List<dynamic>? ?? [];
                           final driverID = data['driverID'] as String?;
+
+                          final storedTotalRaw = data['totalAmount'] ??
+                              data['grand_total'] ??
+                              data['vendorTotal'] ??
+                              data['amount'] ??
+                              data['total'];
+
+                          double total = _parseAmount(storedTotalRaw);
+                          if (storedTotalRaw == null) {
+                            total = _computeFallbackTotal(data);
+                            FirebaseFirestore.instance
+                                .collection('restaurant_orders')
+                                .doc(doc.id)
+                                .update({
+                              'totalAmount': total,
+                              'total': total,
+                            });
+                          }
 
                           final customerName = author != null
                               ? '${author['firstName'] ?? ''} ${author['lastName'] ?? ''}'
@@ -208,6 +257,51 @@ class OrdersTodayPage extends StatelessWidget {
                             }
                           }
 
+                          double itemsSubtotal = 0.0;
+                          for (final product in products) {
+                            if (product is! Map<String, dynamic>) continue;
+                            final qtyRaw = product['quantity'];
+                            final quantity = qtyRaw is num
+                                ? qtyRaw.toInt()
+                                : int.tryParse(qtyRaw?.toString() ?? '') ?? 1;
+                            final price = _parseAmount(product['price']);
+                            final extras = _parseAmount(product['extras_price']);
+                            itemsSubtotal += quantity * (price + extras);
+                          }
+
+                          final deliveryFee = _parseAmount(data['deliveryCharge']);
+                          final tipAmount = _parseAmount(data['tip_amount']);
+                          final discountAmount = _parseAmount(data['discount']);
+                          final specialDiscountAmount = _parseAmount(
+                            (data['specialDiscount']
+                                as Map<String, dynamic>?)?['special_discount'],
+                          );
+
+                          String currency(double value) =>
+                              '₱${value.toStringAsFixed(2)}';
+
+                          Widget summaryRow(
+                            String label,
+                            String value, {
+                            bool isEmphasis = false,
+                          }) {
+                            final style = TextStyle(
+                              fontSize: 12,
+                              fontWeight:
+                                  isEmphasis ? FontWeight.w700 : FontWeight.w500,
+                              color: isEmphasis ? Colors.black : Colors.grey[800],
+                            );
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 2),
+                              child: Row(
+                                children: [
+                                  Expanded(child: Text(label, style: style)),
+                                  Text(value, style: style),
+                                ],
+                              ),
+                            );
+                          }
+
                           return Card(
                             margin: const EdgeInsets.symmetric(
                               horizontal: 8,
@@ -223,117 +317,59 @@ class OrdersTodayPage extends StatelessWidget {
                                 restaurantName,
                                 style: const TextStyle(fontWeight: FontWeight.w600),
                               ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Customer: $customerName'),
-                                  if (createdAt != null)
-                                    Text(
-                                      _formatDate(createdAt.toDate()),
-                                      style: const TextStyle(fontSize: 12),
-                                    ),
-                                  if (driverID != null && driverID.isNotEmpty)
-                                    Row(
-                                      children: [
-                                        const Icon(Icons.drive_eta,
-                                            size: 14, color: Colors.blue),
-                                        const SizedBox(width: 4),
-                                        FutureBuilder<DocumentSnapshot>(
-                                          future: FirebaseFirestore.instance
-                                              .collection('users')
-                                              .doc(driverID)
-                                              .get(),
-                                          builder: (context, driverSnapshot) {
-                                            if (driverSnapshot.connectionState ==
-                                                ConnectionState.waiting) {
-                                              return const Text(
-                                                'Loading driver...',
-                                                style: TextStyle(fontSize: 12),
-                                              );
-                                            }
-                                            if (driverSnapshot.hasError ||
-                                                !driverSnapshot.hasData) {
-                                              return Text(
-                                                'Driver ID: ${driverID.substring(0, 8)}...',
-                                                style: const TextStyle(fontSize: 12),
-                                              );
-                                            }
-                                            final driverData = driverSnapshot.data?.data()
-                                                as Map<String, dynamic>?;
-                                            final driverFirstName =
-                                                driverData?['firstName'] ?? '';
-                                            final driverLastName =
-                                                driverData?['lastName'] ?? '';
-                                            final driverName =
-                                                '$driverFirstName $driverLastName'
-                                                    .trim();
-                                            return Text(
-                                              driverName.isEmpty
-                                                  ? 'Driver ID: ${driverID.substring(0, 8)}...'
-                                                  : 'Driver: $driverName',
-                                              style: const TextStyle(fontSize: 12),
-                                            );
-                                          },
+                              subtitle: Text(
+                                createdAt == null
+                                    ? 'Customer: $customerName'
+                                    : 'Customer: $customerName • ${_formatDate(createdAt.toDate())}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              trailing: SizedBox(
+                                height: kMinInteractiveDimension,
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  alignment: Alignment.centerRight,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
                                         ),
-                                      ],
-                                    )
-                                  else
-                                    const Row(
-                                      children: [
-                                        Icon(Icons.drive_eta,
-                                            size: 14, color: Colors.grey),
-                                        SizedBox(width: 4),
-                                        Text(
-                                          'No driver assigned',
+                                        decoration: BoxDecoration(
+                                          color: _getStatusColor(status)
+                                              .withOpacity(0.1),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          status,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          softWrap: false,
                                           style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.grey,
+                                            color: _getStatusColor(status),
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 11,
                                           ),
                                         ),
-                                      ],
-                                    ),
-                                ],
-                              ),
-                              trailing: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: _getStatusColor(status).withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Text(
-                                      status,
-                                      style: TextStyle(
-                                        color: _getStatusColor(status),
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 11,
                                       ),
-                                    ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        '₱${total.toStringAsFixed(2)}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          color: Colors.orange,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'Total Amount:',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.grey[600],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '₱${total.toStringAsFixed(2)}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 18,
-                                      color: Colors.orange,
-                                    ),
-                                  ),
-                                ],
+                                ),
                               ),
                               children: [
                                 Padding(
@@ -341,6 +377,139 @@ class OrdersTodayPage extends StatelessWidget {
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
+                                      if (driverID != null && driverID.isNotEmpty)
+                                        Row(
+                                          children: [
+                                            const Icon(
+                                              Icons.drive_eta,
+                                              size: 14,
+                                              color: Colors.blue,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Expanded(
+                                              child: FutureBuilder<DocumentSnapshot>(
+                                                future: FirebaseFirestore.instance
+                                                    .collection('users')
+                                                    .doc(driverID)
+                                                    .get(),
+                                                builder: (context, driverSnapshot) {
+                                                  if (driverSnapshot.connectionState ==
+                                                      ConnectionState.waiting) {
+                                                    return const Text(
+                                                      'Loading driver...',
+                                                      style: TextStyle(fontSize: 12),
+                                                    );
+                                                  }
+                                                  if (driverSnapshot.hasError ||
+                                                      !driverSnapshot.hasData) {
+                                                    return Text(
+                                                      'Driver ID: ${driverID.substring(0, 8)}...',
+                                                      style: const TextStyle(fontSize: 12),
+                                                    );
+                                                  }
+                                                  final driverData = driverSnapshot.data
+                                                      ?.data() as Map<String, dynamic>?;
+                                                  final driverFirstName =
+                                                      driverData?['firstName'] ?? '';
+                                                  final driverLastName =
+                                                      driverData?['lastName'] ?? '';
+                                                  final driverName =
+                                                      '$driverFirstName $driverLastName'
+                                                          .trim();
+                                                  return Text(
+                                                    driverName.isEmpty
+                                                        ? 'Driver ID: ${driverID.substring(0, 8)}...'
+                                                        : 'Driver: $driverName',
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(fontSize: 12),
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                          ],
+                                        )
+                                      else
+                                        const Row(
+                                          children: [
+                                            Icon(
+                                              Icons.drive_eta,
+                                              size: 14,
+                                              color: Colors.grey,
+                                            ),
+                                            SizedBox(width: 6),
+                                            Text(
+                                              'No driver assigned',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      const SizedBox(height: 12),
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey[50],
+                                          borderRadius: BorderRadius.circular(8),
+                                          border:
+                                              Border.all(color: Colors.grey[300]!),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              'Order Summary',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            summaryRow(
+                                              'Items subtotal',
+                                              currency(itemsSubtotal),
+                                            ),
+                                            summaryRow(
+                                              'Delivery fee',
+                                              currency(deliveryFee),
+                                            ),
+                                            summaryRow(
+                                              'Tip',
+                                              currency(tipAmount),
+                                            ),
+                                            summaryRow(
+                                              'Discount',
+                                              discountAmount <= 0
+                                                  ? currency(0)
+                                                  : '-${currency(discountAmount)}',
+                                            ),
+                                            summaryRow(
+                                              'Special discount',
+                                              specialDiscountAmount <= 0
+                                                  ? currency(0)
+                                                  : '-${currency(specialDiscountAmount)}',
+                                            ),
+                                            const Divider(height: 16),
+                                            summaryRow(
+                                              'Grand total',
+                                              currency(total),
+                                              isEmphasis: true,
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              'Payment: ${data['payment_method'] ?? '-'}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[700],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 16),
                                       Row(
                                         children: [
                                           const Icon(Icons.shopping_cart,

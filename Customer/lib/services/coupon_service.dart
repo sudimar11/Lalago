@@ -1,12 +1,37 @@
 import 'dart:developer';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/offer_model.dart';
 import 'package:foodie_customer/services/coupon_eligibility_service.dart';
+import 'package:foodie_customer/services/firestore_tx.dart';
 
 class CouponService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static Future<void> _couponTxChain = Future<void>.value();
+
+  static Future<T> _runSerialized<T>(Future<T> Function() operation) {
+    final future = _couponTxChain.then((_) => operation());
+    _couponTxChain = future.then((_) => null, onError: (_) => null);
+    return future;
+  }
+
+  static void _setTxBreadcrumb({
+    required String name,
+    required String params,
+  }) {
+    final startedAt = DateTime.now().millisecondsSinceEpoch;
+    final stackPreview =
+        StackTrace.current.toString().split('\n').take(8).join('\n');
+
+    final crashlytics = FirebaseCrashlytics.instance;
+    crashlytics.setCustomKey('last_tx_name', name);
+    crashlytics.setCustomKey('last_tx_params', params);
+    crashlytics.setCustomKey('last_tx_started_at_ms', startedAt);
+    crashlytics.setCustomKey('last_tx_stack', stackPreview);
+    crashlytics.log('TX_START $name $params');
+  }
 
   /// Validates a coupon code for a given order
   /// Returns Map with 'valid' (bool), 'coupon' (OfferModel?), 'error' (String?), 'itemsNeeded' (int?)
@@ -308,38 +333,54 @@ class CouponService {
   /// Reserves a coupon by incrementing its usage count
   /// This is called when an order is placed (status: pending/accepted)
   static Future<bool> reserveCoupon(String couponId) async {
-    try {
-      final couponRef = _firestore.collection(COUPON).doc(couponId);
+    return _runSerialized(() async {
+      final txName = 'CouponService.reserveCoupon';
+      final txParams = 'couponId=$couponId';
+      _setTxBreadcrumb(name: txName, params: txParams);
 
-      // Use transaction to atomically increment usage count
-      return await _firestore.runTransaction<bool>((transaction) async {
-        final couponDoc = await transaction.get(couponRef);
+      try {
+        final couponRef = _firestore.collection(COUPON).doc(couponId);
 
-        if (!couponDoc.exists) {
-          log('Coupon document not found: $couponId');
-          return false;
-        }
+        // Use transaction to atomically increment usage count
+        return await runFirestoreTransaction<bool>(
+          firestore: _firestore,
+          txName: txName,
+          txParams: txParams,
+          handler: (transaction) async {
+            final couponDoc = await transaction.get(couponRef);
 
-        final currentCount = couponDoc.data()?['usedCount'] as int? ?? 0;
-        final usageLimit = couponDoc.data()?['usageLimit'] as int?;
+            if (!couponDoc.exists) {
+              log('Coupon document not found: $couponId');
+              return false;
+            }
 
-        // Check if limit is reached
-        if (usageLimit != null && currentCount >= usageLimit) {
-          log('Coupon usage limit reached: $couponId');
-          return false;
-        }
+            final currentCount = couponDoc.data()?['usedCount'] as int? ?? 0;
+            final usageLimit = couponDoc.data()?['usageLimit'] as int?;
 
-        // Increment usage count
-        transaction.update(couponRef, {
-          'usedCount': FieldValue.increment(1),
-        });
+            // Check if limit is reached
+            if (usageLimit != null && currentCount >= usageLimit) {
+              log('Coupon usage limit reached: $couponId');
+              return false;
+            }
 
-        return true;
-      });
-    } catch (e) {
-      log('Error reserving coupon: $e');
-      return false;
-    }
+            // Increment usage count
+            transaction.update(couponRef, {
+              'usedCount': FieldValue.increment(1),
+            });
+
+            return true;
+          },
+        );
+      } catch (e, s) {
+        log('Error reserving coupon: $e');
+        await FirebaseCrashlytics.instance.recordError(
+          e,
+          s,
+          reason: txName,
+        );
+        return false;
+      }
+    });
   }
 
   /// Finalizes or reverts coupon usage based on order completion status
@@ -349,40 +390,57 @@ class CouponService {
     String orderId,
     bool orderCompleted,
   ) async {
-    try {
-      // If order was completed, usage count was already incremented during reservation
-      // If order was cancelled/rejected/expired, we need to decrement the count
-      if (!orderCompleted) {
-        final couponRef = _firestore.collection(COUPON).doc(couponId);
+    return _runSerialized(() async {
+      final txName = 'CouponService.finalizeCouponUsage';
+      final txParams =
+          'couponId=$couponId orderId=$orderId orderCompleted=$orderCompleted';
+      _setTxBreadcrumb(name: txName, params: txParams);
 
-        return await _firestore.runTransaction<bool>((transaction) async {
-          final couponDoc = await transaction.get(couponRef);
+      try {
+        // If order was completed, usage count was already incremented during reservation
+        // If order was cancelled/rejected/expired, we need to decrement the count
+        if (!orderCompleted) {
+          final couponRef = _firestore.collection(COUPON).doc(couponId);
 
-          if (!couponDoc.exists) {
-            log('Coupon document not found for finalization: $couponId');
-            return false;
-          }
+          return await runFirestoreTransaction<bool>(
+            firestore: _firestore,
+            txName: txName,
+            txParams: txParams,
+            handler: (transaction) async {
+              final couponDoc = await transaction.get(couponRef);
 
-          final currentCount = couponDoc.data()?['usedCount'] as int? ?? 0;
+              if (!couponDoc.exists) {
+                log('Coupon document not found for finalization: $couponId');
+                return false;
+              }
 
-          // Decrement usage count (but don't go below 0)
-          if (currentCount > 0) {
-            transaction.update(couponRef, {
-              'usedCount': FieldValue.increment(-1),
-            });
-          }
+              final currentCount = couponDoc.data()?['usedCount'] as int? ?? 0;
 
-          return true;
-        });
+              // Decrement usage count (but don't go below 0)
+              if (currentCount > 0) {
+                transaction.update(couponRef, {
+                  'usedCount': FieldValue.increment(-1),
+                });
+              }
+
+              return true;
+            },
+          );
+        }
+
+        // Order completed - usage count was already incremented during reservation
+        // Nothing to do here
+        return true;
+      } catch (e, s) {
+        log('Error finalizing coupon usage: $e');
+        await FirebaseCrashlytics.instance.recordError(
+          e,
+          s,
+          reason: txName,
+        );
+        return false;
       }
-
-      // Order completed - usage count was already incremented during reservation
-      // Nothing to do here
-      return true;
-    } catch (e) {
-      log('Error finalizing coupon usage: $e');
-      return false;
-    }
+    });
   }
 
   /// Calculates the discount amount for a coupon based on order subtotal

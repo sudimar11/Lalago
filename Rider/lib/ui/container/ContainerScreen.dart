@@ -59,7 +59,6 @@ class _ContainerScreen extends State<ContainerScreen> {
   StreamSubscription? _locationSubscription;
   bool? _lastCheckedInStatus;
   bool _isSuspended = false;
-  bool _hasShownAbsenceWarning = false;
   bool _remittanceDialogDismissed = false;
 
   @override
@@ -175,19 +174,13 @@ class _ContainerScreen extends State<ContainerScreen> {
     }
 
     final currentUser = latestUser ?? MyAppState.currentUser!;
-    final status =
-        await AttendanceService.evaluateAndUpdateAttendance(currentUser);
     await AttendanceService.touchLastActiveDate(currentUser);
 
     if (!mounted) return;
     setState(() {
-      _isSuspended = currentUser.suspended == true || status.isSuspended;
+      _isSuspended = currentUser.suspended == true ||
+          (currentUser.attendanceStatus?.toLowerCase() == 'suspended');
     });
-
-    if (status.showWarning && !_hasShownAbsenceWarning && mounted) {
-      _hasShownAbsenceWarning = true;
-      _showAbsenceWarningDialog();
-    }
   }
 
   @override
@@ -671,7 +664,6 @@ class _ContainerScreen extends State<ContainerScreen> {
                       children: [
                         Column(
                           children: [
-                            if (_isSuspended) _SuspensionBanner(),
                             Expanded(child: _currentWidget),
                           ],
                         ),
@@ -705,48 +697,6 @@ class _ContainerScreen extends State<ContainerScreen> {
     );
   }
 
-  void _showAbsenceWarningDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Attendance Warning'),
-        content: SelectableText.rich(
-          TextSpan(
-            text:
-                'You have been absent for one full day. Another day of '
-                'absence will result in automatic suspension.',
-            style: const TextStyle(color: Colors.orange),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SuspensionBanner extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      color: Colors.red.withOpacity(0.1),
-      child: SelectableText.rich(
-        TextSpan(
-          text:
-              'Your account is suspended due to two consecutive days of '
-              'absence. Please contact the administrator to restore access.',
-          style: const TextStyle(color: Colors.red),
-        ),
-        textAlign: TextAlign.center,
-      ),
-    );
-  }
 }
 
 class _RemittanceBlockingOverlay extends StatelessWidget {

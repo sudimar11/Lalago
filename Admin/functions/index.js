@@ -18,6 +18,171 @@ function getMessaging() {
   return admin.messaging();
 }
 
+function setCors(res) {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.set('Access-Control-Max-Age', '86400');
+}
+
+function handleCors(req, res) {
+  setCors(res);
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Firestore Trigger: Notify customer when driver sends a chat message
+ *
+ * Triggered on chat_driver/{orderId}/thread/{messageId} document create.
+ * Sends an FCM message with a notification payload so Android can display it
+ * without relying on local notifications from a background isolate.
+ */
+exports.notifyCustomerOnDriverChatMessage = functions
+  .region('us-central1')
+  .firestore.document('chat_driver/{orderId}/thread/{messageId}')
+  .onCreate(async (snap, context) => {
+    const orderId = context.params.orderId;
+    const messageData = snap.data() || {};
+
+    try {
+      const senderRole = String(messageData.senderRole || '');
+      const senderId = String(messageData.senderId || '');
+      const receiverId = String(messageData.receiverId || '');
+      const messageType = String(messageData.messageType || 'text');
+
+      // Only notify for driver-originated messages.
+      // (Some clients may omit senderRole; fall back to comparing receiverId.)
+      if (senderRole && senderRole !== 'rider' && senderRole !== 'driver') {
+        return null;
+      }
+
+      const db = getDb();
+      const inboxRef = db.collection('chat_driver').doc(orderId);
+      const inboxSnap = await inboxRef.get();
+      const inboxData = inboxSnap.exists ? inboxSnap.data() : null;
+
+      const customerId = String(
+        inboxData?.customerId || messageData.customerId || receiverId || ''
+      );
+      if (!customerId) {
+        console.log(
+          `[notifyCustomerOnDriverChatMessage] Missing customerId for order ${orderId}`
+        );
+        return null;
+      }
+
+      // If sender is the customer, don't notify.
+      if (senderId && senderId === customerId) {
+        return null;
+      }
+
+      // Read customer token
+      const customerSnap = await db.collection('users').doc(customerId).get();
+      const customerToken = customerSnap.exists
+        ? customerSnap.data()?.fcmToken
+        : null;
+
+      if (!customerToken) {
+        console.log(
+          `[notifyCustomerOnDriverChatMessage] No FCM token for customer ${customerId}`
+        );
+        return null;
+      }
+
+      // Resolve driver name (best-effort)
+      let driverName = 'Driver';
+      if (senderId) {
+        try {
+          const driverSnap = await db.collection('users').doc(senderId).get();
+          if (driverSnap.exists) {
+            const d = driverSnap.data() || {};
+            const first = String(d.firstName || '').trim();
+            const last = String(d.lastName || '').trim();
+            const full = `${first} ${last}`.trim();
+            if (full) driverName = full;
+          }
+        } catch (e) {
+          console.error(
+            `[notifyCustomerOnDriverChatMessage] Failed to load driver name:`,
+            e
+          );
+        }
+      }
+
+      // Message preview
+      const rawText = String(messageData.message || '');
+      let body = rawText;
+      if (messageType === 'image') body = 'Sent an image';
+      if (messageType === 'video') body = 'Sent a video';
+      if (!body) body = 'New message';
+
+      // Increment unread count (best-effort; keep existing fields intact)
+      try {
+        await inboxRef.set(
+          {
+            orderId: orderId,
+            customerId: customerId,
+            unreadCount: admin.firestore.FieldValue.increment(1),
+            lastMessage: body,
+            lastSenderId: senderId || null,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        console.error(
+          `[notifyCustomerOnDriverChatMessage] Failed updating inbox:`,
+          e
+        );
+      }
+
+      const message = {
+        token: customerToken,
+        notification: {
+          title: `New message from ${driverName}`,
+          body: body,
+        },
+        data: {
+          type: 'chat_message',
+          orderId: String(orderId),
+          customerId: String(customerId),
+          senderRole: senderRole || 'rider',
+          messageType: messageType || 'chat',
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'chat_messages',
+            sound: 'default',
+          },
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+            },
+          },
+        },
+      };
+
+      const resp = await getMessaging().send(message);
+      console.log(
+        `[notifyCustomerOnDriverChatMessage] Sent FCM for order ${orderId}: ${resp}`
+      );
+      return null;
+    } catch (error) {
+      console.error(
+        `[notifyCustomerOnDriverChatMessage] Error for order ${orderId}:`,
+        error
+      );
+      return null;
+    }
+  });
+
 /**
  * AI Auto Dispatcher Cloud Function
  * 
@@ -684,6 +849,10 @@ exports.autoCollectScheduled = functions.pubsub
  */
 exports.sendHappyHourNotifications = functions.region('us-central1').https.onRequest(async (req, res) => {
   try {
+    if (handleCors(req, res)) {
+      return;
+    }
+
     // Only allow POST requests
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed. Use POST.' });
@@ -841,6 +1010,10 @@ exports.sendHappyHourNotifications = functions.region('us-central1').https.onReq
  */
 exports.sendBroadcastNotifications = functions.region('us-central1').https.onRequest(async (req, res) => {
   try {
+    if (handleCors(req, res)) {
+      return;
+    }
+
     // Only allow POST requests
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed. Use POST.' });
@@ -1014,6 +1187,205 @@ exports.sendBroadcastNotifications = functions.region('us-central1').https.onReq
 });
 
 /**
+ * Background notification job processor (no HTTP, no web timeouts).
+ *
+ * Admin app creates a Firestore document in `notification_jobs/{jobId}`:
+ * {
+ *   kind: 'broadcast' | 'happy_hour',
+ *   payload: { title, body, type?, imageUrl?, deepLink?, targetScreen? },
+ *   createdAt: serverTimestamp(),
+ *   status: 'queued'
+ * }
+ *
+ * This trigger sends notifications in batches and updates progress fields:
+ * sentCount, errorCount, processedCount, totalUsers, status.
+ */
+exports.processNotificationJob = functions
+  .region('us-central1')
+  .runWith({ timeoutSeconds: 540, memory: '256MB' })
+  .firestore.document('notification_jobs/{jobId}')
+  .onCreate(async (snap, context) => {
+    const jobId = context.params.jobId;
+    const job = snap.data() || {};
+    const kind = String(job.kind || '').trim();
+    const payload = job.payload && typeof job.payload === 'object' ? job.payload : {};
+
+    const jobRef = snap.ref;
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    if (kind !== 'broadcast' && kind !== 'happy_hour') {
+      await jobRef.set(
+        {
+          status: 'failed',
+          error: `Invalid kind: ${kind || '(empty)'}`,
+          completedAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+      return;
+    }
+
+    const title = String(payload.title || '').trim();
+    const body = String(payload.body || '').trim();
+    const type =
+      kind === 'happy_hour'
+        ? 'happy_hour'
+        : String(payload.type || '').trim() || 'general';
+
+    if (!title || !body) {
+      await jobRef.set(
+        {
+          status: 'failed',
+          error: 'Missing title/body in payload',
+          completedAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+      return;
+    }
+
+    await jobRef.set(
+      {
+        status: 'in_progress',
+        startedAt: now,
+        updatedAt: now,
+        sentCount: 0,
+        errorCount: 0,
+        processedCount: 0,
+        totalUsers: 0,
+        errors: [],
+      },
+      { merge: true }
+    );
+
+    try {
+      // Fetch all active customers with FCM tokens
+      const usersSnapshot = await getDb()
+        .collection('users')
+        .where('role', '==', 'customer')
+        .where('active', '==', true)
+        .get();
+
+      const fcmTokens = [];
+      for (const userDoc of usersSnapshot.docs) {
+        const userData = userDoc.data();
+        const fcmToken = userData.fcmToken;
+        if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
+          fcmTokens.push(fcmToken.trim());
+        }
+      }
+
+      const totalUsers = fcmTokens.length;
+      await jobRef.set({ totalUsers: totalUsers, updatedAt: now }, { merge: true });
+
+      if (totalUsers === 0) {
+        await jobRef.set(
+          {
+            status: 'completed',
+            completedAt: now,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+        return;
+      }
+
+      const BATCH_SIZE = 500;
+      let sentCount = 0;
+      let errorCount = 0;
+      let processedCount = 0;
+      const firstErrors = [];
+
+      for (let i = 0; i < fcmTokens.length; i += BATCH_SIZE) {
+        const batch = fcmTokens.slice(i, i + BATCH_SIZE);
+        const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+
+        const message = {
+          notification: { title: title, body: body },
+          data: {
+            type: type,
+            timestamp: Date.now().toString(),
+          },
+          tokens: batch,
+        };
+
+        if (payload.imageUrl && String(payload.imageUrl).trim().length > 0) {
+          message.notification.imageUrl = String(payload.imageUrl).trim();
+        }
+        if (payload.deepLink && String(payload.deepLink).trim().length > 0) {
+          message.data.deepLink = String(payload.deepLink).trim();
+        }
+        if (payload.targetScreen && String(payload.targetScreen).trim().length > 0) {
+          message.data.targetScreen = String(payload.targetScreen).trim();
+        }
+
+        try {
+          const resp = await getMessaging().sendEachForMulticast(message);
+          sentCount += resp.successCount;
+          errorCount += resp.failureCount;
+          processedCount += batch.length;
+
+          if (resp.failureCount > 0 && firstErrors.length < 10) {
+            resp.responses.forEach((r, idx) => {
+              if (firstErrors.length >= 10) return;
+              if (!r.success) {
+                firstErrors.push({
+                  token: batch[idx],
+                  errorCode: r.error?.code || 'UNKNOWN',
+                  error: r.error?.message || 'Unknown error',
+                });
+              }
+            });
+          }
+        } catch (batchError) {
+          errorCount += batch.length;
+          processedCount += batch.length;
+          if (firstErrors.length < 10) {
+            firstErrors.push({
+              batch: batchNumber,
+              errorCode: batchError.code || 'BATCH_SEND_ERROR',
+              error: batchError.message || 'Batch send failed',
+            });
+          }
+        }
+
+        await jobRef.set(
+          {
+            sentCount: sentCount,
+            errorCount: errorCount,
+            processedCount: processedCount,
+            errors: firstErrors,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
+      await jobRef.set(
+        {
+          status: 'completed',
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (error) {
+      console.error(`[processNotificationJob] Fatal error jobId=${jobId}`, error);
+      await jobRef.set(
+        {
+          status: 'failed',
+          error: error.message || String(error),
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+  });
+
+/**
  * Send Individual FCM Notification
  * 
  * HTTP function to send push notification to a single user
@@ -1030,6 +1402,10 @@ exports.sendBroadcastNotifications = functions.region('us-central1').https.onReq
  */
 exports.sendIndividualNotification = functions.region('us-central1').https.onRequest(async (req, res) => {
   try {
+    if (handleCors(req, res)) {
+      return;
+    }
+
     // Only allow POST requests
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed. Use POST.' });
@@ -1108,4 +1484,204 @@ exports.sendIndividualNotification = functions.region('us-central1').https.onReq
     });
   }
 });
+
+/**
+ * Firestore Trigger: Award referral credits on order completion
+ *
+ * Triggered on restaurant_orders/{orderId} document updates.
+ * Runs only when status transitions to 'Order Completed'.
+ *
+ * This implements the same logic as the legacy client-side transaction
+ * (Customer FireStoreUtils.processReferralCompletion) but server-side to avoid
+ * overlapping client transactions that can crash Android.
+ *
+ * Idempotency: referral_credits/{customerId}_{orderId}
+ */
+exports.awardReferralCreditsOnOrderCompletion = functions.firestore
+  .document('restaurant_orders/{orderId}')
+  .onUpdate(async (change, context) => {
+    const orderId = String(context.params.orderId || '');
+    const beforeData = change.before.data() || {};
+    const afterData = change.after.data() || {};
+
+    const beforeStatus = String(beforeData.status || '');
+    const afterStatus = String(afterData.status || '');
+
+    if (!(beforeStatus !== 'Order Completed' && afterStatus === 'Order Completed')) {
+      return null;
+    }
+
+    const customerId = String(
+      afterData.authorID ||
+        afterData.authorId ||
+        afterData.customerId ||
+        afterData.customerID ||
+        ''
+    );
+
+    if (!customerId) {
+      console.log(
+        `[awardReferralCreditsOnOrderCompletion] Skip: missing customerId. orderId=${orderId}`
+      );
+      return null;
+    }
+
+    const db = getDb();
+
+    try {
+      await db.runTransaction(async (transaction) => {
+        const referralCreditRef = db
+          .collection('referral_credits')
+          .doc(`${customerId}_${orderId}`);
+
+        const referralCreditSnap = await transaction.get(referralCreditRef);
+        if (referralCreditSnap.exists) {
+          console.log(
+            `[awardReferralCreditsOnOrderCompletion] Skip: already credited. customerId=${customerId} orderId=${orderId}`
+          );
+          return;
+        }
+
+        const customerRef = db.collection('users').doc(customerId);
+        const customerSnap = await transaction.get(customerRef);
+        if (!customerSnap.exists) {
+          console.log(
+            `[awardReferralCreditsOnOrderCompletion] Skip: customer not found. customerId=${customerId} orderId=${orderId}`
+          );
+          return;
+        }
+
+        const customer = customerSnap.data() || {};
+        const referredBy = String(customer.referredBy || '').trim();
+        const hasCompletedFirstOrder = customer.hasCompletedFirstOrder === true;
+
+        if (!referredBy || hasCompletedFirstOrder) {
+          console.log(
+            `[awardReferralCreditsOnOrderCompletion] Skip: not eligible (no referrer or already completed first order). customerId=${customerId} orderId=${orderId}`
+          );
+          return;
+        }
+
+        const pendingReferralRef = db.collection('pending_referrals').doc(customerId);
+        const pendingReferralSnap = await transaction.get(pendingReferralRef);
+        if (!pendingReferralSnap.exists) {
+          console.log(
+            `[awardReferralCreditsOnOrderCompletion] Skip: no pending referral record. customerId=${customerId} orderId=${orderId}`
+          );
+          return;
+        }
+
+        const pendingReferral = pendingReferralSnap.data() || {};
+        if (pendingReferral.isProcessed === true) {
+          console.log(
+            `[awardReferralCreditsOnOrderCompletion] Skip: pending referral already processed. customerId=${customerId} orderId=${orderId}`
+          );
+          return;
+        }
+
+        const referrerId = String(pendingReferral.referrerId || '').trim();
+        if (!referrerId) {
+          console.log(
+            `[awardReferralCreditsOnOrderCompletion] Skip: pending referral missing referrerId. customerId=${customerId} orderId=${orderId}`
+          );
+          return;
+        }
+
+        const settingsRef = db.collection('settings').doc('referral_amount');
+        const settingsSnap = await transaction.get(settingsRef);
+        const referralAmountRaw = settingsSnap.exists
+          ? settingsSnap.data()?.referralAmount
+          : null;
+        const referralAmountValue = Number(referralAmountRaw || 0);
+
+        if (!Number.isFinite(referralAmountValue) || referralAmountValue <= 0) {
+          console.log(
+            `[awardReferralCreditsOnOrderCompletion] Skip: invalid referralAmount. value=${referralAmountRaw} customerId=${customerId} orderId=${orderId}`
+          );
+          return;
+        }
+
+        const referrerRef = db.collection('users').doc(referrerId);
+        const referrerSnap = await transaction.get(referrerRef);
+        if (!referrerSnap.exists) {
+          console.log(
+            `[awardReferralCreditsOnOrderCompletion] Skip: referrer not found. referrerId=${referrerId} customerId=${customerId} orderId=${orderId}`
+          );
+          return;
+        }
+
+        const referrer = referrerSnap.data() || {};
+        const previousWalletAmount = Number(referrer.wallet_amount || 0);
+        const newWalletAmount = previousWalletAmount + referralAmountValue;
+
+        const customerName = `${String(customer.firstName || '').trim()} ${String(
+          customer.lastName || ''
+        ).trim()}`.trim();
+        const referrerName = `${String(referrer.firstName || '').trim()} ${String(
+          referrer.lastName || ''
+        ).trim()}`.trim();
+
+        // 1) Mark pending referral processed
+        transaction.update(pendingReferralRef, {
+          isProcessed: true,
+          status: 'earned',
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          processedOrderId: orderId,
+        });
+
+        // 2) Mark customer's first order completed
+        transaction.update(customerRef, {
+          hasCompletedFirstOrder: true,
+          firstOrderCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
+          firstOrderId: orderId,
+        });
+
+        // 3) Increment referrer's wallet
+        transaction.update(referrerRef, {
+          wallet_amount: newWalletAmount,
+        });
+
+        // 4) Idempotency record (and UI data)
+        transaction.set(referralCreditRef, {
+          customerId: customerId,
+          referrerId: referrerId,
+          orderId: orderId,
+          amount: referralAmountValue,
+          type: 'referral_bonus',
+          status: 'completed',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          customerName: customerName,
+          referrerName: referrerName,
+        });
+
+        // 5) Audit record
+        const auditRef = db.collection('referral_transactions').doc();
+        transaction.set(auditRef, {
+          id: auditRef.id,
+          referrerId: referrerId,
+          customerId: customerId,
+          orderId: orderId,
+          amount: referralAmountValue,
+          type: 'referral_bonus',
+          status: 'completed',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          customerName: customerName,
+          referrerName: referrerName,
+          previousWalletAmount: previousWalletAmount,
+          newWalletAmount: newWalletAmount,
+        });
+
+        console.log(
+          `[awardReferralCreditsOnOrderCompletion] Success. referrerId=${referrerId} customerId=${customerId} orderId=${orderId} amount=${referralAmountValue}`
+        );
+      });
+    } catch (error) {
+      console.error(
+        `[awardReferralCreditsOnOrderCompletion] Error. customerId=${customerId} orderId=${orderId}:`,
+        error
+      );
+    }
+
+    return null;
+  });
 

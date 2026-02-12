@@ -1,10 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-import 'dart:io';
 import 'dart:async';
-import 'package:firebase_core/firebase_core.dart';
+
+// Avoid Dart record types here for compatibility with older SDKs.
+class _SendingDialogController {
+  final VoidCallback close;
+  final void Function(int seconds) setElapsedSeconds;
+  final void Function(String text) setStatus;
+  final void Function({required int sent, required int failed, required int total})
+      setCounts;
+
+  const _SendingDialogController({
+    required this.close,
+    required this.setElapsedSeconds,
+    required this.setStatus,
+    required this.setCounts,
+  });
+}
 
 class NotificationManagementPage extends StatefulWidget {
   const NotificationManagementPage({super.key});
@@ -33,6 +45,183 @@ class _NotificationManagementPageState
     'restaurants',
   ];
 
+  Future<void> _showErrorDialog({
+    required String title,
+    required Object error,
+  }) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: SelectableText(
+          error.toString(),
+          style: const TextStyle(color: Colors.red),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<_SendingDialogController> _showSendingDialog({
+    required String title,
+  }) async {
+    final elapsedSeconds = ValueNotifier<int>(0);
+    final statusText = ValueNotifier<String>('Sending...');
+    final sentCount = ValueNotifier<int?>(null);
+    final failedCount = ValueNotifier<int?>(null);
+    final totalUsers = ValueNotifier<int?>(null);
+
+    bool isOpen = true;
+
+    void close() {
+      if (!mounted || !isOpen) return;
+      isOpen = false;
+      Navigator.of(context, rootNavigator: true).pop();
+    }
+
+    void setElapsedSecondsValue(int seconds) {
+      if (!isOpen) return;
+      elapsedSeconds.value = seconds;
+    }
+
+    void setStatusValue(String text) {
+      if (!isOpen) return;
+      statusText.value = text;
+    }
+
+    void setCountsValue({required int sent, required int failed, required int total}) {
+      if (!isOpen) return;
+      sentCount.value = sent;
+      failedCount.value = failed;
+      totalUsers.value = total;
+    }
+
+    if (!mounted) {
+      return _SendingDialogController(
+        close: () {},
+        setElapsedSeconds: (_) {},
+        setStatus: (_) {},
+        setCounts: ({required sent, required failed, required total}) {},
+      );
+    }
+
+    // ignore: unawaited_futures
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 2),
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ValueListenableBuilder<String>(
+                              valueListenable: statusText,
+                              builder: (context, value, _) => Text(value),
+                            ),
+                            const SizedBox(height: 6),
+                            ValueListenableBuilder<int>(
+                              valueListenable: elapsedSeconds,
+                              builder: (context, value, _) => Text(
+                                'Elapsed: ${value}s',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            ValueListenableBuilder<int?>(
+                              valueListenable: sentCount,
+                              builder: (context, sent, _) {
+                                final failed = failedCount.value;
+                                final total = totalUsers.value;
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Sent: ${sent ?? '-'}',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                    Text(
+                                      'Failed: ${failed ?? '-'}',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                    Text(
+                                      'Total: ${total ?? '-'}',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ).whenComplete(() {
+      isOpen = false;
+      elapsedSeconds.dispose();
+      statusText.dispose();
+      sentCount.dispose();
+      failedCount.dispose();
+      totalUsers.dispose();
+    });
+
+    return _SendingDialogController(
+      close: close,
+      setElapsedSeconds: setElapsedSecondsValue,
+      setStatus: setStatusValue,
+      setCounts: setCountsValue,
+    );
+  }
+
   @override
   void dispose() {
     _titleController.dispose();
@@ -40,33 +229,6 @@ class _NotificationManagementPageState
     _imageUrlController.dispose();
     _deepLinkController.dispose();
     super.dispose();
-  }
-
-  Future<String> _getRegion() async {
-    try {
-      // Try to fetch region from Firestore settings
-      final regionDoc = await FirebaseFirestore.instance
-          .collection('settings')
-          .doc('cloudFunctionsRegion')
-          .get()
-          .timeout(const Duration(seconds: 5));
-
-      if (regionDoc.exists && regionDoc.data() != null) {
-        final region = regionDoc.data()!['region'] as String?;
-        if (region != null && region.isNotEmpty) {
-          print('[BroadcastNotification] Using region from Firestore settings: $region');
-          return region;
-        }
-      }
-    } catch (e) {
-      print('[BroadcastNotification] Error fetching region from Firestore: $e');
-      // Continue to fallback
-    }
-
-    // Fallback: Based on DEPLOY_NOW.md, database is in asia-southeast1
-    // Functions are typically deployed to the same region as the database
-    print('[BroadcastNotification] Using default region: us-central1');
-    return 'us-central1';
   }
 
   Future<void> _handleSendNotification() async {
@@ -120,28 +282,17 @@ class _NotificationManagementPageState
       _isSending = true;
     });
 
-    // Show loading indicator
-    if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-    }
+    final dialog = await _showSendingDialog(
+      title: 'Sending broadcast notification',
+    );
+    final stopwatch = Stopwatch()..start();
+    final tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      dialog.setElapsedSeconds(stopwatch.elapsed.inSeconds);
+    });
+    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? jobSub;
 
     try {
       // Get Firebase project ID
-      final projectId = Firebase.app().options.projectId;
-
-      // Get region dynamically from Firestore or use default
-      final region = await _getRegion();
-
-      // Construct Cloud Function URL
-      final functionUrl =
-          'https://$region-$projectId.cloudfunctions.net/sendBroadcastNotifications';
-
       // Build request payload
       final payload = <String, dynamic>{
         'title': _titleController.text.trim(),
@@ -162,106 +313,105 @@ class _NotificationManagementPageState
         payload['targetScreen'] = _targetScreen;
       }
 
-      print('[BroadcastNotification] Calling function URL: $functionUrl');
-      print('[BroadcastNotification] Payload: ${jsonEncode(payload)}');
+      // Best option: Firestore job + background Cloud Function processor.
+      // This avoids web fetch/CORS failures and request timeouts, and enables
+      // live progress updates in the UI.
+      final jobRef =
+          FirebaseFirestore.instance.collection('notification_jobs').doc();
+      await jobRef.set({
+        'kind': 'broadcast',
+        'payload': payload,
+        'status': 'queued',
+        'sentCount': 0,
+        'errorCount': 0,
+        'processedCount': 0,
+        'totalUsers': 0,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
 
-      // Call Cloud Function
-      final response = await http
-          .post(
-            Uri.parse(functionUrl),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(payload),
-          )
-          .timeout(const Duration(seconds: 60));
+      dialog.setStatus('Queued. Waiting for server...');
 
-      // Close loading indicator
-      if (mounted) {
-        Navigator.of(context).pop();
-      }
+      final done = Completer<void>();
+      jobSub = jobRef.snapshots().listen((snap) async {
+        final data = snap.data();
+        if (data == null) return;
+        final status = (data['status'] ?? 'queued').toString();
 
-      print('[BroadcastNotification] Response status code: ${response.statusCode}');
+        final sent = (data['sentCount'] is num)
+            ? (data['sentCount'] as num).toInt()
+            : int.tryParse(data['sentCount']?.toString() ?? '') ?? 0;
+        final failed = (data['errorCount'] is num)
+            ? (data['errorCount'] as num).toInt()
+            : int.tryParse(data['errorCount']?.toString() ?? '') ?? 0;
+        final total = (data['totalUsers'] is num)
+            ? (data['totalUsers'] as num).toInt()
+            : int.tryParse(data['totalUsers']?.toString() ?? '') ?? 0;
 
-      if (response.statusCode == 200) {
-        try {
-          final responseData =
-              jsonDecode(response.body) as Map<String, dynamic>;
-          final sentCount = responseData['sentCount'] ?? 0;
-          final errorCount = responseData['errorCount'] ?? 0;
-          final totalUsers = responseData['totalUsers'] ?? 0;
+        dialog.setCounts(sent: sent, failed: failed, total: total);
+        dialog.setStatus(status.replaceAll('_', ' '));
 
-          print(
-              '[BroadcastNotification] Response: sentCount=$sentCount, errorCount=$errorCount, totalUsers=$totalUsers');
-
-          if (errorCount > 0 && responseData.containsKey('errors')) {
-            print(
-                '[BroadcastNotification] First 10 errors: ${responseData['errors']}');
-          }
+        if (status == 'completed') {
+          if (!done.isCompleted) done.complete();
 
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                    'Notifications sent successfully! Sent to $sentCount/$totalUsers users${errorCount > 0 ? ' ($errorCount failed)' : ''}'),
+                  'Notifications sent successfully! Sent to $sent/$total'
+                  ' users${failed > 0 ? ' ($failed failed)' : ''}',
+                ),
                 backgroundColor: Colors.green,
                 duration: const Duration(seconds: 4),
               ),
             );
 
-            // Clear form after successful send
             _titleController.clear();
             _bodyController.clear();
             _imageUrlController.clear();
             _deepLinkController.clear();
-            setState(() {
-              _targetScreen = null;
-            });
+            setState(() => _targetScreen = null);
           }
-        } catch (parseError) {
-          print(
-              '[BroadcastNotification] Error parsing response JSON: $parseError');
-          print('[BroadcastNotification] Response body: ${response.body}');
-          throw Exception('Failed to parse response: $parseError');
+          return;
         }
-      } else {
-        print('[BroadcastNotification] HTTP error status: ${response.statusCode}');
-        print('[BroadcastNotification] Response body: ${response.body}');
-        try {
-          final errorData = jsonDecode(response.body);
-          throw Exception(
-              errorData['error'] ?? 'Failed to send notifications');
-        } catch (parseError) {
-          throw Exception('HTTP ${response.statusCode}: ${response.body}');
-        }
-      }
-    } catch (e) {
-      // Close loading indicator if still open
-      if (mounted) {
-        Navigator.of(context).pop();
-      }
 
+        if (status == 'failed') {
+          if (!done.isCompleted) done.complete();
+          final error = data['error'] ?? 'Unknown error';
+          await _showErrorDialog(
+            title: 'Failed to send notifications',
+            error: error,
+          );
+        }
+      });
+
+      await done.future.timeout(const Duration(minutes: 10));
+
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      dialog.close();
+    } catch (e) {
       // Enhanced error logging
       print('[BroadcastNotification] HTTP Error: $e');
       print('[BroadcastNotification] Error type: ${e.runtimeType}');
 
       if (e is TimeoutException) {
-        print('[BroadcastNotification] Request timed out after 60 seconds');
-      } else if (e is SocketException) {
-        print(
-            '[BroadcastNotification] Network connection error: ${e.message}');
-      } else if (e is HttpException) {
-        print('[BroadcastNotification] HTTP exception: ${e.message}');
+        print('[BroadcastNotification] Request timed out');
       }
 
+      dialog.setStatus('Failed.');
+      tick.cancel();
+      stopwatch.stop();
+      dialog.close();
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to send notifications: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-          ),
+        await _showErrorDialog(
+          title: 'Failed to send notifications',
+          error: e,
         );
       }
     } finally {
+      tick.cancel();
+      stopwatch.stop();
+      await jobSub?.cancel();
       if (mounted) {
         setState(() {
           _isSending = false;

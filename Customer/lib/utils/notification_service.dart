@@ -4,6 +4,7 @@ import 'dart:developer';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -11,6 +12,7 @@ import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/chat_screen/chat_screen.dart';
+import 'package:foodie_customer/firebase_options.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/home/HomeScreen.dart';
@@ -35,6 +37,7 @@ void _debugLog(String location, String message, Map<String, dynamic> data,
 }
 // #endregion
 
+@pragma('vm:entry-point')
 Future<void> firebaseMessageBackgroundHandle(RemoteMessage message) async {
   // TEMP DIAGNOSTIC: full FCM payload in background handler
   debugPrint(
@@ -51,6 +54,22 @@ Future<void> firebaseMessageBackgroundHandle(RemoteMessage message) async {
   debugPrint('[FCM_TRACE] data keys=${message.data.keys.toList()}');
   debugPrint('[TOKEN_DEBUG] Customer: firebaseMessageBackgroundHandle received messageId=${message.messageId} dataKeys=${message.data.keys.toList()}');
   log("BackGround Message :: ${message.messageId}");
+
+  // Ensure Firebase is available in the background isolate.
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    }
+  } catch (_) {
+    // Best-effort; background work should stay minimal.
+  }
+
+  // Android: prefer system-handled notifications via FCM `notification` payload.
+  // Avoid flutter_local_notifications in background to reduce native crashes.
+  if (Platform.isAndroid) return;
+
   await NotificationService.showBackgroundNotification(message);
 }
 
@@ -226,8 +245,18 @@ class NotificationService {
         sound: true,
       );
 
-      // Always initialize local notifications and FCM listeners so pop-ups
-      // work. If permission denied, system may not display, but we stay ready.
+      // Android: do not use flutter_local_notifications to avoid native
+      // "Too many inflation attempts" SIGABRT crashes on some devices.
+      // Rely on system-handled FCM notifications + in-app UI instead.
+      if (Platform.isAndroid) {
+        setupInteractedMessage();
+        _isInitialized = true;
+        debugPrint(
+            '[FCM_DEBUG] Android: skipped flutter_local_notifications init');
+        return;
+      }
+
+      // iOS (and other platforms): initialize local notifications for pop-ups.
       const AndroidInitializationSettings initializationSettingsAndroid =
           AndroidInitializationSettings('@mipmap/ic_launcher');
       const iosInitializationSettings = DarwinInitializationSettings();
@@ -324,6 +353,8 @@ class NotificationService {
     RemoteMessage message,
   ) async {
     final service = NotificationService.instance;
+    // Android: do not use flutter_local_notifications; rely on system FCM UI.
+    if (Platform.isAndroid) return;
     debugPrint(
         '[FCM_DEBUG] showBackgroundNotification dataKeys=${message.data.keys.toList()}');
     const AndroidInitializationSettings initializationSettingsAndroid =
@@ -758,6 +789,9 @@ class NotificationService {
     required String payload,
   }) async {
     try {
+      // Android: disable local notifications to avoid RemoteViews inflation
+      // crashes ("Too many inflation attempts").
+      if (Platform.isAndroid) return;
       final AndroidNotificationDetails notificationDetails =
           AndroidNotificationDetails(
         channelId,
