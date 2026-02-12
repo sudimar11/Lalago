@@ -1,0 +1,1 @@
+{"flutter":{"platforms":{"ios":{"default":{"projectId":"lalago-v2","appId":"1:916084329397:ios:6dc7606795acb2a01c27fc","uploadDebugSymbols":true,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"lalago-v2","configurations":{"ios":"1:916084329397:ios:6dc7606795acb2a01c27fc"}}}}}}

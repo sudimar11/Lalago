@@ -1,0 +1,14 @@
+{
+  "firestore": {
+    "rules": "../firestore.rules",
+    "indexes": "../firestore.indexes.json"
+  },
+  "functions": {
+    "source": ".",
+    "predeploy": [],
+    "runtime": "nodejs20"
+  },
+  "storage": {
+    "rules": "../storage.rules"
+  }
+}

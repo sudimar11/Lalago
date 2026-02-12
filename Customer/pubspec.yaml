@@ -1,0 +1,137 @@
+name: foodie_customer
+description: A new Flutter application.
+
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
+version: 3.2.7+37
+
+environment:
+  sdk: ">=3.0.5 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.2.2
+  firebase_core: ^3.15.2
+  firebase_crashlytics: ^4.3.10
+  firebase_auth: ^5.7.0
+  cloud_firestore: ^5.6.12
+  firebase_storage: ^12.4.10
+  firebase_messaging: ^15.2.10
+  cloud_functions: ^5.6.2
+  flutter_local_notifications: ^18.0.1
+  flutter_facebook_auth: ^7.0.1
+  google_sign_in: ^6.1.0
+  geoflutterfire3: ^1.0.1
+  geolocator: ^10.1.1
+  geocoding: ^3.0.0
+  permission_handler: ^11.1.0
+  image_picker: ^1.0.5
+  url_launcher: ^6.2.2
+  progress_dialog_null_safe: ^3.0.0
+  intl: ^0.20.2
+  cached_network_image: ^3.3.1
+  path_provider: ^2.1.1
+  photo_view: ^0.15.0
+  video_player: ^2.10.0
+  smooth_page_indicator: ^1.1.0
+  intl_phone_number_input: ^0.7.4
+  pin_code_fields: ^8.0.1
+  mime: ^1.0.4
+  moor_flutter:
+  path: ^1.8.3
+  font_awesome_flutter: ^10.6.0
+  flutter_polyline_points: ^2.0.0
+  percent_indicator: ^4.2.3
+  lottie: ^3.1.2
+  flutter_image_compress: ^2.3.0
+  flutter_sound: ^9.28.0
+  sign_in_with_apple: ^6.1.2
+  cupertino_icons: ^1.0.6
+  connectivity_plus: ^4.0.1
+  dotted_border: ^2.1.0
+  flutter_rating_bar: ^4.0.1
+  google_maps_flutter: ^2.12.3
+  google_maps_place_picker_mb: ^3.1.2
+  google_api_headers: ^2.0.3
+  #share: ^2.0.4
+  flutter_staggered_grid_view: ^0.7.0
+  clipboard: ^0.1.3
+  location: ^7.0.0
+  esc_pos_utils: ^1.1.0
+  flutter_widget_from_html: ^0.15.2
+  scroll_to_index: ^3.0.1
+  rect_getter: ^1.1.0
+  story_view: ^0.16.0
+  share_plus: ^7.2.1
+  paginate_firestore_plus: ^1.0.2+3
+  bottom_picker: ^2.8.0
+  mailer: ^6.0.1
+  map_launcher: ^3.1.0
+  audioplayers: ^6.1.0
+  carousel_slider: ^5.0.0
+  flutter_background_service: ^5.0.5
+  flutter_background_service_android: ^6.2.2
+  # firebase_app_check: ^0.2.2+7  # Temporarily disabled: AppCheckCore version conflict with google_sign_in_ios
+  # TODO: Re-enable when firebase_app_check supports AppCheckCore 11.0+
+  hugeicons: ^1.1.1
+  shimmer: ^3.0.0
+  curved_navigation_bar: ^1.0.3
+
+dependency_overrides:
+  #webview_flutter: ^4.4.2
+  google_sign_in_ios: 5.7.6
+  package_info_plus: ^8.1.4
+  package_info_plus_platform_interface: ^3.0.0
+  uuid: ^4.0.0
+  http: ^1.1.0
+
+dev_dependencies:
+  flutter_launcher_icons: ^0.11.0
+
+flutter_icons:
+  image_path: assets/app_logo.png
+  ios: true
+  remove_alpha_ios: true
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/images/place_holder_offer.png
+    - assets/fonts/
+    - assets/json file/
+    - assets/
+    - assets/Varieties/
+    - assets/images/rate_yellow.png
+    - assets/pis.jpg
+    - assets/drivericon.png
+    - assets/pisme.jpg
+    - assets/images/sadaqa.png
+    - assets/images/1-2.jpg
+    - assets/slides/1.png
+    - assets/slides/2.png
+    - assets/slides/3.png
+    - assets/slides/4.png
+    - assets/lost.png
+    - assets/icons/
+
+  fonts:
+    - family: Poppinsb
+      fonts:
+        - asset: assets/fonts/Poppins-Bold.ttf
+
+    - family: Poppinsl
+      fonts:
+        - asset: assets/fonts/Poppins-Light.ttf
+
+    - family: Poppinsm
+      fonts:
+        - asset: assets/fonts/Poppins-Medium.ttf
+
+    - family: Poppinsr
+      fonts:
+        - asset: assets/fonts/Poppins-Regular.ttf
+
+    - family: Poppinssb
+      fonts:
+        - asset: assets/fonts/Poppins-SemiBold.ttf

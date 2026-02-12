@@ -1,0 +1,5 @@
+;/*FB_PKG_DELIM*/
+
+__d("CometStoryAggregatedCollaboratorsDialogQuery_facebookRelayOperation",[],(function(a,b,c,d,e,f){e.exports="8511236818931259"}),null);
+__d("CometStoryAggregatedCollaboratorsDialogQuery$Parameters",["CometStoryAggregatedCollaboratorsDialogQuery_facebookRelayOperation"],(function(a,b,c,d,e,f){"use strict";a={kind:"PreloadableConcreteRequest",params:{id:b("CometStoryAggregatedCollaboratorsDialogQuery_facebookRelayOperation"),metadata:{},name:"CometStoryAggregatedCollaboratorsDialogQuery",operationKind:"query",text:null}};e.exports=a}),null);
+__d("CometStoryAggregatedCollaboratorsDialog.entrypoint",["CometStoryAggregatedCollaboratorsDialogQuery$Parameters","JSResourceForInteraction","WebPixelRatio"],(function(a,b,c,d,e,f,g){"use strict";a={getPreloadProps:function(a){a=a.storyID;return{queries:{queryReference:{options:{fetchPolicy:"network-only"},parameters:b("CometStoryAggregatedCollaboratorsDialogQuery$Parameters"),variables:{id:a,scale:d("WebPixelRatio").get()}}}}},root:c("JSResourceForInteraction")("CometStoryAggregatedCollaboratorsDialog.react").__setRef("CometStoryAggregatedCollaboratorsDialog.entrypoint")};g["default"]=a}),98);

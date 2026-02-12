@@ -1,0 +1,12 @@
+#include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
+#include "Generated.xcconfig"
+CODE_SIGNING_ALLOWED = YES
+CODE_SIGNING_REQUIRED = YES
+CODE_SIGN_IDENTITY = "Apple Development"
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM = JU3JP76JGQ
+PRODUCT_BUNDLE_IDENTIFIER = com.lalago.customer.ios
+CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements
+CODE_SIGNING_ALLOWED[sdk=iphonesimulator*] = YES
+CODE_SIGNING_REQUIRED[sdk=iphonesimulator*] = YES
+CODE_SIGN_IDENTITY[sdk=iphonesimulator*] = "Apple Development"
