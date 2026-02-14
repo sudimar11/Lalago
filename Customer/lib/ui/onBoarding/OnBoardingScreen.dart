@@ -5,6 +5,7 @@ import 'package:smooth_page_indicator/smooth_page_indicator.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 
 class OnBoardingScreen extends StatefulWidget {
   @override
@@ -82,7 +83,7 @@ class _OnBoardingScreenState extends State<OnBoardingScreen> {
                         ),
                         onPressed: () {
                           setFinishedOnBoarding();
-                          pushReplacement(context, AuthScreen());
+                          pushReplacement(context, ContainerScreen());
                         },
                       )))
               //     onPressed: () {
@@ -145,7 +146,7 @@ class _OnBoardingScreenState extends State<OnBoardingScreen> {
                   child: InkWell(
                       onTap: () {
                         setFinishedOnBoarding();
-                        pushReplacement(context, AuthScreen());
+                        pushReplacement(context, ContainerScreen());
                       },
                       child: Text(
                         "SKIP",

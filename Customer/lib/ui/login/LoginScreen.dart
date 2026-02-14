@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:foodie_customer/common/apple_signin_placeholder.dart';
 import 'package:foodie_customer/common/common_elevated_button.dart';
 import 'package:foodie_customer/common/common_image.dart';
 import 'package:foodie_customer/common/common_text_field.dart';
@@ -237,7 +238,7 @@ class _LoginScreen extends State<LoginScreen> {
       future: SignInWithApple.isAvailable(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const SizedBox.shrink();
+          return buildAppleSignInPlaceholder(context);
         }
         if (snapshot.hasData && snapshot.data == true) {
           return SizedBox(

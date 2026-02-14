@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/helper.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
@@ -460,82 +459,7 @@ class _ReferralScreenState extends State<ReferralScreen> {
                           ),
                         ),
                       ),
-                      SizedBox(width: 10),
-                      // Share Button
-                      GestureDetector(
-                        onTap: () async {
-                          final referralCode = user.referralCode;
-                          if (referralCode != null &&
-                              referralCode.isNotEmpty &&
-                              referralCode != "Loading...") {
-                            await showProgress(
-                                context, "Please wait", false);
-                            share(user);
-                          }
-                        },
-                        child: Container(
-                          padding: EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Color(COLOR_PRIMARY),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(
-                            Icons.share,
-                            color: Colors.white,
-                            size: 24,
-                          ),
-                        ),
-                      ),
                     ],
-                  ),
-                  SizedBox(height: 30),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 40.0),
-                    child: SizedBox(
-                      width: MediaQuery.of(context).size.width,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Color(COLOR_PRIMARY),
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(25.0),
-                            side: BorderSide(
-                              color: Color(COLOR_PRIMARY),
-                            ),
-                          ),
-                          elevation: 3,
-                        ),
-                        onPressed: () async {
-                          final referralCode = user.referralCode;
-                          if (referralCode != null &&
-                              referralCode.isNotEmpty &&
-                              referralCode != "Loading...") {
-                            await showProgress(
-                                context, "Please wait", false);
-                            share(user);
-                          }
-                        },
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.share,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                            SizedBox(width: 8),
-                            Text(
-                              'Share Referral Code',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
                   ),
                 ],
               )
@@ -546,32 +470,4 @@ class _ReferralScreenState extends State<ReferralScreen> {
     );
   }
 
-  Future<void> share(User user) async {
-    hideProgress();
-
-    final referralCode = user.referralCode ?? "";
-    final rewardAmount = amountShow(
-        amount: user.referralRewardAmount ?? referralAmount.toString());
-
-    if (referralCode.isEmpty) {
-      // Show error message if no referral code
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content:
-              Text("Referral code not available yet. Please try again."),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    await Share.share(
-      "🍽️ Hey! I've been loving LalaGo for food delivery and wanted to share it with you!\n\n"
-      "Use my referral code: $referralCode\n\n"
-      "💰 You'll get $rewardAmount in credits when you complete your first order!\n"
-      "🎉 I'll also get $rewardAmount when you order successfully.\n\n"
-      "Download LalaGo and start enjoying great food delivery! 🚀",
-      subject: 'Join me on LalaGo - Food Delivery App',
-    );
-  }
 }

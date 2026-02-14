@@ -771,10 +771,11 @@ exports.processDriverLocationLifecycle = functions
 
                 await admin.messaging().send(message);
 
-                // Update status to "In Transit" if not already
+                // Update status to "In Transit" if not already; set pickedUpAt for pipeline metrics
                 const updates = {
                   'customerLifecycleNotifs.leftRestaurantAt':
                     admin.firestore.FieldValue.serverTimestamp(),
+                  pickedUpAt: admin.firestore.FieldValue.serverTimestamp(),
                 };
                 if (orderStatus !== 'In Transit') {
                   updates.status = 'In Transit';

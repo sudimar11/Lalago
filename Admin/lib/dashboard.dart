@@ -23,6 +23,7 @@ import 'package:brgy/active_customers_page.dart';
 import 'package:brgy/top_buyers_today_page.dart';
 import 'package:brgy/customer_repeat_rate_page.dart';
 import 'package:brgy/riders_orders_weekly_page.dart';
+import 'package:brgy/rider_performance_page.dart';
 import 'package:brgy/top_restaurants_orders_today_page.dart';
 import 'package:brgy/restaurants_zero_orders_today_page.dart';
 import 'package:brgy/restaurant_orders_weekly_page.dart';
@@ -68,12 +69,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final Set<String> _seenOrderIds = <String>{};
   final DateTime _startedAtUtc = DateTime.now().toUtc();
 
-  // List of widgets for each core feature screen
-  final List<Widget> _screens = [
-    DashboardBlankPage(),
-    RecentOrdersPage(), // Recent Orders only (no tabs)
-    const GroupChatScreen(),
-  ];
+  late final List<Widget> _screens;
 
   // Handle bottom navigation bar item taps
   void _onItemTapped(int index) {
@@ -82,9 +78,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  void _switchToOrdersTab() {
+    setState(() {
+      _selectedIndex = 1;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    _screens = [
+      DashboardBlankPage(onNavigateToOrders: _switchToOrdersTab),
+      RecentOrdersPage(),
+      const GroupChatScreen(),
+    ];
     unawaited(OrderSoundService.init());
     _subscribeNewOrders();
   }
@@ -330,6 +337,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 }
 
 class DashboardBlankPage extends StatefulWidget {
+  const DashboardBlankPage({super.key, this.onNavigateToOrders});
+
+  final VoidCallback? onNavigateToOrders;
+
   @override
   State<DashboardBlankPage> createState() => _DashboardBlankPageState();
 }
@@ -510,6 +521,11 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             onTap: () => push(const RidersOrdersWeeklyPage()),
           ),
           _DashboardNavItem(
+            icon: Icons.bar_chart,
+            label: 'Rider performance',
+            onTap: () => push(const RiderPerformancePage()),
+          ),
+          _DashboardNavItem(
             icon: Icons.report_problem,
             label: 'Driver reports',
             onTap: () => push(const DriverReportsPage()),
@@ -681,6 +697,7 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
                   avgDeliveryFuture: _avgDeliveryFuture,
                   unpublishedFoodsFuture: _unpublishedFoodsFuture,
                   onNavigate: push,
+                  onNavigateToOrders: widget.onNavigateToOrders,
                 ),
                 const SizedBox(height: 20),
                 _DashboardGroup(
@@ -928,17 +945,19 @@ class _AvgDeliveryKpiData {
 }
 
 class _AtAGlanceSection extends StatelessWidget {
-  final int columns;
-  final Future<_AvgDeliveryKpiData> avgDeliveryFuture;
-  final Future<int> unpublishedFoodsFuture;
-  final void Function(Widget page) onNavigate;
-
   const _AtAGlanceSection({
     required this.columns,
     required this.avgDeliveryFuture,
     required this.unpublishedFoodsFuture,
     required this.onNavigate,
+    this.onNavigateToOrders,
   });
+
+  final int columns;
+  final Future<_AvgDeliveryKpiData> avgDeliveryFuture;
+  final Future<int> unpublishedFoodsFuture;
+  final void Function(Widget page) onNavigate;
+  final VoidCallback? onNavigateToOrders;
 
   @override
   Widget build(BuildContext context) {
@@ -1031,6 +1050,7 @@ class _AtAGlanceSection extends StatelessWidget {
                 int pendingToday = 0;
                 int unassignedNearReady = 0;
                 int stuckDriverPending = 0;
+                int waitingAccept = 0;
                 final deliveredRiders = <String>{};
                 final ordersByHour = <int, int>{};
                 for (int i = 0; i < 24; i++) {
@@ -1168,6 +1188,14 @@ class _AtAGlanceSection extends StatelessWidget {
                             ),
                           );
                         }
+                      }
+                    }
+
+                    if (normalizedStatus == 'Order Placed') {
+                      final created = asDateTime(data['createdAt']);
+                      if (created != null &&
+                          now.difference(created).inMinutes >= 5) {
+                        waitingAccept++;
                       }
                     }
 
@@ -1505,6 +1533,17 @@ class _AtAGlanceSection extends StatelessWidget {
 
                         return Column(
                           children: [
+                            _DeliveryPipelineCard(
+                              ordersToday: orders.cast<
+                                  QueryDocumentSnapshot<Map<String, dynamic>>>(),
+                              waitingAccept: waitingAccept,
+                              unassignedNearReady: unassignedNearReady,
+                              stuckDriverPending: stuckDriverPending,
+                              onNavigate: onNavigate,
+                              onNavigateToOrders: onNavigateToOrders,
+                              asDateTime: asDateTime,
+                            ),
+                            const SizedBox(height: 12),
                             _KpiGrid(
                               columns: _KpiGrid.columnsForDashboard(columns),
                               children: kpiChildren,
@@ -1704,6 +1743,240 @@ String _vendorNameFromOrder(Map<String, dynamic> data) {
     if (s.isNotEmpty) return s;
   }
   return '';
+}
+
+/// Stage averages (today) for delivery pipeline. -1 means no data.
+class _PipelineStageAverages {
+  const _PipelineStageAverages({
+    required this.acceptMinutes,
+    required this.assignMinutes,
+    required this.atRestaurantMinutes,
+    required this.transitMinutes,
+  });
+
+  final int acceptMinutes;
+  final int assignMinutes;
+  final int atRestaurantMinutes;
+  final int transitMinutes;
+
+  int get slowestIndex {
+    final list = [acceptMinutes, assignMinutes, atRestaurantMinutes, transitMinutes];
+    int max = -1;
+    int idx = -1;
+    for (int i = 0; i < list.length; i++) {
+      if (list[i] > max) {
+        max = list[i];
+        idx = i;
+      }
+    }
+    return idx;
+  }
+}
+
+_PipelineStageAverages _computePipelineStageAverages(
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
+  DateTime? Function(dynamic) asDateTime,
+) {
+  int acceptSum = 0, acceptCount = 0;
+  int assignSum = 0, assignCount = 0;
+  int atRestaurantSum = 0, atRestaurantCount = 0;
+  int transitSum = 0, transitCount = 0;
+
+  for (final doc in orders) {
+    final data = doc.data();
+    final status = (data['status'] ?? '').toString().toLowerCase();
+    if (status == 'order rejected' || status == 'driver rejected') continue;
+
+    final createdAt = asDateTime(data['createdAt']);
+    final acceptedAt = asDateTime(data['acceptedAt']);
+    final assignedAt = asDateTime(data['assignedAt']);
+    final pickedUpAt = asDateTime(data['pickedUpAt']);
+    final deliveredAt = asDateTime(data['deliveredAt']);
+
+    if (createdAt != null && acceptedAt != null && acceptedAt.isAfter(createdAt)) {
+      final min = acceptedAt.difference(createdAt).inMinutes;
+      if (min >= 0) {
+        acceptSum += min;
+        acceptCount++;
+      }
+    }
+    if (acceptedAt != null && assignedAt != null && assignedAt.isAfter(acceptedAt)) {
+      final min = assignedAt.difference(acceptedAt).inMinutes;
+      if (min >= 0) {
+        assignSum += min;
+        assignCount++;
+      }
+    }
+    if (assignedAt != null && pickedUpAt != null && pickedUpAt.isAfter(assignedAt)) {
+      final min = pickedUpAt.difference(assignedAt).inMinutes;
+      if (min >= 0) {
+        atRestaurantSum += min;
+        atRestaurantCount++;
+      }
+    }
+    if (pickedUpAt != null && deliveredAt != null && deliveredAt.isAfter(pickedUpAt)) {
+      final min = deliveredAt.difference(pickedUpAt).inMinutes;
+      if (min >= 0) {
+        transitSum += min;
+        transitCount++;
+      }
+    }
+  }
+
+  return _PipelineStageAverages(
+    acceptMinutes: acceptCount == 0 ? -1 : (acceptSum / acceptCount).round(),
+    assignMinutes: assignCount == 0 ? -1 : (assignSum / assignCount).round(),
+    atRestaurantMinutes: atRestaurantCount == 0
+        ? -1
+        : (atRestaurantSum / atRestaurantCount).round(),
+    transitMinutes: transitCount == 0 ? -1 : (transitSum / transitCount).round(),
+  );
+}
+
+class _DeliveryPipelineCard extends StatelessWidget {
+  const _DeliveryPipelineCard({
+    required this.ordersToday,
+    required this.waitingAccept,
+    required this.unassignedNearReady,
+    required this.stuckDriverPending,
+    required this.onNavigate,
+    required this.asDateTime,
+    this.onNavigateToOrders,
+  });
+
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> ordersToday;
+  final int waitingAccept;
+  final int unassignedNearReady;
+  final int stuckDriverPending;
+  final void Function(Widget page) onNavigate;
+  final DateTime? Function(dynamic) asDateTime;
+  final VoidCallback? onNavigateToOrders;
+
+  static String _formatStageMinutes(int minutes) {
+    if (minutes < 0) return '—';
+    if (minutes < 60) return '${minutes}m';
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    return m == 0 ? '${h}h' : '${h}h ${m}m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final averages =
+        _computePipelineStageAverages(ordersToday, asDateTime);
+    final slowest = averages.slowestIndex;
+    const labels = ['Accept', 'Assign', 'At restaurant', 'Transit'];
+    final values = [
+      averages.acceptMinutes,
+      averages.assignMinutes,
+      averages.atRestaurantMinutes,
+      averages.transitMinutes,
+    ];
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.timeline,
+                    color: theme.colorScheme.primary, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Delivery pipeline',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: List.generate(4, (i) {
+                    final isSlowest = i == slowest && values[i] >= 0;
+                    return InkWell(
+                      onTap: onNavigateToOrders,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isSlowest
+                              ? Colors.orange.withValues(alpha: 0.15)
+                              : theme.colorScheme.surfaceContainerHighest
+                                  .withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(8),
+                          border: isSlowest
+                              ? Border.all(color: Colors.orange, width: 1.5)
+                              : null,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              labels[i],
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                fontWeight:
+                                    isSlowest ? FontWeight.w700 : null,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _formatStageMinutes(values[i]),
+                              style: theme.textTheme.labelLarge?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: isSlowest ? Colors.orange : null,
+                              ),
+                            ),
+                            if (isSlowest) ...[
+                              const SizedBox(width: 4),
+                              Text(
+                                'Slowest',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: Colors.orange,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '$waitingAccept waiting accept · '
+                    '$unassignedNearReady unassigned · '
+                    '$stuckDriverPending stuck',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (onNavigateToOrders != null)
+                  TextButton(
+                    onPressed: onNavigateToOrders,
+                    child: const Text('View orders'),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _AtRiskOrdersCard extends StatelessWidget {

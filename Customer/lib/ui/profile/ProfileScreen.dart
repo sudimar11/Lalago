@@ -615,36 +615,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             }
           },
         ),
-        CupertinoActionSheetAction(
-          child: Text("Take a picture"),
-          onPressed: () async {
-            print('🔄 DEBUG: Camera option selected');
-            Navigator.pop(context);
-            await Future.delayed(const Duration(milliseconds: 300));
-            if (!mounted) return;
-            var status = await Permission.camera.status;
-            if (!status.isGranted) {
-              status = await Permission.camera.request();
-            }
-            if (!status.isGranted) return;
-            if (!mounted) return;
-            try {
-              XFile? image =
-                  await _imagePicker.pickImage(source: ImageSource.camera);
-              if (!mounted) return;
-              if (image != null) {
-                print('🔄 DEBUG: Image captured from camera: ${image.path}');
-                await _imagePicked(File(image.path));
-              } else {
-                print('❌ DEBUG: No image captured from camera');
-              }
-              if (!mounted) return;
-              setState(() {});
-            } catch (e, s) {
-              print('ProfileScreen camera picker: $e $s');
-            }
-          },
-        ),
       ],
       cancelButton: CupertinoActionSheetAction(
         child: Text('Cancel'),

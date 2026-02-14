@@ -3,7 +3,6 @@ import 'package:dotted_border/dotted_border.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/services/helper.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
@@ -511,22 +510,6 @@ class _ReferralScreenState extends State<ReferralScreen> {
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _shareReferralCode(referralCode),
-                  icon: const Icon(Icons.share),
-                  label: Text('Share'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                ),
-              ),
             ],
           ),
         ],
@@ -732,17 +715,6 @@ class _ReferralScreenState extends State<ReferralScreen> {
         ),
       );
     });
-  }
-
-  void _shareReferralCode(String referralCode) {
-    final shareText =
-        'Join me on our food delivery app using my referral code: $referralCode and get special offers on your first order!'
-            ;
-
-    Share.share(
-      shareText,
-      subject: 'Join me on our food delivery app!',
-    );
   }
 
   Widget _buildStatisticsSection(ReferralStats stats) {

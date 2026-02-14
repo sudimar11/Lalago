@@ -1200,89 +1200,60 @@ class _ChatScreensState extends State<ChatScreens> {
   }
 
   _onCameraClick() {
-    final action = CupertinoActionSheet(
-      message: Text(
-        'sendMedia',
-        style: TextStyle(fontSize: 15.0),
+    if (!mounted) return;
+    final isTablet =
+        MediaQuery.of(context).size.shortestSide >= 600;
+    final isRecordVideoAvailable = !isTablet;
+
+    final List<Widget> actions = <Widget>[
+      CupertinoActionSheetAction(
+        child: Text("Choose image from gallery"),
+        isDefaultAction: false,
+        onPressed: () async {
+          Navigator.pop(context);
+          await Future.delayed(const Duration(milliseconds: 300));
+          if (!mounted) return;
+          try {
+            XFile? image =
+                await _imagePicker.pickImage(source: ImageSource.gallery);
+            if (!mounted) return;
+            if (image != null) {
+              final compressed =
+                  await _compressImage(File(image.path));
+              Url url = await FireStoreUtils()
+                  .uploadChatImageToFireStorage(
+                      compressed ?? File(image.path), context);
+              _sendMessage('', url, '', 'image');
+            }
+          } catch (e, s) {
+            log('ChatScreen gallery image picker: $e $s');
+          }
+        },
       ),
-      actions: <Widget>[
-        CupertinoActionSheetAction(
-          child: Text("Choose image from gallery"),
-          isDefaultAction: false,
-          onPressed: () async {
-            Navigator.pop(context);
-            await Future.delayed(const Duration(milliseconds: 300));
+      CupertinoActionSheetAction(
+        child: Text("Choose video from gallery"),
+        isDefaultAction: false,
+        onPressed: () async {
+          Navigator.pop(context);
+          await Future.delayed(const Duration(milliseconds: 300));
+          if (!mounted) return;
+          try {
+            XFile? galleryVideo =
+                await _imagePicker.pickVideo(source: ImageSource.gallery);
             if (!mounted) return;
-            try {
-              XFile? image =
-                  await _imagePicker.pickImage(source: ImageSource.gallery);
-              if (!mounted) return;
-              if (image != null) {
-                final compressed =
-                    await _compressImage(File(image.path));
-                Url url = await FireStoreUtils()
-                    .uploadChatImageToFireStorage(
-                        compressed ?? File(image.path), context);
-                _sendMessage('', url, '', 'image');
-              }
-            } catch (e, s) {
-              log('ChatScreen gallery image picker: $e $s');
+            if (galleryVideo != null) {
+              ChatVideoContainer videoContainer = await FireStoreUtils()
+                  .uploadChatVideoToFireStorage(
+                      File(galleryVideo.path), context);
+              _sendMessage('', videoContainer.videoUrl,
+                  videoContainer.thumbnailUrl, 'video');
             }
-          },
-        ),
-        CupertinoActionSheetAction(
-          child: Text("Choose video from gallery"),
-          isDefaultAction: false,
-          onPressed: () async {
-            Navigator.pop(context);
-            await Future.delayed(const Duration(milliseconds: 300));
-            if (!mounted) return;
-            try {
-              XFile? galleryVideo =
-                  await _imagePicker.pickVideo(source: ImageSource.gallery);
-              if (!mounted) return;
-              if (galleryVideo != null) {
-                ChatVideoContainer videoContainer = await FireStoreUtils()
-                    .uploadChatVideoToFireStorage(
-                        File(galleryVideo.path), context);
-                _sendMessage('', videoContainer.videoUrl,
-                    videoContainer.thumbnailUrl, 'video');
-              }
-            } catch (e, s) {
-              log('ChatScreen gallery video picker: $e $s');
-            }
-          },
-        ),
-        CupertinoActionSheetAction(
-          child: Text("Take a picture"),
-          isDestructiveAction: false,
-          onPressed: () async {
-            Navigator.pop(context);
-            await Future.delayed(const Duration(milliseconds: 300));
-            if (!mounted) return;
-            var status = await Permission.camera.status;
-            if (!status.isGranted) {
-              status = await Permission.camera.request();
-            }
-            if (!status.isGranted) return;
-            if (!mounted) return;
-            try {
-              XFile? image =
-                  await _imagePicker.pickImage(source: ImageSource.camera);
-              if (!mounted) return;
-              if (image != null) {
-                final compressed =
-                    await _compressImage(File(image.path));
-                Url url = await FireStoreUtils()
-                    .uploadChatImageToFireStorage(
-                        compressed ?? File(image.path), context);
-                _sendMessage('', url, '', 'image');
-              }
-            } catch (e, s) {
-              log('ChatScreen camera picker: $e $s');
-            }
-          },
-        ),
+          } catch (e, s) {
+            log('ChatScreen gallery video picker: $e $s');
+          }
+        },
+      ),
+      if (isRecordVideoAvailable)
         CupertinoActionSheetAction(
           child: Text("Record video"),
           isDestructiveAction: false,
@@ -1312,7 +1283,26 @@ class _ChatScreensState extends State<ChatScreens> {
             }
           },
         )
-      ],
+      else
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+          child: Text(
+            'Video recording is not available on this device.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 15.0,
+              color: CupertinoColors.systemGrey,
+            ),
+          ),
+        ),
+    ];
+
+    final action = CupertinoActionSheet(
+      message: Text(
+        'sendMedia',
+        style: TextStyle(fontSize: 15.0),
+      ),
+      actions: actions,
       cancelButton: CupertinoActionSheetAction(
         child: Text(
           'Cancel',

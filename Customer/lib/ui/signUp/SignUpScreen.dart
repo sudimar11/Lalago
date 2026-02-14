@@ -25,6 +25,7 @@ import 'package:intl_phone_number_input/intl_phone_number_input.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
+import '../../common/apple_signin_placeholder.dart';
 import '../../common/common_elevated_button.dart';
 import '../../common/common_image.dart';
 import '../../resources/assets.dart';
@@ -387,33 +388,6 @@ class _SignUpState extends State<SignUpScreen> {
             }
           },
         ),
-        CupertinoActionSheetAction(
-          child: Text('Take a picture'),
-          isDestructiveAction: false,
-          onPressed: () async {
-            Navigator.pop(context);
-            await Future.delayed(const Duration(milliseconds: 300));
-            if (!mounted) return;
-            var status = await Permission.camera.status;
-            if (!status.isGranted) {
-              status = await Permission.camera.request();
-            }
-            if (!status.isGranted) return;
-            if (!mounted) return;
-            try {
-              XFile? image =
-                  await _imagePicker.pickImage(source: ImageSource.camera);
-              if (!mounted) return;
-              if (image != null) {
-                setState(() {
-                  _image = File(image.path);
-                });
-              }
-            } catch (e, s) {
-              log('SignUpScreen camera picker: $e $s');
-            }
-          },
-        )
       ],
       cancelButton: CupertinoActionSheetAction(
         child: Text('cancel'),
@@ -853,7 +827,7 @@ class _SignUpState extends State<SignUpScreen> {
           future: SignInWithApple.isAvailable(),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return const SizedBox.shrink();
+              return buildAppleSignInPlaceholder(context);
             }
             if (snapshot.hasData && snapshot.data == true) {
               return SizedBox(

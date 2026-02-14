@@ -536,6 +536,7 @@ class _ContainerScreen extends State<ContainerScreen> {
         // Update user location
         value.location = newLocation;
         value.rotation = locationData.heading;
+        value.locationUpdatedAt = Timestamp.now();
 
         // Write to Firestore
         await FireStoreUtils.updateCurrentUser(value);

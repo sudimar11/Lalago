@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/gift_cards_order_model.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
@@ -165,51 +164,17 @@ class _GiftCardHistoryListScreenState extends State<GiftCardHistoryListScreen> {
                                     height: 5,
                                   ),
                                   Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment: MainAxisAlignment.end,
                                     children: [
-                                      InkWell(
-                                        onTap: () {
-                                          share(giftCardOrderModel.giftCode.toString(), giftCardOrderModel.giftPin.toString(), giftCardOrderModel.message.toString(),
-                                              giftCardOrderModel.price.toString(), giftCardOrderModel.expireDate!);
-                                        },
-                                        child: Container(
-                                          decoration: BoxDecoration(
-                                            borderRadius: BorderRadius.all(Radius.circular(30)),
-                                            color: Color(COLOR_PRIMARY),
-                                          ),
-                                          child: Padding(
-                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              mainAxisAlignment: MainAxisAlignment.end,
-                                              children: [
-                                                Text(
-                                                  "Share",
-                                                  style: TextStyle(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w700,
-                                                  ),
-                                                ),
-                                                SizedBox(
-                                                  width: 5,
-                                                ),
-                                                Icon(
-                                                  Icons.share,
-                                                  size: 18,
-                                                  color: Colors.white,
-                                                )
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ),
                                       Text(
                                         amountShow(amount: giftCardOrderModel.price.toString()),
                                         style: TextStyle(
-                                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                                          color: isDarkMode(context)
+                                              ? Colors.white
+                                              : Colors.black,
                                           fontWeight: FontWeight.w700,
                                         ),
-                                      )
+                                      ),
                                     ],
                                   )
                                 ],
@@ -220,13 +185,6 @@ class _GiftCardHistoryListScreenState extends State<GiftCardHistoryListScreen> {
                       },
                     ),
             ),
-    );
-  }
-
-  Future<void> share(String giftCode, String giftPin, String msg, String amount, Timestamp date) async {
-    await Share.share(
-      "Gift Code : $giftCode\nGift Pin : $giftPin\nPrice : ${amountShow(amount: amount)}\nExpire Date : ${date.toDate()}\n\nMessage : $msg",
-      subject: 'Foodie',
     );
   }
 }

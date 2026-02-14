@@ -15,7 +15,6 @@ import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 import 'package:foodie_customer/main.dart';
@@ -423,18 +422,15 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
                     height: 40.0,
                     child: CommonElevatedButton(
                       onButtonPressed: () {
-                        if (MyAppState.currentUser == null) {
-                          push(context, AuthScreen());
-                        } else {
-                          pushAndRemoveUntil(
-                              context,
-                              ContainerScreen(
-                                user: MyAppState.currentUser!,
-                                currentWidget: CartScreen(),
-                                appBarTitle: 'Your Cart',
-                              ),
-                              false);
-                        }
+                        pushAndRemoveUntil(
+                          context,
+                          ContainerScreen(
+                            user: MyAppState.currentUser,
+                            currentWidget: CartScreen(),
+                            appBarTitle: 'Your Cart',
+                          ),
+                          false,
+                        );
                       },
                       custom: Row(
                         spacing: 4.0,

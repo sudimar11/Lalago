@@ -970,32 +970,6 @@ class _ReviewScreenState extends State<ReviewScreen>
             }
           },
         ),
-        CupertinoActionSheetAction(
-          child: const Text('Take a picture'),
-          isDestructiveAction: false,
-          onPressed: () async {
-            Navigator.pop(context);
-            await Future.delayed(const Duration(milliseconds: 300));
-            if (!mounted) return;
-            var status = await Permission.camera.status;
-            if (!status.isGranted) {
-              status = await Permission.camera.request();
-            }
-            if (!status.isGranted) return;
-            if (!mounted) return;
-            try {
-              XFile? image =
-                  await _imagePicker.pickImage(source: ImageSource.camera);
-              if (!mounted) return;
-              if (image != null) {
-                _mediaFiles.add(File(image.path));
-                setState(() {});
-              }
-            } catch (e, s) {
-              debugPrint('ReviewScreen camera picker: $e $s');
-            }
-          },
-        ),
       ],
       cancelButton: CupertinoActionSheetAction(
         child: const Text('Cancel'),

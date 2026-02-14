@@ -1,22 +1,42 @@
+// android/build.gradle (project level)
+
 buildscript {
-    ext.kotlin_version = '1.9.0'
+    ext.kotlin_version = '2.0.21'
     repositories {
         google()
         mavenCentral()
     }
-
     dependencies {
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.7.10"
-
+        classpath 'com.android.tools.build:gradle:8.10.1'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
 }
 
+plugins {
+    id "com.android.application" apply false
+    id "org.jetbrains.kotlin.android" apply false
+}
+
 rootProject.buildDir = "../build"
+
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
 }
+
 subprojects {
     project.evaluationDependsOn(":app")
+}
+
+// Add namespace for plugins that don't declare it (required by AGP 8+)
+subprojects {
+    plugins.withId("com.android.library") {
+        def androidExt = project.extensions.findByName("android")
+        if (androidExt != null && (!androidExt.namespace || androidExt.namespace.toString().isEmpty())) {
+            def fallback = (project.group ?: "com.example.${project.name.replaceAll('-', '_')}")
+                .toString().replaceAll('[^A-Za-z0-9._]', '_')
+            androidExt.namespace = fallback
+        }
+    }
 }
 
 tasks.register("clean", Delete) {

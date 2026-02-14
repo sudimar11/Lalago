@@ -86,8 +86,8 @@ android {
         multiDexEnabled true
         minSdk = 26
         targetSdk = 36
-        versionCode = 51
-        versionName = "3.2.21"
+        versionCode = 55
+        versionName = "3.2.22"
     }
 
     compileOptions {

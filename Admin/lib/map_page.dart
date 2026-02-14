@@ -219,32 +219,34 @@ class _DriversMapPageState extends State<DriversMapPage> {
               final String car = data['carName'] ?? '';
               final String number = data['carNumber'] ?? '';
 
-              // Format timestamp
-              String timestampText = '';
-              if (data['lastOnlineTimestamp'] != null) {
-                final Timestamp? timestamp =
-                    data['lastOnlineTimestamp'] as Timestamp?;
-                if (timestamp != null) {
-                  final DateTime updateTime = timestamp.toDate();
-                  final DateTime now = DateTime.now();
-                  final Duration difference = now.difference(updateTime);
+              // Idle detection: prefer locationUpdatedAt, fallback to lastOnlineTimestamp
+              final Timestamp? locTs = data['locationUpdatedAt'] as Timestamp? ??
+                  data['lastOnlineTimestamp'] as Timestamp?;
+              final Duration? idleDuration = locTs != null
+                  ? DateTime.now().difference(locTs.toDate())
+                  : null;
+              // If both null, treat as stale (no recent data)
+              final bool isMoving =
+                  idleDuration != null && idleDuration.inMinutes < 5;
+              final bool isIdle = idleDuration != null &&
+                  idleDuration.inMinutes >= 5 &&
+                  idleDuration.inMinutes < 15;
+              final bool isStale =
+                  idleDuration == null || idleDuration.inMinutes >= 15;
 
-                  if (difference.inMinutes < 1) {
-                    timestampText = 'Updated: Just now';
-                  } else if (difference.inMinutes < 60) {
-                    timestampText =
-                        'Updated: ${difference.inMinutes} min${difference.inMinutes == 1 ? '' : 's'} ago';
-                  } else if (difference.inHours < 24) {
-                    timestampText =
-                        'Updated: ${difference.inHours} hour${difference.inHours == 1 ? '' : 's'} ago';
-                  } else {
-                    timestampText =
-                        'Updated: ${updateTime.hour.toString().padLeft(2, '0')}:${updateTime.minute.toString().padLeft(2, '0')}';
-                  }
-                }
+              String timestampText;
+              if (isMoving) {
+                timestampText = idleDuration!.inMinutes < 1
+                    ? 'Updated: Just now'
+                    : 'Moving';
+              } else if (isIdle) {
+                timestampText = 'Idle ${idleDuration!.inMinutes} min';
+              } else {
+                timestampText =
+                    'No update ${idleDuration?.inMinutes ?? 0} min';
               }
 
-              // Build snippet with car info and timestamp
+              // Build snippet with car info and status
               final int activeOrders = _activeOrdersFromData(data);
               final bool hasActiveOrders = activeOrders > 0;
 
@@ -257,14 +259,27 @@ class _DriversMapPageState extends State<DriversMapPage> {
               if (hasActiveOrders) {
                 snippetParts.add('Active orders: $activeOrders');
               }
-              if (timestampText.isNotEmpty) {
-                snippetParts.add(timestampText);
-              }
+              snippetParts.add(timestampText);
 
               // Format rider ID for display (truncate if long)
               final String displayId = riderId.length > 8
                   ? '${riderId.substring(0, 8)}...'
                   : riderId;
+
+              BitmapDescriptor markerIcon;
+              if (isMoving) {
+                markerIcon = BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueGreen,
+                );
+              } else if (isIdle) {
+                markerIcon = BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueYellow,
+                );
+              } else {
+                markerIcon = BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueRed,
+                );
+              }
 
               newMarkers.add(
                 Marker(
@@ -278,11 +293,7 @@ class _DriversMapPageState extends State<DriversMapPage> {
                         ? 'Rider ID: $displayId'
                         : snippetParts.join('\n'),
                   ),
-                  icon: hasActiveOrders
-                      ? BitmapDescriptor.defaultMarkerWithHue(
-                          BitmapDescriptor.hueGreen,
-                        )
-                      : BitmapDescriptor.defaultMarker,
+                  icon: markerIcon,
                   rotation: (data['rotation'] is num)
                       ? (data['rotation'] as num).toDouble()
                       : 0.0,

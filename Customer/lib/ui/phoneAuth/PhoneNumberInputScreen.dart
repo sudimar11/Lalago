@@ -79,7 +79,14 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
     return GestureDetector(
       onTap: context.dismissKeyboard,
       child: Scaffold(
-        appBar: null,
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+        ),
         body: SingleChildScrollView(
           padding: EdgeInsets.all(16.0),
           child: new Form(
@@ -744,33 +751,6 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
             }
           },
         ),
-        CupertinoActionSheetAction(
-          child: Text('Take a picture'),
-          isDestructiveAction: false,
-          onPressed: () async {
-            Navigator.pop(context);
-            await Future.delayed(const Duration(milliseconds: 300));
-            if (!mounted) return;
-            var status = await Permission.camera.status;
-            if (!status.isGranted) {
-              status = await Permission.camera.request();
-            }
-            if (!status.isGranted) return;
-            if (!mounted) return;
-            try {
-              XFile? image =
-                  await _imagePicker.pickImage(source: ImageSource.camera);
-              if (!mounted) return;
-              if (image != null) {
-                setState(() {
-                  _image = File(image.path);
-                });
-              }
-            } catch (e, s) {
-              debugPrint('PhoneNumberInputScreen camera picker: $e $s');
-            }
-          },
-        )
       ],
       cancelButton: CupertinoActionSheetAction(
         child: Text('cancel'),

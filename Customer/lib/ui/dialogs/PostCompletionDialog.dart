@@ -12,7 +12,6 @@ import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 import 'package:foodie_customer/ui/reviewScreen.dart/reviewScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:intl/intl.dart';
 
 class PostCompletionDialog extends StatefulWidget {
@@ -393,32 +392,6 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
     }
   }
 
-  void _handleShareExperience() {
-    try {
-      final dateFormat = DateFormat('MMM dd, yyyy');
-      final orderDate = dateFormat.format(widget.order.createdAt.toDate());
-      final restaurantName = widget.order.vendor.title;
-
-      final shareText =
-          "Just completed an order from $restaurantName on LalaGo! 🍽️\n\n"
-          "Order Date: $orderDate\n"
-          "Order ID: ${widget.order.id}\n\n"
-          "Download LalaGo and enjoy great food delivery! 🚀";
-
-      Share.share(
-        shareText,
-        subject: 'My LalaGo Order Experience',
-      );
-    } catch (e) {
-      showAlertDialog(
-        context,
-        'Error',
-        'Failed to share. Please try again.',
-        true,
-      );
-    }
-  }
-
   void _toggleFeedbackTag(String tag) {
     setState(() {
       if (_selectedFeedbackTags.contains(tag)) {
@@ -690,15 +663,6 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
                     ),
 
                     const SizedBox(height: 16),
-
-                    // Share Experience
-                    _buildActionButton(
-                      icon: Icons.share,
-                      label: 'Share Experience',
-                      onTap: _handleShareExperience,
-                    ),
-
-                    const SizedBox(height: 8),
 
                     // Dismiss button
                     TextButton(

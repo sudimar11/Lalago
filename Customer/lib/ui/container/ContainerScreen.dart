@@ -272,6 +272,7 @@ class _ContainerScreen extends State<ContainerScreen> {
         _searchScreen = SearchScreen(
           key: _searchScreenKey,
           shouldAutoFocus: widget.currentWidget is SearchScreen,
+          onBackPressed: () => _onBottomNavTapped(BottomNavSelection.Home),
         );
         _cartScreen = widget.currentWidget is CartScreen
             ? widget.currentWidget
@@ -310,11 +311,13 @@ class _ContainerScreen extends State<ContainerScreen> {
         _searchScreen = SearchScreen(
           key: _searchScreenKey,
           shouldAutoFocus: true,
+          onBackPressed: () => _onBottomNavTapped(BottomNavSelection.Home),
         );
       } else if (_searchScreen != null) {
         _searchScreen = SearchScreen(
           key: _searchScreenKey,
           shouldAutoFocus: false,
+          onBackPressed: () => _onBottomNavTapped(BottomNavSelection.Home),
         );
       }
     });

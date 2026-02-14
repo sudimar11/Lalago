@@ -32,10 +32,13 @@ class CachedProduct {
 
 class SearchScreen extends StatefulWidget {
   final bool shouldAutoFocus;
+  /// When set (e.g. from ContainerScreen tab), back uses this instead of pop.
+  final VoidCallback? onBackPressed;
 
   const SearchScreen({
     Key? key,
     this.shouldAutoFocus = false,
+    this.onBackPressed,
   }) : super(key: key);
 
   @override
@@ -568,7 +571,13 @@ class SearchScreenState extends State<SearchScreen> {
                     children: [
                       IconButton(
                         icon: const Icon(Icons.arrow_back),
-                        onPressed: () => Navigator.of(context).pop(),
+                        onPressed: () {
+                          if (widget.onBackPressed != null) {
+                            widget.onBackPressed!();
+                          } else {
+                            Navigator.of(context).pop();
+                          }
+                        },
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(
                           minWidth: 40,
