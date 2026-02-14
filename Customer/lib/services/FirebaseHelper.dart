@@ -66,7 +66,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:uuid/uuid.dart';
-import 'package:flutter/services.dart';
 
 import '../constants.dart';
 import '../model/TaxModel.dart';
@@ -74,6 +73,7 @@ import '../model/TaxModel.dart';
 const String _debugLogPath =
     '/Users/sudimard/Documents/flutter_projects/LalaGo-Customer/.cursor/debug.log';
 const String _debugFallbackFileName = 'cursor-debug.log';
+const Duration _debugIoTimeout = Duration(milliseconds: 150);
 const List<String> _debugLogEndpoints = <String>[
   'http://127.0.0.1:7242/ingest/9b9a1649-663c-43ba-aa17-deb0eb91410a',
   'http://localhost:7242/ingest/9b9a1649-663c-43ba-aa17-deb0eb91410a',
@@ -102,6 +102,7 @@ Future<void> _appendDebugLog({
   required Map<String, Object?> data,
   String runId = 'pre-fix',
 }) async {
+  if (!kDebugMode) return;
   final payload = <String, Object?>{
     'sessionId': 'debug-session',
     'runId': runId,
@@ -115,15 +116,17 @@ Future<void> _appendDebugLog({
     await File(_debugLogPath).writeAsString(
       '${jsonEncode(payload)}\n',
       mode: FileMode.append,
-    );
+    ).timeout(_debugIoTimeout);
   } catch (_) {
     for (final endpoint in _debugLogEndpoints) {
       try {
         final client = HttpClient();
-        final request = await client.postUrl(Uri.parse(endpoint));
+        client.connectionTimeout = _debugIoTimeout;
+        final request =
+            await client.postUrl(Uri.parse(endpoint)).timeout(_debugIoTimeout);
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(payload));
-        await request.close();
+        await request.close().timeout(_debugIoTimeout);
         client.close();
         break;
       } catch (_) {}
@@ -135,7 +138,7 @@ Future<void> _appendDebugLog({
     await fallbackFile.writeAsString(
       '${jsonEncode(payload)}\n',
       mode: FileMode.append,
-    );
+    ).timeout(_debugIoTimeout);
   } catch (_) {}
   try {
     final tempDir = await getTemporaryDirectory();
@@ -143,7 +146,7 @@ Future<void> _appendDebugLog({
     await fallbackFile.writeAsString(
       '${jsonEncode(payload)}\n',
       mode: FileMode.append,
-    );
+    ).timeout(_debugIoTimeout);
   } catch (_) {}
   try {
     final docsDir = await getApplicationDocumentsDirectory();
@@ -151,7 +154,7 @@ Future<void> _appendDebugLog({
     await fallbackFile.writeAsString(
       '${jsonEncode(payload)}\n',
       mode: FileMode.append,
-    );
+    ).timeout(_debugIoTimeout);
   } catch (_) {}
 }
 
@@ -174,6 +177,7 @@ Future<void> _appendRuntimeDebugLog({
   required Map<String, Object?> data,
   String runId = 'pre-fix',
 }) async {
+  if (!kDebugMode) return;
   final payload = <String, Object?>{
     'sessionId': 'debug-session',
     'runId': runId,
@@ -187,16 +191,17 @@ Future<void> _appendRuntimeDebugLog({
     await File(_runtimeDebugLogPath).writeAsString(
       '${jsonEncode(payload)}\n',
       mode: FileMode.append,
-    );
+    ).timeout(_debugIoTimeout);
   } catch (_) {
     try {
       final client = HttpClient();
-      final request = await client.postUrl(
-        Uri.parse(_runtimeDebugLogEndpoint),
-      );
+      client.connectionTimeout = _debugIoTimeout;
+      final request = await client
+          .postUrl(Uri.parse(_runtimeDebugLogEndpoint))
+          .timeout(_debugIoTimeout);
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(payload));
-      await request.close();
+      await request.close().timeout(_debugIoTimeout);
       client.close();
     } catch (_) {}
   }
@@ -209,6 +214,7 @@ Future<void> _appendCursorDebugLog({
   required Map<String, Object?> data,
   String runId = 'pre-fix',
 }) async {
+  if (!kDebugMode) return;
   final payload = <String, Object?>{
     'sessionId': 'debug-session',
     'runId': runId,
@@ -224,7 +230,7 @@ Future<void> _appendCursorDebugLog({
     await File(_cursorDebugLogPath).writeAsString(
       '${jsonEncode(payload)}\n',
       mode: FileMode.append,
-    );
+    ).timeout(_debugIoTimeout);
   } catch (_) {
     final endpoints = Platform.isAndroid
         ? <String>[_cursorDebugLogEndpointEmulator, _cursorDebugLogEndpoint]
@@ -232,12 +238,12 @@ Future<void> _appendCursorDebugLog({
     for (final endpoint in endpoints) {
       try {
         final client = HttpClient();
-        final request = await client.postUrl(
-          Uri.parse(endpoint),
-        );
+        client.connectionTimeout = _debugIoTimeout;
+        final request =
+            await client.postUrl(Uri.parse(endpoint)).timeout(_debugIoTimeout);
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(payload));
-        await request.close();
+        await request.close().timeout(_debugIoTimeout);
         client.close();
         break;
       } catch (_) {}
@@ -4640,23 +4646,25 @@ class FireStoreUtils {
     Map<String, dynamic>? existingUserData,
   }) async {
     // #region agent log
-    await _appendRuntimeDebugLog(
+    unawaited(_appendRuntimeDebugLog(
       hypothesisId: 'H11',
       location: 'FirebaseHelper.firebaseSignUp:keychainWarmup',
       message: 'warming keychain before auth',
       data: const <String, Object?>{
         'start': true,
       },
-    );
+    ));
     // #endregion
-    await _warmUpKeychain();
+    if (Platform.isIOS) {
+      unawaited(_warmUpKeychain());
+    }
     log(
       'firebaseSignUp start email=$emailAddress '
       'hasImage=${image != null} '
       'platform=${Platform.operatingSystem}',
     );
     // #region agent log
-    await _appendRuntimeDebugLog(
+    unawaited(_appendRuntimeDebugLog(
       hypothesisId: 'H4',
       location: 'FirebaseHelper.firebaseSignUp:entry',
       message: 'signup started',
@@ -4667,10 +4675,10 @@ class FireStoreUtils {
         'phoneLength': mobile.trim().length,
         'platform': Platform.operatingSystem,
       },
-    );
+    ));
     // #endregion
     // #region agent log
-    await _appendDebugLog(
+    unawaited(_appendDebugLog(
       hypothesisId: 'H2',
       location: 'FirebaseHelper.firebaseSignUpWithEmailAndPassword:start',
       message: 'starting firebase signup',
@@ -4680,7 +4688,7 @@ class FireStoreUtils {
         'hasImage': image != null,
         'platform': Platform.operatingSystem,
       },
-    );
+    ));
     // #endregion
 
     try {
@@ -4707,12 +4715,19 @@ class FireStoreUtils {
           '[SIM_KEYCHAIN_BYPASS] createUserWithEmailAndPassword start',
         );
       }
+      final authCreateStopwatch = kDebugMode ? (Stopwatch()..start()) : null;
       auth.UserCredential result = await auth.FirebaseAuth.instance
           .createUserWithEmailAndPassword(
               email: emailAddress, password: password);
+      if (authCreateStopwatch != null) {
+        authCreateStopwatch.stop();
+        log(
+          '[SIGNUP_TIMING] authCreateUserMs=${authCreateStopwatch.elapsedMilliseconds}',
+        );
+      }
       log('firebaseSignUp user created uid=${result.user?.uid}');
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H4',
         location: 'FirebaseHelper.firebaseSignUp:authResult',
         message: 'firebase auth createUser completed',
@@ -4720,10 +4735,10 @@ class FireStoreUtils {
           'hasUser': result.user != null,
           'hasUid': (result.user?.uid ?? '').isNotEmpty,
         },
-      );
+      ));
       // #endregion
       // #region agent log
-      await _appendDebugLog(
+      unawaited(_appendDebugLog(
         hypothesisId: 'H2',
         location:
             'FirebaseHelper.firebaseSignUpWithEmailAndPassword:authResult',
@@ -4732,7 +4747,7 @@ class FireStoreUtils {
           'hasUser': result.user != null,
           'hasUid': (result.user?.uid ?? '').isNotEmpty,
         },
-      );
+      ));
       // #endregion
 
       String profilePicUrl = '';
@@ -4756,7 +4771,7 @@ class FireStoreUtils {
             result.user?.uid ?? '',
           );
           // #region agent log
-          await _appendDebugLog(
+          unawaited(_appendDebugLog(
             hypothesisId: 'H4',
             location:
                 'FirebaseHelper.firebaseSignUpWithEmailAndPassword:imageUpload',
@@ -4766,7 +4781,7 @@ class FireStoreUtils {
               'uploadBytes': bytes,
               'urlEmpty': profilePicUrl.isEmpty,
             },
-          );
+          ));
           // #endregion
         } catch (e, stack) {
           log('Image upload error: $e\n$stack');
@@ -4790,22 +4805,29 @@ class FireStoreUtils {
         profilePictureURL: profilePicUrl,
       );
 
+      final createUserStopwatch = kDebugMode ? (Stopwatch()..start()) : null;
       String? errorMessage = await firebaseCreateNewUser(user, referralCode);
+      if (createUserStopwatch != null) {
+        createUserStopwatch.stop();
+        log(
+          '[SIGNUP_TIMING] firestoreCreateUserMs=${createUserStopwatch.elapsedMilliseconds}',
+        );
+      }
 
       if (errorMessage == null) {
         unawaited(refreshFcmTokenForUser(user));
         // #region agent log
-        await _appendRuntimeDebugLog(
+        unawaited(_appendRuntimeDebugLog(
           hypothesisId: 'H6',
           location: 'FirebaseHelper.firebaseSignUp:createUser',
           message: 'user created in firestore',
           data: <String, Object?>{
             'hasUserId': user.userID.isNotEmpty,
           },
-        );
+        ));
         // #endregion
         // #region agent log
-        await _appendDebugLog(
+        unawaited(_appendDebugLog(
           hypothesisId: 'H5',
           location:
               'FirebaseHelper.firebaseSignUpWithEmailAndPassword:createUser',
@@ -4813,12 +4835,12 @@ class FireStoreUtils {
           data: <String, Object?>{
             'hasUserId': user.userID.isNotEmpty,
           },
-        );
+        ));
         // #endregion
         return user;
       } else {
         // #region agent log
-        await _appendDebugLog(
+        unawaited(_appendDebugLog(
           hypothesisId: 'H5',
           location:
               'FirebaseHelper.firebaseSignUpWithEmailAndPassword:createUser',
@@ -4826,7 +4848,7 @@ class FireStoreUtils {
           data: <String, Object?>{
             'errorMessage': errorMessage,
           },
-        );
+        ));
         // #endregion
         return 'Couldn\'t sign up for Firebase, please try again.';
       }
@@ -4838,7 +4860,7 @@ class FireStoreUtils {
         'stack=$stack',
       );
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H7',
         location: 'FirebaseHelper.firebaseSignUp:authException',
         message: 'firebase auth exception',
@@ -4847,10 +4869,10 @@ class FireStoreUtils {
           'message': error.message ?? '',
           'platform': Platform.operatingSystem,
         },
-      );
+      ));
       // #endregion
       // #region agent log
-      await _appendDebugLog(
+      unawaited(_appendDebugLog(
         hypothesisId: 'H2',
         location:
             'FirebaseHelper.firebaseSignUpWithEmailAndPassword:authException',
@@ -4859,7 +4881,7 @@ class FireStoreUtils {
           'code': error.code,
           'message': error.message ?? '',
         },
-      );
+      ));
       // #endregion
 
       String message = "notSignUp";

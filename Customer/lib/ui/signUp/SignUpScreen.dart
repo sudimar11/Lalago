@@ -32,6 +32,7 @@ import '../../resources/assets.dart';
 import '../../resources/colors.dart';
 
 File? _image;
+const Duration _debugIoTimeout = Duration(milliseconds: 150);
 const String _debugLogPath =
     '/Users/sudimard/Documents/flutter_projects/LalaGo-Customer/.cursor/debug.log';
 const String _debugFallbackFileName = 'cursor-debug.log';
@@ -109,6 +110,7 @@ class _SignUpState extends State<SignUpScreen> {
     required Map<String, Object?> data,
     String runId = 'pre-fix',
   }) async {
+    if (!kDebugMode) return;
     final payload = <String, Object?>{
       'sessionId': 'debug-session',
       'runId': runId,
@@ -122,15 +124,18 @@ class _SignUpState extends State<SignUpScreen> {
       await File(_debugLogPath).writeAsString(
         '${jsonEncode(payload)}\n',
         mode: FileMode.append,
-      );
+      ).timeout(_debugIoTimeout);
     } catch (_) {
       for (final endpoint in _debugLogEndpoints) {
         try {
           final client = HttpClient();
-          final request = await client.postUrl(Uri.parse(endpoint));
+          client.connectionTimeout = _debugIoTimeout;
+          final request = await client
+              .postUrl(Uri.parse(endpoint))
+              .timeout(_debugIoTimeout);
           request.headers.contentType = ContentType.json;
           request.write(jsonEncode(payload));
-          await request.close();
+          await request.close().timeout(_debugIoTimeout);
           client.close();
           break;
         } catch (_) {}
@@ -142,7 +147,7 @@ class _SignUpState extends State<SignUpScreen> {
       await fallbackFile.writeAsString(
         '${jsonEncode(payload)}\n',
         mode: FileMode.append,
-      );
+      ).timeout(_debugIoTimeout);
     } catch (_) {}
     try {
       final tempDir = await getTemporaryDirectory();
@@ -150,7 +155,7 @@ class _SignUpState extends State<SignUpScreen> {
       await fallbackFile.writeAsString(
         '${jsonEncode(payload)}\n',
         mode: FileMode.append,
-      );
+      ).timeout(_debugIoTimeout);
     } catch (_) {}
     try {
       final docsDir = await getApplicationDocumentsDirectory();
@@ -158,7 +163,7 @@ class _SignUpState extends State<SignUpScreen> {
       await fallbackFile.writeAsString(
         '${jsonEncode(payload)}\n',
         mode: FileMode.append,
-      );
+      ).timeout(_debugIoTimeout);
     } catch (_) {}
   }
 
@@ -169,6 +174,7 @@ class _SignUpState extends State<SignUpScreen> {
     required Map<String, Object?> data,
     String runId = 'pre-fix',
   }) async {
+    if (!kDebugMode) return;
     final payload = <String, Object?>{
       'sessionId': 'debug-session',
       'runId': runId,
@@ -182,16 +188,17 @@ class _SignUpState extends State<SignUpScreen> {
       await File(_runtimeDebugLogPath).writeAsString(
         '${jsonEncode(payload)}\n',
         mode: FileMode.append,
-      );
+      ).timeout(_debugIoTimeout);
     } catch (_) {
       try {
         final client = HttpClient();
-        final request = await client.postUrl(
-          Uri.parse(_runtimeDebugLogEndpoint),
-        );
+        client.connectionTimeout = _debugIoTimeout;
+        final request = await client
+            .postUrl(Uri.parse(_runtimeDebugLogEndpoint))
+            .timeout(_debugIoTimeout);
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(payload));
-        await request.close();
+        await request.close().timeout(_debugIoTimeout);
         client.close();
       } catch (_) {}
     }
@@ -225,7 +232,7 @@ class _SignUpState extends State<SignUpScreen> {
 
   Future<void> _onRegisterPressed() async {
     // #region agent log
-    await _appendRuntimeDebugLog(
+    unawaited(_appendRuntimeDebugLog(
       hypothesisId: 'H0',
       location: 'SignUpScreen._onRegisterPressed',
       message: 'register button pressed',
@@ -233,7 +240,7 @@ class _SignUpState extends State<SignUpScreen> {
         'hasEmail': (email ?? '').trim().isNotEmpty,
         'phoneLength': (mobile ?? '').trim().length,
       },
-    );
+    ));
     // #endregion
     await _signUp();
   }
@@ -247,7 +254,7 @@ class _SignUpState extends State<SignUpScreen> {
             )
           : <String, Object?>{};
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H8',
         location: 'SignUpScreen._logKeychainStatus',
         message: 'keychain add test result',
@@ -255,18 +262,18 @@ class _SignUpState extends State<SignUpScreen> {
           'status': data['status'],
           'message': data['message'],
         },
-      );
+      ));
       // #endregion
     } catch (e) {
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H8',
         location: 'SignUpScreen._logKeychainStatus:error',
         message: 'keychain check failed',
         data: <String, Object?>{
           'errorType': e.runtimeType.toString(),
         },
-      );
+      ));
       // #endregion
     }
   }
@@ -275,7 +282,7 @@ class _SignUpState extends State<SignUpScreen> {
     try {
       final info = await PackageInfo.fromPlatform();
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H9',
         location: 'SignUpScreen._logBundleInfo',
         message: 'bundle info',
@@ -285,18 +292,18 @@ class _SignUpState extends State<SignUpScreen> {
           'buildNumber': info.buildNumber,
           'version': info.version,
         },
-      );
+      ));
       // #endregion
     } catch (e) {
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H9',
         location: 'SignUpScreen._logBundleInfo:error',
         message: 'bundle info failed',
         data: <String, Object?>{
           'errorType': e.runtimeType.toString(),
         },
-      );
+      ));
       // #endregion
     }
   }
@@ -312,7 +319,7 @@ class _SignUpState extends State<SignUpScreen> {
             )
           : <String, Object?>{};
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H10',
         location: 'SignUpScreen._logEntitlements',
         message: 'entitlements snapshot',
@@ -330,18 +337,18 @@ class _SignUpState extends State<SignUpScreen> {
           'signatureEntitlementCount': data['signature-entitlement-count'],
           'signatureKeys': data['signature-keys'],
         },
-      );
+      ));
       // #endregion
     } catch (e) {
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H10',
         location: 'SignUpScreen._logEntitlements:error',
         message: 'entitlements fetch failed',
         data: <String, Object?>{
           'errorType': e.runtimeType.toString(),
         },
-      );
+      ));
       // #endregion
     }
   }
@@ -982,7 +989,7 @@ class _SignUpState extends State<SignUpScreen> {
 
   _signUp() async {
     // #region agent log
-    await _appendRuntimeDebugLog(
+    unawaited(_appendRuntimeDebugLog(
       hypothesisId: 'H1',
       location: 'SignUpScreen._signUp:entry',
       message: 'signup tap received',
@@ -993,53 +1000,53 @@ class _SignUpState extends State<SignUpScreen> {
         'hasImage': _image != null,
         'hasReferral': (referralCode ?? '').trim().isNotEmpty,
       },
-    );
+    ));
     // #endregion
     // #region agent log
-    await _appendRuntimeDebugLog(
+    unawaited(_appendRuntimeDebugLog(
       hypothesisId: 'H1',
       location: 'SignUpScreen._signUp:beforeValidate',
       message: 'starting form validation',
       data: const <String, Object?>{
         'start': true,
       },
-    );
+    ));
     // #endregion
     bool isValid = false;
     try {
       isValid = _key.currentState?.validate() ?? false;
     } catch (e) {
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H1',
         location: 'SignUpScreen._signUp:validateError',
         message: 'form validation threw',
         data: <String, Object?>{
           'errorType': e.runtimeType.toString(),
         },
-      );
+      ));
       // #endregion
       rethrow;
     }
     // #region agent log
-    await _appendRuntimeDebugLog(
+    unawaited(_appendRuntimeDebugLog(
       hypothesisId: 'H1',
       location: 'SignUpScreen._signUp:afterValidate',
       message: 'form validation completed',
       data: <String, Object?>{
         'isValid': isValid,
       },
-    );
+    ));
     // #endregion
     // #region agent log
-    await _appendRuntimeDebugLog(
+    unawaited(_appendRuntimeDebugLog(
       hypothesisId: 'H1',
       location: 'SignUpScreen._signUp:beforeLegacyLogValidate',
       message: 'calling legacy debug log validate',
       data: const <String, Object?>{
         'stage': 'validate',
       },
-    );
+    ));
     // #endregion
     // #region agent log
     unawaited(_appendDebugLog(
@@ -1053,14 +1060,14 @@ class _SignUpState extends State<SignUpScreen> {
     ));
     // #endregion
     // #region agent log
-    await _appendRuntimeDebugLog(
+    unawaited(_appendRuntimeDebugLog(
       hypothesisId: 'H1',
       location: 'SignUpScreen._signUp:afterLegacyLogValidate',
       message: 'legacy debug log validate completed',
       data: const <String, Object?>{
         'stage': 'validate',
       },
-    );
+    ));
     // #endregion
 
     if (isValid) {
@@ -1068,19 +1075,19 @@ class _SignUpState extends State<SignUpScreen> {
         _key.currentState!.save();
       } catch (e) {
         // #region agent log
-        await _appendRuntimeDebugLog(
+        unawaited(_appendRuntimeDebugLog(
           hypothesisId: 'H1',
           location: 'SignUpScreen._signUp:saveError',
           message: 'form save threw',
           data: <String, Object?>{
             'errorType': e.runtimeType.toString(),
           },
-        );
+        ));
         // #endregion
         rethrow;
       }
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H1',
         location: 'SignUpScreen._signUp:afterSave',
         message: 'form save completed',
@@ -1088,18 +1095,18 @@ class _SignUpState extends State<SignUpScreen> {
           'emailLength': (email ?? '').trim().length,
           'phoneLength': (mobile ?? '').trim().length,
         },
-      );
+      ));
       // #endregion
 
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H1',
         location: 'SignUpScreen._signUp:beforeLegacyLogSave',
         message: 'calling legacy debug log save',
         data: const <String, Object?>{
           'stage': 'save',
         },
-      );
+      ));
       // #endregion
       // #region agent log
       unawaited(_appendDebugLog(
@@ -1116,30 +1123,43 @@ class _SignUpState extends State<SignUpScreen> {
       ));
       // #endregion
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H1',
         location: 'SignUpScreen._signUp:afterLegacyLogSave',
         message: 'legacy debug log save completed',
         data: const <String, Object?>{
           'stage': 'save',
         },
-      );
+      ));
       // #endregion
+
+      await showProgress(
+        context,
+        "Creating new account, Please wait...",
+        false,
+      );
 
       // Check for duplicate phone number before proceeding
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._signUp:beforePhoneCheck',
         message: 'starting phone check',
         data: <String, Object?>{
           'phoneLength': (mobile ?? '').trim().length,
         },
-      );
+      ));
       // #endregion
+      final phoneCheckStopwatch = kDebugMode ? (Stopwatch()..start()) : null;
       final existingByPhone = await _getExistingUserByPhone(mobile?.trim());
+      if (phoneCheckStopwatch != null) {
+        phoneCheckStopwatch.stop();
+        log(
+          '[SIGNUP_TIMING] phoneCheckMs=${phoneCheckStopwatch.elapsedMilliseconds}',
+        );
+      }
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._signUp:phoneCheck',
         message: 'phone check result',
@@ -1147,36 +1167,38 @@ class _SignUpState extends State<SignUpScreen> {
           'phoneLength': (mobile ?? '').trim().length,
           'hasExisting': existingByPhone != null,
         },
-      );
+      ));
       // #endregion
 
-      await _logBundleInfo();
-      await _logEntitlements();
-      await _logKeychainStatus();
+      if (kDebugMode) {
+        unawaited(_logBundleInfo());
+        unawaited(_logEntitlements());
+        unawaited(_logKeychainStatus());
+      }
       await _signUpWithEmailAndPassword(
         existingUserDocId: existingByPhone?.docId,
         existingUserData: existingByPhone?.data,
       );
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._signUp:signupComplete',
         message: 'signup flow completed',
         data: const <String, Object?>{
           'completed': true,
         },
-      );
+      ));
       // #endregion
     } else {
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H1',
         location: 'SignUpScreen._signUp:invalid',
         message: 'form validation failed',
         data: <String, Object?>{
           'isValid': false,
         },
-      );
+      ));
       // #endregion
       setState(() {
         _validate = AutovalidateMode.onUserInteraction;
@@ -1207,24 +1229,24 @@ class _SignUpState extends State<SignUpScreen> {
     if (phone == null || phone.isEmpty) return false;
     try {
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._isPhoneNumberTaken:entry',
         message: 'phone check started',
         data: <String, Object?>{
           'phoneLength': phone.trim().length,
         },
-      );
+      ));
       // #endregion
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._isPhoneNumberTaken:beforeLegacyLog',
         message: 'calling legacy debug log phone check',
         data: const <String, Object?>{
           'stage': 'phoneCheck',
         },
-      );
+      ));
       // #endregion
       // #region agent log
       unawaited(_appendDebugLog(
@@ -1237,14 +1259,14 @@ class _SignUpState extends State<SignUpScreen> {
       ));
       // #endregion
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._isPhoneNumberTaken:afterLegacyLog',
         message: 'legacy debug log phone check completed',
         data: const <String, Object?>{
           'stage': 'phoneCheck',
         },
-      );
+      ));
       // #endregion
 
       final querySnapshot = await FirebaseFirestore.instance
@@ -1253,14 +1275,14 @@ class _SignUpState extends State<SignUpScreen> {
           .limit(1)
           .get();
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._isPhoneNumberTaken:beforeLegacyLogResult',
         message: 'calling legacy debug log phone result',
         data: const <String, Object?>{
           'stage': 'phoneResult',
         },
-      );
+      ));
       // #endregion
       // #region agent log
       unawaited(_appendDebugLog(
@@ -1273,37 +1295,37 @@ class _SignUpState extends State<SignUpScreen> {
       ));
       // #endregion
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._isPhoneNumberTaken:afterLegacyLogResult',
         message: 'legacy debug log phone result completed',
         data: const <String, Object?>{
           'stage': 'phoneResult',
         },
-      );
+      ));
       // #endregion
       final isTaken = querySnapshot.docs.isNotEmpty;
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._isPhoneNumberTaken:result',
         message: 'phone check finished',
         data: <String, Object?>{
           'isTaken': isTaken,
         },
-      );
+      ));
       // #endregion
       return isTaken;
     } catch (e) {
       // #region agent log
-      await _appendRuntimeDebugLog(
+      unawaited(_appendRuntimeDebugLog(
         hypothesisId: 'H2',
         location: 'SignUpScreen._isPhoneNumberTaken:error',
         message: 'phone check failed',
         data: <String, Object?>{
           'errorType': e.runtimeType.toString(),
         },
-      );
+      ));
       // #endregion
       return false;
     }
@@ -1313,45 +1335,6 @@ class _SignUpState extends State<SignUpScreen> {
     String? existingUserDocId,
     Map<String, dynamic>? existingUserData,
   }) async {
-    await showProgress(
-        context, "Creating new account, Please wait...", false);
-
-    // Validate referral code if provided (non-blocking)
-    String? validatedReferralCode;
-    if (referralCode != null && referralCode!.trim().isNotEmpty) {
-      final isValid = await FireStoreUtils.checkReferralCodeValidOrNot(
-          referralCode!.trim());
-      if (isValid == true) {
-        validatedReferralCode = referralCode!.trim();
-      } else {
-        // Show warning but allow signup to proceed
-        await hideProgress();
-        final shouldContinue = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text('Invalid Referral Code'),
-            content: Text(
-                'The referral code "$referralCode" is invalid. Would you like to continue without it?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: Text('Continue'),
-              ),
-            ],
-          ),
-        );
-        if (shouldContinue != true) {
-          return;
-        }
-        await showProgress(
-            context, "Creating new account, Please wait...", false);
-      }
-    }
-
     log(
       'signup start email=${email?.trim()} '
       'phone=${mobile?.trim()} '
@@ -1360,7 +1343,7 @@ class _SignUpState extends State<SignUpScreen> {
       'platform=${Platform.operatingSystem}',
     );
     // #region agent log
-    await _appendDebugLog(
+    unawaited(_appendDebugLog(
       hypothesisId: 'H2',
       location: 'SignUpScreen._signUpWithEmailAndPassword:start',
       message: 'calling firebase signup',
@@ -1371,7 +1354,7 @@ class _SignUpState extends State<SignUpScreen> {
         'hasReferral': (referralCode ?? '').trim().isNotEmpty,
         'platform': Platform.operatingSystem,
       },
-    );
+    ));
     // #endregion
 
     dynamic result = await FireStoreUtils.firebaseSignUpWithEmailAndPassword(
@@ -1382,13 +1365,13 @@ class _SignUpState extends State<SignUpScreen> {
       lastName: lastName ?? "",
       mobile: mobile ?? "",
       context: context,
-      referralCode: validatedReferralCode ?? "",
+      referralCode: (referralCode ?? '').trim(),
       existingUserDocId: existingUserDocId,
       existingUserData: existingUserData,
     );
     log('signup result type=${result.runtimeType} value=$result');
     // #region agent log
-    await _appendDebugLog(
+    unawaited(_appendDebugLog(
       hypothesisId: 'H2',
       location: 'SignUpScreen._signUpWithEmailAndPassword:result',
       message: 'firebase signup result received',
@@ -1398,7 +1381,7 @@ class _SignUpState extends State<SignUpScreen> {
         'isString': result is String,
         'isNull': result == null,
       },
-    );
+    ));
     // #endregion
 
     await hideProgress();
