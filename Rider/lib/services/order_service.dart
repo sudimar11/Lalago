@@ -107,7 +107,7 @@ class OrderService {
 
       // Assign the order
       await _firestore.collection('restaurant_orders').doc(orderId).update({
-        'status': 'Driver Pending',
+        'status': 'Driver Accepted',
         'driverId': currentUserId,
         'driverID': currentUserId,
         'driverName': '${driverData?['firstName']} ${driverData?['lastName']}',
@@ -117,11 +117,21 @@ class OrderService {
         },
       });
 
+      // Keep driver document consistent with current request/active lists.
+      // This is safe even if the fields don't exist yet.
+      await _firestore.collection('users').doc(currentUserId).set(
+        {
+          'orderRequestData': FieldValue.arrayRemove([orderId]),
+          'inProgressOrderID': FieldValue.arrayUnion([orderId]),
+        },
+        SetOptions(merge: true),
+      );
+
       // Send system message
       if (customerId != null) {
         await OrderChatService.sendSystemMessage(
           orderId: orderId,
-          status: 'Driver Pending',
+          status: 'Driver Accepted',
           customerId: customerId.toString(),
           customerFcmToken: customerFcmToken,
           restaurantId: currentUserId,
@@ -130,7 +140,7 @@ class OrderService {
 
       DialogUtils.showSnackBar(
         context,
-        message: 'Order accepted successfully! Driver assigned.',
+        message: 'Order accepted successfully!',
         backgroundColor: Colors.green,
       );
 

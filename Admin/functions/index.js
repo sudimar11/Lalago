@@ -431,6 +431,18 @@ exports.autoDispatcher = functions.firestore
     // Only trigger when order status changes to 'Order Accepted' (ready for AI auto-dispatch)
     if (beforeData.status !== 'Order Accepted' && afterData.status === 'Order Accepted') {
         try {
+          // Guard: rider-first flow handles dispatch itself.
+          if (
+            afterData?.dispatchFlow === 'rider_first_v1' ||
+            afterData?.dispatch?.flow === 'rider_first_v1' ||
+            afterData?.driverID
+          ) {
+            console.log(
+              `[AI AutoDispatcher] Skipping order ${orderId} (rider-first or driver already assigned)`
+            );
+            return null;
+          }
+
           console.log(`[AI AutoDispatcher] Processing order ${orderId} for automatic rider assignment`);
 
           // 1. Get order details
@@ -633,6 +645,722 @@ exports.autoDispatcher = functions.firestore
 
         return { success: false, error: error.message };
       }
+    }
+
+    return null;
+  });
+
+// =========================
+// Rider-first dispatch (v1)
+// =========================
+
+const RIDER_FIRST_FLOW = 'rider_first_v1';
+const MAX_ACTIVE_ORDERS_PER_RIDER = 2;
+const MAX_DISPATCH_ATTEMPTS = 3;
+const RIDER_ACCEPT_TIMEOUT_SECONDS = 60;
+const RESTAURANT_CONFIRM_TIMEOUT_SECONDS = 300;
+const STACK_RADIUS_METERS = 500;
+
+function _nowTimestamp() {
+  return admin.firestore.Timestamp.now();
+}
+
+function _addSeconds(ts, seconds) {
+  return new admin.firestore.Timestamp(ts.seconds + seconds, ts.nanoseconds);
+}
+
+function _asNumber(v) {
+  if (v == null) return 0;
+  if (typeof v === 'number') return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function _extractRestaurantLocation(orderData) {
+  const gp = orderData?.vendor?.g?.geopoint;
+  const gpLat = gp ? _asNumber(gp.latitude ?? gp._latitude) : 0;
+  const gpLng = gp ? _asNumber(gp.longitude ?? gp._longitude) : 0;
+  return {
+    lat:
+      _asNumber(orderData?.vendor?.latitude) ||
+      _asNumber(orderData?.vendor?.lat) ||
+      gpLat ||
+      0,
+    lng:
+      _asNumber(orderData?.vendor?.longitude) ||
+      _asNumber(orderData?.vendor?.lng) ||
+      gpLng ||
+      0,
+  };
+}
+
+function _extractDeliveryLocation(orderData) {
+  return {
+    lat:
+      _asNumber(orderData?.address?.location?.latitude) ||
+      _asNumber(orderData?.author?.location?.latitude) ||
+      0,
+    lng:
+      _asNumber(orderData?.address?.location?.longitude) ||
+      _asNumber(orderData?.author?.location?.longitude) ||
+      0,
+  };
+}
+
+function _extractDriverLocation(driver) {
+  const loc =
+    driver?.currentLocation ||
+    driver?.driverLocation ||
+    driver?.location ||
+    null;
+
+  if (!loc) return { lat: 0, lng: 0 };
+
+  // GeoPoint
+  if (typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
+    return { lat: loc.latitude, lng: loc.longitude };
+  }
+
+  // Map-like
+  if (typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+    return { lat: loc.lat, lng: loc.lng };
+  }
+
+  if (
+    typeof loc._latitude === 'number' &&
+    typeof loc._longitude === 'number'
+  ) {
+    return { lat: loc._latitude, lng: loc._longitude };
+  }
+
+  return { lat: 0, lng: 0 };
+}
+
+function _distanceMeters(a, b) {
+  const R = 6371; // km
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const x =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(a.lat)) *
+      Math.cos(toRad(b.lat)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  return R * c * 1000;
+}
+
+function _activeOrdersCount(driverData) {
+  const v = driverData?.inProgressOrderID;
+  return Array.isArray(v) ? v.length : 0;
+}
+
+function _isDriverEligibleBase(driverData) {
+  if (!driverData) return false;
+  if (driverData.role !== 'driver') return false;
+  if (driverData.isOnline !== true) return false;
+  if (driverData.checkedInToday !== true) return false;
+
+  const isSuspended =
+    driverData.suspended === true ||
+    String(driverData.attendanceStatus || '').toLowerCase() === 'suspended';
+  if (isSuspended) return false;
+
+  const isCheckedOutToday =
+    driverData.checkedOutToday === true ||
+    (driverData.todayCheckOutTime != null &&
+      String(driverData.todayCheckOutTime || '').trim() !== '');
+  if (isCheckedOutToday) return false;
+
+  return true;
+}
+
+function _computeIsActiveForDispatch(driverData, activeOrdersCount) {
+  if (!_isDriverEligibleBase(driverData)) return false;
+
+  const multipleOrders = driverData?.multipleOrders === true;
+  const hasCapacity =
+    activeOrdersCount === 0 || (activeOrdersCount === 1 && multipleOrders);
+  return hasCapacity;
+}
+
+async function _logDispatchEvent({ type, orderId, payload }) {
+  try {
+    await getDb().collection('dispatch_events').add({
+      type,
+      orderId,
+      payload: payload || {},
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      source: 'functions',
+    });
+  } catch (e) {
+    console.error(`[RiderFirst] Failed to log event ${type}:`, e);
+  }
+}
+
+async function _sendCustomerNotificationBestEffort(orderData, title, body) {
+  try {
+    const token =
+      orderData?.author?.fcmToken ||
+      orderData?.author?.notificationToken ||
+      '';
+    if (!token) return;
+    await getMessaging().send({
+      token,
+      notification: { title, body },
+      data: {
+        type: 'order_update',
+        orderId: String(orderData?.id || ''),
+      },
+    });
+  } catch (e) {
+    console.error('[RiderFirst] Failed to notify customer:', e);
+  }
+}
+
+async function _sendRestaurantNotificationBestEffort(orderData, orderId) {
+  try {
+    const token = String(orderData?.vendor?.fcmToken || '');
+    if (!token) return;
+    await getMessaging().send({
+      token,
+      notification: {
+        title: orderData?.scheduleTime ? 'Scheduled Order Placed' : 'New Order',
+        body: 'A rider accepted an order. Please confirm within 5 minutes.',
+      },
+      data: {
+        type: 'new_order',
+        orderId: String(orderId),
+      },
+    });
+  } catch (e) {
+    console.error('[RiderFirst] Failed to notify restaurant:', e);
+  }
+}
+
+async function _removeOrderRequestFromDriver(driverId, orderId) {
+  if (!driverId) return;
+  try {
+    await getDb()
+      .collection('users')
+      .doc(driverId)
+      .update({
+        orderRequestData: admin.firestore.FieldValue.arrayRemove(orderId),
+      });
+  } catch (_) {
+    // Best effort.
+  }
+}
+
+async function _releaseDriverFromOrder(driverId, orderId) {
+  if (!driverId) return;
+  try {
+    const db = getDb();
+    await db.runTransaction(async (tx) => {
+      const ref = db.collection('users').doc(driverId);
+      const snap = await tx.get(ref);
+      if (!snap.exists) return;
+
+      const data = snap.data() || {};
+      const current =
+        Array.isArray(data.inProgressOrderID) ? data.inProgressOrderID : [];
+      const next = current.filter((id) => String(id) !== String(orderId));
+      const activeOrdersCount = next.length;
+
+      const isActive = _computeIsActiveForDispatch(data, activeOrdersCount);
+
+      tx.update(ref, {
+        inProgressOrderID: next,
+        orderRequestData: admin.firestore.FieldValue.arrayRemove(orderId),
+        isActive,
+      });
+    });
+  } catch (e) {
+    console.error(
+      `[RiderFirst] Failed releasing driver ${driverId} from ${orderId}:`,
+      e
+    );
+  }
+}
+
+async function _recomputeDriverIsActive(driverId) {
+  if (!driverId) return;
+  try {
+    const db = getDb();
+    const ref = db.collection('users').doc(driverId);
+    const snap = await ref.get();
+    if (!snap.exists) return;
+    const data = snap.data() || {};
+    const activeOrdersCount = _activeOrdersCount(data);
+    const isActive = _computeIsActiveForDispatch(data, activeOrdersCount);
+    await ref.update({ isActive });
+  } catch (e) {
+    console.error(`[RiderFirst] Failed to recompute isActive for ${driverId}:`, e);
+  }
+}
+
+async function _pickBestDriverForOrder({
+  orderId,
+  orderData,
+  excludeDriverIds,
+}) {
+  const db = getDb();
+  const exclude = new Set(excludeDriverIds || []);
+
+  const restaurantLocation = _extractRestaurantLocation(orderData);
+  const deliveryLocation = _extractDeliveryLocation(orderData);
+
+  const driversSnapshot = await db
+    .collection('users')
+    .where('role', '==', 'driver')
+    .where('isOnline', '==', true)
+    .where('checkedInToday', '==', true)
+    .get();
+
+  const drivers = [];
+  for (const doc of driversSnapshot.docs) {
+    const d = { id: doc.id, ...doc.data() };
+    if (exclude.has(d.id)) continue;
+    if (!_isDriverEligibleBase(d)) continue;
+
+    const driverLocation = _extractDriverLocation(d);
+    if (!driverLocation.lat || !driverLocation.lng) continue;
+
+    const activeOrders = _activeOrdersCount(d);
+    if (activeOrders >= MAX_ACTIVE_ORDERS_PER_RIDER) continue;
+
+    const distanceToRestaurantMeters = _distanceMeters(
+      driverLocation,
+      restaurantLocation
+    );
+
+    drivers.push({
+      driverId: d.id,
+      driverData: d,
+      driverLocation,
+      activeOrders,
+      multipleOrders: d.multipleOrders === true,
+      distanceToRestaurantMeters,
+      deliveryLocation,
+    });
+  }
+
+  // Tier 1: nearest rider with active_orders == 0
+  const free = drivers
+    .filter((x) => x.activeOrders === 0)
+    .sort((a, b) => a.distanceToRestaurantMeters - b.distanceToRestaurantMeters);
+  if (free.length > 0) {
+    return {
+      selected: free[0],
+      candidates: free.slice(0, 10),
+      stackDecision: { usedStacking: false },
+    };
+  }
+
+  // Tier 2: consider stacking (active_orders == 1) only if multipleOrders==true
+  const maybeStack = drivers
+    .filter((x) => x.activeOrders === 1 && x.multipleOrders)
+    .sort((a, b) => a.distanceToRestaurantMeters - b.distanceToRestaurantMeters)
+    .slice(0, 15);
+
+  for (const candidate of maybeStack) {
+    const inProgress = candidate.driverData?.inProgressOrderID;
+    const currentOrderId =
+      Array.isArray(inProgress) && inProgress.length > 0
+        ? String(inProgress[0])
+        : '';
+    if (!currentOrderId) continue;
+
+    try {
+      const currentOrderSnap = await db
+        .collection('restaurant_orders')
+        .doc(currentOrderId)
+        .get();
+      if (!currentOrderSnap.exists) continue;
+
+      const currentOrder = currentOrderSnap.data() || {};
+      const sameRestaurant =
+        String(currentOrder.vendorID || '') === String(orderData.vendorID || '');
+
+      const currentDelivery = _extractDeliveryLocation(currentOrder);
+      const deliveryDistance = _distanceMeters(
+        currentDelivery,
+        deliveryLocation
+      );
+
+      const nearEnough = deliveryDistance <= STACK_RADIUS_METERS;
+      if (sameRestaurant || nearEnough) {
+        return {
+          selected: candidate,
+          candidates: maybeStack.slice(0, 10),
+          stackDecision: {
+            usedStacking: true,
+            sameRestaurant,
+            deliveryDistanceMeters: Math.round(deliveryDistance),
+            stackRadiusMeters: STACK_RADIUS_METERS,
+          },
+        };
+      }
+    } catch (e) {
+      console.error(
+        `[RiderFirst] Stack check failed for driver ${candidate.driverId}:`,
+        e
+      );
+    }
+  }
+
+  return {
+    selected: null,
+    candidates: maybeStack.slice(0, 10),
+    stackDecision: {
+      usedStacking: true,
+      result: 'no_compatible_stack_candidate',
+      stackRadiusMeters: STACK_RADIUS_METERS,
+    },
+  };
+}
+
+async function _offerOrderToDriver({
+  orderRef,
+  orderId,
+  orderData,
+  driverId,
+  attempt,
+  candidates,
+  stackDecision,
+}) {
+  const now = _nowTimestamp();
+  const deadline = _addSeconds(now, RIDER_ACCEPT_TIMEOUT_SECONDS);
+
+  await orderRef.update({
+    status: 'Driver Assigned',
+    driverID: driverId,
+    dispatchFlow: RIDER_FIRST_FLOW,
+    'dispatch.flow': RIDER_FIRST_FLOW,
+    'dispatch.stage': 'rider_offered',
+    'dispatch.attempt': attempt,
+    'dispatch.triedDriverIds': admin.firestore.FieldValue.arrayUnion(driverId),
+    'dispatch.riderAcceptDeadline': deadline,
+    'dispatch.restaurantConfirmDeadline': null,
+    'dispatch.selectedDriverId': driverId,
+    'dispatch.candidates': (candidates || []).map((c) => ({
+      driverId: c.driverId,
+      distanceToRestaurantMeters: Math.round(c.distanceToRestaurantMeters),
+      activeOrders: c.activeOrders,
+      multipleOrders: c.multipleOrders === true,
+    })),
+    'dispatch.stackDecision': stackDecision || null,
+    'dispatch.timestamps.offeredAt': admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await getDb()
+    .collection('users')
+    .doc(driverId)
+    .set(
+      {
+        orderRequestData: admin.firestore.FieldValue.arrayUnion(orderId),
+      },
+      { merge: true }
+    );
+
+  await _logDispatchEvent({
+    type: 'rider_offer_sent',
+    orderId,
+    payload: {
+      attempt,
+      driverId,
+      stackDecision: stackDecision || null,
+    },
+  });
+}
+
+async function _cancelOrderWithReason({ orderRef, orderId, orderData, reason }) {
+  await orderRef.update({
+    status: 'Order Cancelled',
+    cancelReason: reason || 'dispatch_failed',
+    cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+    dispatchFlow: RIDER_FIRST_FLOW,
+    'dispatch.stage': 'cancelled',
+  });
+
+  await _logDispatchEvent({
+    type: 'dispatch_failed_attempts',
+    orderId,
+    payload: { reason: reason || 'dispatch_failed' },
+  });
+
+  await _sendCustomerNotificationBestEffort(
+    orderData,
+    'Order cancelled',
+    'We could not find an available rider. Please try again shortly.'
+  );
+}
+
+async function _tryDispatchOrFail({ orderRef, orderId, orderData, attempt }) {
+  const tried = orderData?.dispatch?.triedDriverIds || [];
+  const currentDriverId = String(orderData?.driverID || '');
+  const exclude = Array.isArray(tried) ? tried.slice() : [];
+  if (currentDriverId) exclude.push(currentDriverId);
+
+  const { selected, candidates, stackDecision } = await _pickBestDriverForOrder({
+    orderId,
+    orderData,
+    excludeDriverIds: exclude,
+  });
+
+  if (!selected) {
+    await _cancelOrderWithReason({
+      orderRef,
+      orderId,
+      orderData,
+      reason: 'no_eligible_riders',
+    });
+    return;
+  }
+
+  await _offerOrderToDriver({
+    orderRef,
+    orderId,
+    orderData,
+    driverId: selected.driverId,
+    attempt,
+    candidates,
+    stackDecision,
+  });
+}
+
+exports.riderFirstDispatchOnCreate = functions.firestore
+  .document('restaurant_orders/{orderId}')
+  .onCreate(async (snap, context) => {
+    const orderId = context.params.orderId;
+    const orderData = snap.data() || {};
+
+    try {
+      // Only handle normal customer orders (status starts as "Order Placed").
+      if (String(orderData.status || '') !== 'Order Placed') {
+        return null;
+      }
+
+      // Skip future scheduled orders (dispatch at order-time, not creation-time).
+      if (orderData.scheduleTime && orderData.scheduleTime.toDate) {
+        const when = orderData.scheduleTime.toDate();
+        if (when && when.getTime() > Date.now()) {
+          return null;
+        }
+      }
+
+      // Mark rider-first flow and hide from restaurant until rider accepts.
+      await snap.ref.update({
+        status: 'Awaiting Rider',
+        dispatchFlow: RIDER_FIRST_FLOW,
+        'dispatch.flow': RIDER_FIRST_FLOW,
+        'dispatch.stage': 'created',
+        'dispatch.attempt': 0,
+        'dispatch.triedDriverIds': [],
+        'dispatch.timestamps.createdAt':
+          admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      const fresh = await snap.ref.get();
+      const freshData = fresh.data() || {};
+
+      await _tryDispatchOrFail({
+        orderRef: snap.ref,
+        orderId,
+        orderData: freshData,
+        attempt: 1,
+      });
+      return null;
+    } catch (e) {
+      console.error(`[RiderFirst] onCreate error for ${orderId}:`, e);
+      return null;
+    }
+  });
+
+exports.riderFirstDispatchOnUpdate = functions.firestore
+  .document('restaurant_orders/{orderId}')
+  .onUpdate(async (change, context) => {
+    const orderId = context.params.orderId;
+    const beforeData = change.before.data() || {};
+    const afterData = change.after.data() || {};
+
+    const flow =
+      afterData?.dispatchFlow ||
+      afterData?.dispatch?.flow ||
+      '';
+    if (flow !== RIDER_FIRST_FLOW) return null;
+
+    const beforeStatus = String(beforeData.status || '');
+    const afterStatus = String(afterData.status || '');
+
+    // Rider accepted: make order visible to restaurant and start 5m timer.
+    if (beforeStatus !== 'Driver Accepted' && afterStatus === 'Driver Accepted') {
+      const driverId = String(afterData.driverID || '');
+      const now = _nowTimestamp();
+      const deadline = _addSeconds(now, RESTAURANT_CONFIRM_TIMEOUT_SECONDS);
+
+      await _removeOrderRequestFromDriver(driverId, orderId);
+      await _recomputeDriverIsActive(driverId);
+
+      await change.after.ref.update({
+        status: 'Order Placed',
+        'dispatch.stage': 'rider_accepted',
+        'dispatch.restaurantConfirmDeadline': deadline,
+        'dispatch.timestamps.riderAcceptedAt':
+          admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      await _sendRestaurantNotificationBestEffort(afterData, orderId);
+      await _logDispatchEvent({
+        type: 'rider_accepted',
+        orderId,
+        payload: { driverId },
+      });
+      return null;
+    }
+
+    // Rider rejected: try next candidate (up to 3).
+    if (beforeStatus !== 'Driver Rejected' && afterStatus === 'Driver Rejected') {
+      const attempt = Number(afterData?.dispatch?.attempt || 1) + 1;
+      const driverId = String(afterData.driverID || '');
+
+      await _removeOrderRequestFromDriver(driverId, orderId);
+
+      if (attempt > MAX_DISPATCH_ATTEMPTS) {
+        await _cancelOrderWithReason({
+          orderRef: change.after.ref,
+          orderId,
+          orderData: afterData,
+          reason: 'max_attempts',
+        });
+        return null;
+      }
+
+      await change.after.ref.update({
+        status: 'Awaiting Rider',
+        'dispatch.stage': 'retrying',
+        'dispatch.attempt': attempt - 1,
+      });
+
+      const fresh = await change.after.ref.get();
+      await _tryDispatchOrFail({
+        orderRef: change.after.ref,
+        orderId,
+        orderData: fresh.data() || {},
+        attempt,
+      });
+      return null;
+    }
+
+    // Restaurant rejected: release rider and notify.
+    if (beforeStatus !== 'Order Rejected' && afterStatus === 'Order Rejected') {
+      const driverId = String(afterData.driverID || '');
+      await _releaseDriverFromOrder(driverId, orderId);
+      await _logDispatchEvent({
+        type: 'restaurant_timeout_or_reject',
+        orderId,
+        payload: { reason: 'rejected' },
+      });
+      await _sendCustomerNotificationBestEffort(
+        afterData,
+        'Restaurant unavailable',
+        'The restaurant could not confirm your order. Your rider was released.'
+      );
+      return null;
+    }
+
+    return null;
+  });
+
+exports.riderFirstDispatchTimeouts = functions.pubsub
+  .schedule('every 1 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = _nowTimestamp();
+
+    // 1) Rider accept timeouts (60s)
+    const riderTimeoutSnap = await db
+      .collection('restaurant_orders')
+      .where('dispatch.flow', '==', RIDER_FIRST_FLOW)
+      .where('status', '==', 'Driver Assigned')
+      .where('dispatch.riderAcceptDeadline', '<=', now)
+      .limit(25)
+      .get();
+
+    for (const doc of riderTimeoutSnap.docs) {
+      const orderId = doc.id;
+      const data = doc.data() || {};
+      const driverId = String(data.driverID || '');
+      const attempt = Number(data?.dispatch?.attempt || 1) + 1;
+
+      await _removeOrderRequestFromDriver(driverId, orderId);
+
+      if (attempt > MAX_DISPATCH_ATTEMPTS) {
+        await _cancelOrderWithReason({
+          orderRef: doc.ref,
+          orderId,
+          orderData: data,
+          reason: 'rider_timeout_max_attempts',
+        });
+        continue;
+      }
+
+      await _logDispatchEvent({
+        type: 'rider_offer_timeout',
+        orderId,
+        payload: { driverId, attempt: attempt - 1 },
+      });
+
+      await doc.ref.update({
+        status: 'Awaiting Rider',
+        'dispatch.stage': 'timeout_retrying',
+        'dispatch.attempt': attempt - 1,
+      });
+
+      const fresh = await doc.ref.get();
+      await _tryDispatchOrFail({
+        orderRef: doc.ref,
+        orderId,
+        orderData: fresh.data() || {},
+        attempt,
+      });
+    }
+
+    // 2) Restaurant confirm timeouts (5m)
+    const restaurantTimeoutSnap = await db
+      .collection('restaurant_orders')
+      .where('dispatch.flow', '==', RIDER_FIRST_FLOW)
+      .where('status', '==', 'Order Placed')
+      .where('dispatch.restaurantConfirmDeadline', '<=', now)
+      .limit(25)
+      .get();
+
+    for (const doc of restaurantTimeoutSnap.docs) {
+      const orderId = doc.id;
+      const data = doc.data() || {};
+      const driverId = String(data.driverID || '');
+
+      await _releaseDriverFromOrder(driverId, orderId);
+
+      await doc.ref.update({
+        status: 'Order Cancelled',
+        cancelReason: 'restaurant_timeout',
+        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        'dispatch.stage': 'restaurant_timeout',
+      });
+
+      await _logDispatchEvent({
+        type: 'restaurant_timeout_or_reject',
+        orderId,
+        payload: { reason: 'timeout' },
+      });
+
+      await _sendCustomerNotificationBestEffort(
+        data,
+        'Restaurant did not confirm',
+        'The restaurant did not confirm in time. Your order was cancelled.'
+      );
     }
 
     return null;

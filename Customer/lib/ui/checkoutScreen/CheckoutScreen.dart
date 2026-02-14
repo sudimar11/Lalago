@@ -7,6 +7,7 @@ import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/OrderModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/dispatch_precheck_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/auth/AuthScreen.dart';
@@ -83,6 +84,8 @@ class CheckoutScreen extends StatefulWidget {
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
   final fireStoreUtils = FireStoreUtils();
+  final DispatchPrecheckService _dispatchPrecheckService =
+      DispatchPrecheckService();
   late Map<String, dynamic>? adminCommission;
   String? adminCommissionValue = "", addminCommissionType = "";
   bool? isEnableAdminCommission = false;
@@ -539,16 +542,27 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         throw Exception("Invalid or missing vendorID");
       }
 
+      if (widget.address == null) {
+        throw Exception("Delivery address is null");
+      }
+
+      final precheck = await _dispatchPrecheckService.runPrecheck(
+        customerId: MyAppState.currentUser?.userID ?? '',
+        vendorId: widget.products.first.vendorID,
+      );
+      if (!precheck.canCheckout) {
+        await _showCheckoutBlockedDialog(
+          message: precheck.blockedMessage ?? 'Checkout is currently blocked.',
+        );
+        return;
+      }
+
       log("Step 2: Fetching vendor details");
       final vendorModel = await fireStoreUtils
           .getVendorByVendorID(widget.products.first.vendorID)
           .whenComplete(() => setPrefData());
 
       log("Vendor details fetched: ${vendorModel.toJson()}");
-
-      if (widget.address == null) {
-        throw Exception("Delivery address is null");
-      }
 
       log("Delivery address: ${widget.address?.getFullAddress()}");
 
@@ -766,6 +780,28 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         isLoading = false; // Hide loading indicator
       });
     }
+  }
+
+  Future<void> _showCheckoutBlockedDialog({required String message}) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Checkout Unavailable'),
+        content: SelectableText.rich(
+          TextSpan(
+            text: message,
+            style: const TextStyle(color: Colors.red),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   double _calculateSubtotal(List<CartProduct> products) {
