@@ -552,7 +552,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       );
       if (!precheck.canCheckout) {
         await _showCheckoutBlockedDialog(
-          message: precheck.blockedMessage ?? 'Checkout is currently blocked.',
+          message: precheck.blockedMessage ??
+            'We are unable to process checkout at the moment. Please try again shortly.',
         );
         return;
       }
@@ -787,17 +788,62 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Checkout Unavailable'),
-        content: SelectableText.rich(
-          TextSpan(
-            text: message,
-            style: const TextStyle(color: Colors.red),
-          ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: Row(
+          children: [
+            Icon(
+              Icons.schedule,
+              color: Theme.of(context).colorScheme.primary,
+              size: 28,
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Checkout Unavailable',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.delivery_dining_outlined,
+              size: 48,
+              color: Theme.of(context).colorScheme.primary.withOpacity(0.7),
+            ),
+            const SizedBox(height: 16),
+            SelectableText.rich(
+              TextSpan(
+                text: message,
+                style: TextStyle(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.white70
+                      : Colors.black87,
+                  fontSize: 15,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
+            child: Text(
+              'OK',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
           ),
         ],
       ),

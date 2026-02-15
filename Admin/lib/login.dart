@@ -94,8 +94,8 @@ class _LoginScreenState extends State<LoginScreen> {
           return;
         }
 
-        // Check if user has customer role
-        if (user.role != USER_ROLE_CUSTOMER) {
+        // Allow customer or admin role for Admin app
+        if (user.role != USER_ROLE_CUSTOMER && user.role != USER_ROLE_ADMIN) {
           setState(() => _error = 'Access denied. Invalid user role.');
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

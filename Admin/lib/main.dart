@@ -14,10 +14,9 @@ import 'firebase_options.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase with platform-specific options
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  final options = await getFirebaseOptions();
+  DefaultFirebaseOptions.setCurrentPlatform(options);
+  await Firebase.initializeApp(options: options);
 
   // Initialize SMS services only on non-web platforms
   if (!kIsWeb) {
@@ -153,13 +152,14 @@ class AuthCheck extends StatelessWidget {
 
                   if (userSnapshot.hasData && userSnapshot.data != null) {
                     final firestoreUser = userSnapshot.data!;
-                    // Check if user is active and has customer role
-                    if (firestoreUser.active &&
-                        firestoreUser.role == USER_ROLE_CUSTOMER) {
+                    // Allow customer or admin role for Admin app
+                    final allowedRole = firestoreUser.role == USER_ROLE_CUSTOMER ||
+                        firestoreUser.role == USER_ROLE_ADMIN;
+                    if (firestoreUser.active && allowedRole) {
                       MyAppState.currentUser = firestoreUser;
                       return DashboardScreen();
                     } else {
-                      // User is not active or doesn't have customer role
+                      // User is not active or doesn't have allowed role
                       auth.FirebaseAuth.instance.signOut();
                       return const LoginScreen();
                     }

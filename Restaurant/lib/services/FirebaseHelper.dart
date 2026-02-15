@@ -696,7 +696,8 @@ class FireStoreUtils {
       File image, String userID) async {
     Reference upload = storage.child('images/$userID.png');
     File compressedImage = await compressImage(image);
-    UploadTask uploadTask = upload.putFile(compressedImage);
+    final metadata = SettableMetadata(contentType: 'image/png');
+    UploadTask uploadTask = upload.putFile(compressedImage, metadata);
     var downloadUrl =
         await (await uploadTask.whenComplete(() {})).ref.getDownloadURL();
     return downloadUrl.toString();
@@ -1006,7 +1007,8 @@ class FireStoreUtils {
     Reference upload = storage.child('flutter/uberEats/productImages/$uniqueID'
         '.png');
     File compressedImage = await compressImage(image);
-    UploadTask uploadTask = upload.putFile(compressedImage);
+    final metadata = SettableMetadata(contentType: 'image/png');
+    UploadTask uploadTask = upload.putFile(compressedImage, metadata);
     uploadTask.snapshotEvents.listen((event) {
       updateProgress('{} \n{} / {}KB'.tr(args: [
         progress,
@@ -1262,7 +1264,8 @@ class FireStoreUtils {
     var uniqueID = Uuid().v4();
     Reference upload = storage.child('images/$uniqueID.png');
     File compressedImage = await compressImage(image);
-    UploadTask uploadTask = upload.putFile(compressedImage);
+    final metadata = SettableMetadata(contentType: 'image/png');
+    UploadTask uploadTask = upload.putFile(compressedImage, metadata);
     uploadTask.snapshotEvents.listen((event) {
       updateProgress(
           'Uploading image ${(event.bytesTransferred.toDouble() / 1000).toStringAsFixed(2)} /'
@@ -1372,7 +1375,8 @@ class FireStoreUtils {
     var uniqueID = Uuid().v4();
     Reference upload = storage.child('thumbnails/$uniqueID.png');
     File compressedImage = await compressImage(file);
-    UploadTask uploadTask = upload.putFile(compressedImage);
+    final metadata = SettableMetadata(contentType: 'image/png');
+    UploadTask uploadTask = upload.putFile(compressedImage, metadata);
     var downloadUrl =
         await (await uploadTask.whenComplete(() {})).ref.getDownloadURL();
     return downloadUrl.toString();

@@ -31,16 +31,15 @@ String? validateOthers(String? value) {
 }
 
 String? validateMobile(String? value) {
+  final trimmed = (value ?? '').trim();
   String pattern = r'(^\+?[0-9]*$)';
   RegExp regExp = RegExp(pattern);
-  if (value?.length == 0) {
+  if (trimmed.isEmpty) {
     return 'Mobile is required'.tr();
-  } else if (!regExp.hasMatch(value ?? '')) {
+  }
+  if (!regExp.hasMatch(trimmed)) {
     return 'Mobile Number must be digits'.tr();
   }
-  /*else if(value!.length<10 || value.length>10 ){
-  return 'please enter valid number'.tr();
-  }*/
   return null;
 }
 

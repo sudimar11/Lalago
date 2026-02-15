@@ -1272,8 +1272,16 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
   }
 
   validate() async {
+    final formValid = _formKey.currentState?.validate() ?? false;
+    // #region agent log
+    debugPrint(
+        '[REST_SAVE] add_resturant validate: formValid=$formValid '
+        'vendorID=${MyAppState.currentUser!.vendorID} '
+        'phone=${phonenumber.text} phoneEmpty=${phonenumber.text.isEmpty} '
+        'mediaEmpty=${_mediaFiles.isEmpty}');
+    // #endregion
     if (MyAppState.currentUser!.vendorID != '') {
-      if (_formKey.currentState?.validate() ?? false) {
+      if (formValid) {
         filter();
 
         if (_mediaFiles.isNotEmpty) {
@@ -1305,6 +1313,9 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
               minimumDeliveryChargesWithinKm:
                   num.parse(minDeliveryChargewkm.text));
 
+          // #region agent log
+          debugPrint('[REST_SAVE] add_resturant pushing RestaurantLocationScreen (edit with new photo)');
+          // #endregion
           push(
             context,
             RestaurantLocationScreen(
@@ -1326,6 +1337,9 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
               minimumDeliveryChargesWithinKm:
                   num.parse(minDeliveryChargewkm.text));
 
+          // #region agent log
+          debugPrint('[REST_SAVE] add_resturant pushing RestaurantLocationScreen (edit no new photo)');
+          // #endregion
           push(
             context,
             RestaurantLocationScreen(
@@ -1341,7 +1355,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           );
         }
       }
-    } else if (_formKey.currentState?.validate() ?? false) {
+    } else if (formValid) {
       if (_mediaFiles.isEmpty) {
         showimgAlertDialog(context, 'Please add Image'.tr(),
             'Add Image to continue'.tr(), true);
@@ -1361,7 +1375,9 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                 num.parse(minDeliveryChargewkm.text));
 
         print("---->$filters");
-
+        // #region agent log
+        debugPrint('[REST_SAVE] add_resturant pushing RestaurantLocationScreen (new restaurant)');
+        // #endregion
         push(
           context,
           RestaurantLocationScreen(

@@ -85,7 +85,9 @@ class DispatchPrecheckService {
       );
       return DispatchPrecheckResult(
         canCheckout: false,
-        blockedMessage: 'All riders are currently busy.',
+        blockedMessage:
+            'Our delivery team is at full capacity at the moment. '
+            'Please try again in a few minutes.',
         blockedEventType: _eventCheckoutBlockedOverload,
         activeOrders: activeOrders,
         activeRiders: activeRiders,
@@ -111,7 +113,9 @@ class DispatchPrecheckService {
       );
       return DispatchPrecheckResult(
         canCheckout: false,
-        blockedMessage: 'High demand in your area.',
+        blockedMessage:
+            "We're experiencing high demand in your area. "
+            'Please try again shortly.',
         blockedEventType: _eventCheckoutBlockedNoCapacity,
         activeOrders: activeOrders,
         activeRiders: activeRiders,
@@ -129,9 +133,18 @@ class DispatchPrecheckService {
 
   Future<int> _countActiveOrders() async {
     try {
+      final now = DateTime.now();
+      final startOfToday = DateTime(now.year, now.month, now.day);
+      final endOfToday = startOfToday.add(const Duration(days: 1));
+      final startTs = Timestamp.fromDate(startOfToday);
+      final endTs = Timestamp.fromDate(endOfToday);
+
       final snap = await _firestore
           .collection(ORDERS)
           .where('status', whereIn: _activeOrderStatuses)
+          .where('createdAt', isGreaterThanOrEqualTo: startTs)
+          .where('createdAt', isLessThan: endTs)
+          .orderBy('createdAt')
           .get();
       return snap.size;
     } catch (e) {

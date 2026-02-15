@@ -38,6 +38,7 @@ import 'package:foodie_customer/services/coupon_service.dart';
 import 'package:foodie_customer/services/new_user_promo_service.dart';
 import 'package:foodie_customer/services/distance_service.dart';
 import 'package:foodie_customer/ui/cartScreen/voucher_screen.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:foodie_customer/ui/home/view_all_restaurant.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/ui/cartScreen/estimated_delivery_time_card.dart';
@@ -190,6 +191,9 @@ class _CartScreenState extends State<CartScreen> {
   static const int _etaBufferMinutes = 10;
   static const double _avgSpeedKmh = 25.0;
   static const int _cacheExpiryMinutes = 10;
+
+  /// When true, next delivery calculation uses live location (no cache).
+  bool _useLiveLocationOnNextDeliveryCalc = true;
 
   /// Invalidates all delivery-related cache variables
   void _invalidateDeliveryCache() {
@@ -1468,22 +1472,24 @@ class _CartScreenState extends State<CartScreen> {
     return hasVendorChanged || hasAddressChanged;
   }
 
-  /// Debounced wrapper for getDeliveyData to prevent excessive API calls
-  void _debouncedGetDeliveryData({bool immediate = false}) {
-    // Cancel any pending debounce timer
+  /// Debounced wrapper for getDeliveyData to prevent excessive API calls.
+  /// [forceFresh] uses live location and bypasses distance/delivery cache.
+  void _debouncedGetDeliveryData({
+    bool immediate = false,
+    bool forceFresh = false,
+  }) {
     _distanceCalculationDebounceTimer?.cancel();
     _distanceCalculationDebounceTimer = null;
 
     if (immediate) {
-      // Immediate execution for explicit user actions (e.g., address change)
-      getDeliveyData();
+      getDeliveyData(forceFresh: true);
       return;
     }
 
-    // Debounce: wait 3 seconds before executing
+    final useFresh = forceFresh;
     _distanceCalculationDebounceTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) {
-        getDeliveyData();
+        getDeliveyData(forceFresh: useFresh);
       }
     });
   }
@@ -1503,6 +1509,27 @@ class _CartScreenState extends State<CartScreen> {
     }
 
     try {
+      // When using live location and address is current location (no saved id),
+      // fetch fresh GPS so delivery charge is based on current position.
+      if (forceFresh &&
+          addressModel.id == null &&
+          selctedOrderTypeValue == "Delivery") {
+        try {
+          final Position position = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high,
+          );
+          if (mounted) {
+            addressModel.location = UserLocation(
+              latitude: position.latitude,
+              longitude: position.longitude,
+            );
+            MyAppState.selectedPosotion = addressModel;
+          }
+        } catch (_) {
+          // Keep existing location if GPS fails
+        }
+      }
+
       // Early return if no cart products or address not set
       if (cartProducts.isEmpty ||
           addressModel.location == null ||
@@ -1847,8 +1874,9 @@ class _CartScreenState extends State<CartScreen> {
         _invalidateDeliveryCache();
       }
 
-      // Check for valid cached delivery result
-      if (!vendorChanged &&
+      // Check for valid cached delivery result (skip when using live location)
+      if (!_useLiveLocationOnNextDeliveryCalc &&
+          !vendorChanged &&
           !addressChanged &&
           _cachedDistanceKm != null &&
           _cachedDeliveryCharge != null) {
@@ -1860,13 +1888,11 @@ class _CartScreenState extends State<CartScreen> {
             cacheAge == null || cacheAge.inMinutes >= _cacheExpiryMinutes;
 
         if (isExpired) {
-          // Cache expired, invalidate and proceed with recalculation
           _invalidateDeliveryCache();
         } else {
           // Parse cached charge to verify it's greater than zero
           final cachedChargeValue = double.tryParse(_cachedDeliveryCharge!);
           if (cachedChargeValue != null && cachedChargeValue > 0) {
-            // All conditions met - use cached result and skip network calls
             if (mounted) {
               setState(() {
                 deliveryCharges = _cachedDeliveryCharge!;
@@ -1876,22 +1902,30 @@ class _CartScreenState extends State<CartScreen> {
                     _buildEstimatedDeliveryTimeText(_cachedDistanceKm!);
               });
             }
-            return; // Early return to skip _debouncedGetDeliveryData()
+            return;
           }
         }
       }
 
-      // Only trigger debounced calculation if vendor or address changed
-      if (vendorChanged || addressChanged || _cachedDistanceKm == null) {
-        // Set loading state before triggering delivery charges calculation
-        // This ensures loading indicator shows from subtotal calculation through delivery charges
+      // Trigger delivery calculation (use live location when flag is set)
+      if (vendorChanged ||
+          addressChanged ||
+          _cachedDistanceKm == null ||
+          _useLiveLocationOnNextDeliveryCalc) {
         if (mounted && !_isDeliveryDataLoading) {
           setState(() {
             _isDeliveryDataLoading = true;
             _isDeliveryReady = false;
           });
         }
-        _debouncedGetDeliveryData(immediate: false);
+        final useLive = _useLiveLocationOnNextDeliveryCalc;
+        _useLiveLocationOnNextDeliveryCalc = false;
+        // Use live location immediately when opening cart or after pull-to-refresh
+        if (useLive) {
+          getDeliveyData(forceFresh: true);
+        } else {
+          _debouncedGetDeliveryData(immediate: false, forceFresh: false);
+        }
       }
     }
 
@@ -1938,9 +1972,9 @@ class _CartScreenState extends State<CartScreen> {
 
   // Pull-to-refresh handler
   Future<void> _onRefresh() async {
-    // Force recalculation by resetting tracking variables
     _lastSubTotal = null;
     _invalidateDeliveryCache();
+    _useLiveLocationOnNextDeliveryCalc = true;
     _lastCartProducts = null;
     _lastVendorID = null;
 
