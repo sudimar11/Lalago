@@ -3,7 +3,6 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:brgy/services/auto_accept_service.dart';
 import 'package:brgy/services/order_acceptance_service.dart';
 import 'package:brgy/services/order_rejection_service.dart';
 import 'package:brgy/services/manual_dispatch_service.dart';
@@ -20,6 +19,7 @@ import 'package:brgy/widgets/orders/order_info_section.dart';
 import 'package:brgy/utils/order_ready_time_helper.dart';
 import 'package:brgy/services/sms_service.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class OrderDispatcherPage extends StatefulWidget {
   final int initialTabIndex;
@@ -99,9 +99,6 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
   final Set<String> _trackedOrders =
       {}; // Track which orders we've already logged
 
-  // Auto-accept service
-  final AutoAcceptService _autoAcceptService = AutoAcceptService();
-
   // Order acceptance service
   final OrderAcceptanceService _orderAcceptanceService =
       OrderAcceptanceService();
@@ -126,6 +123,60 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
   final DriverResponseTrackingService _driverResponseTrackingService =
       DriverResponseTrackingService();
 
+  // Recommendation rider: cache active drivers (TTL 60s), limit to first 10 orders
+  List<Map<String, dynamic>>? _cachedDrivers;
+  DateTime? _driversCacheTime;
+  bool _loadingDrivers = false;
+  static const int _recommendationOrderLimit = 10;
+  static const Duration _driversCacheTtl = Duration(seconds: 60);
+
+  Future<void> _refreshDriverCacheIfNeeded() async {
+    final now = DateTime.now();
+    if (_cachedDrivers != null &&
+        _driversCacheTime != null &&
+        now.difference(_driversCacheTime!) < _driversCacheTtl) {
+      return;
+    }
+    if (mounted) setState(() => _loadingDrivers = true);
+    try {
+      final drivers =
+          await _driverAssignmentService.fetchActiveDriversWithLocations();
+      if (mounted) {
+        setState(() {
+          _cachedDrivers = drivers;
+          _driversCacheTime = now;
+        });
+      }
+    } catch (_) {
+      // Keep previous cache on error
+    } finally {
+      if (mounted) setState(() => _loadingDrivers = false);
+    }
+  }
+
+  Future<void> _openRestaurantMap(
+    BuildContext context,
+    double lat,
+    double lng,
+  ) async {
+    final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+    );
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (ok) return;
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open maps.')),
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open maps.')),
+      );
+    }
+  }
+
   @override
   void dispose() {
     // Cancel all active listeners when widget is disposed
@@ -138,9 +189,6 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
       listener.cancel();
     }
     _orderStatusListeners.clear();
-
-    // Dispose auto-accept service
-    _autoAcceptService.dispose();
 
     super.dispose();
   }
@@ -222,6 +270,11 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
         if (filteredDocs.isEmpty) {
           return const CenteredMessage('No active orders.');
         }
+
+        // Refresh driver cache when orders exist (TTL 60s)
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _refreshDriverCacheIfNeeded();
+        });
 
         return ListView.separated(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -307,43 +360,39 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
               // For any other status (including "Order Placed"), do NOT auto-dispatch
             }
 
-            // Auto-accept logic for orders in "Order Placed" status
-            if (isOrderPlaced && createdAt != null) {
-              // Start auto-accept timer for new orders in "Order Placed" status
-              if (!_autoAcceptService.hasActiveTimer(id)) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _autoAcceptService.startAutoAcceptTimer(
-                    id,
-                    createdAt.toDate(),
-                    onAutoAccept: () {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                                '🔄 Order $id auto-accepted after 4 minutes'),
-                            backgroundColor: Colors.orange,
-                            duration: const Duration(seconds: 4),
-                          ),
-                        );
-                      }
-                    },
-                  );
-                });
-              }
-            } else {
-              // Cancel auto-accept timer if order is no longer in "Order Placed" status
-              if (_autoAcceptService.hasActiveTimer(id)) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _autoAcceptService.cancelAutoAcceptTimer(id);
-                });
-              }
-            }
-
             // Show driver name for orders with drivers assigned (not "Order Accepted" or "Order Placed" or "Order Rejected")
             final shouldShowDriverName = !isOrderAccepted &&
                 !isOrderPlaced &&
                 !isOrderRejected &&
                 driverId.isNotEmpty;
+
+            // Recommendation rider for first N orders without driver (when not overloaded)
+            final location = _manualDispatchService.extractVendorLocation(data);
+            final hasValidVendor = location['latitude']! != 0.0 &&
+                location['longitude']! != 0.0;
+            Map<String, dynamic>? recommended;
+            if (driverId.isEmpty &&
+                i < _recommendationOrderLimit &&
+                _cachedDrivers != null &&
+                hasValidVendor) {
+              recommended = _driverAssignmentService.getRecommendedDriverFromList(
+                _cachedDrivers!,
+                location['latitude']!,
+                location['longitude']!,
+              );
+            }
+            final eligibleForRecommendationUi =
+                driverId.isEmpty && i < _recommendationOrderLimit;
+
+            if (i == 0) {
+              print(
+                  '[Recommendation] orderId=$id hasValidVendor=$hasValidVendor '
+                  'cachedDriversCount=${_cachedDrivers?.length ?? 0} '
+                  'recommended=${recommended != null}');
+              print(
+                  '[Recommendation] vendor lat=${location['latitude']} '
+                  'lng=${location['longitude']}');
+            }
 
             return Card(
               clipBehavior: Clip.antiAlias,
@@ -444,11 +493,59 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                                 label: vendorName,
                                 color: Colors.orange,
                               ),
+                            if (hasValidVendor)
+                              InkWell(
+                                onTap: () => _openRestaurantMap(
+                                  context,
+                                  location['latitude']!,
+                                  location['longitude']!,
+                                ),
+                                borderRadius: BorderRadius.circular(4),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Icon(
+                                    Icons.location_on,
+                                    color: Colors.orange,
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
                             // Show driver name for assigned orders (not completed)
                             if (shouldShowDriverName && !isOrderCompleted)
                               DriverNameChip(driverId: driverId),
                             // Show restaurant owner
                             RestaurantOwnerChip(orderData: data),
+                            if (eligibleForRecommendationUi) ...[
+                              if (_cachedDrivers == null && _loadingDrivers)
+                                _InfoChip(
+                                  icon: Icons.hourglass_empty,
+                                  label: 'Loading recommendation…',
+                                  color: Colors.grey,
+                                )
+                              else if (_cachedDrivers == null &&
+                                  !_loadingDrivers)
+                                _InfoChip(
+                                  icon: Icons.person_off,
+                                  label: 'No riders available',
+                                  color: Colors.grey,
+                                )
+                              else if (_cachedDrivers != null &&
+                                  recommended != null)
+                                _InfoChip(
+                                  icon: Icons.person_pin,
+                                  label:
+                                      'Recommended: ${recommended['driverName']} · '
+                                      '${(recommended['distance'] as double).toStringAsFixed(1)} km from restaurant',
+                                  color: Colors.teal,
+                                )
+                              else if (_cachedDrivers != null &&
+                                  recommended == null)
+                                _InfoChip(
+                                  icon: Icons.person_search,
+                                  label: 'No rider in range',
+                                  color: Colors.grey,
+                                ),
+                            ],
                             if (eta != null)
                               _InfoChip(
                                 icon: Icons.timer,
@@ -1689,6 +1786,62 @@ class _TodaysOrdersList extends StatefulWidget {
 class _TodaysOrdersListState extends State<_TodaysOrdersList> {
   final Set<String> _sendingSMS = {}; // Track orders currently sending SMS
   final OrderRejectionService _orderRejectionService = OrderRejectionService();
+  final ManualDispatchService _manualDispatchService = ManualDispatchService();
+  final DriverAssignmentService _driverAssignmentService =
+      DriverAssignmentService();
+
+  List<Map<String, dynamic>>? _cachedDrivers;
+  DateTime? _driversCacheTime;
+  bool _loadingDrivers = false;
+  static const int _recommendationOrderLimit = 10;
+  static const Duration _driversCacheTtl = Duration(seconds: 60);
+
+  Future<void> _refreshDriverCacheIfNeeded() async {
+    final now = DateTime.now();
+    if (_cachedDrivers != null &&
+        _driversCacheTime != null &&
+        now.difference(_driversCacheTime!) < _driversCacheTtl) {
+      return;
+    }
+    if (mounted) setState(() => _loadingDrivers = true);
+    try {
+      final drivers =
+          await _driverAssignmentService.fetchActiveDriversWithLocations();
+      if (mounted) {
+        setState(() {
+          _cachedDrivers = drivers;
+          _driversCacheTime = now;
+        });
+      }
+    } catch (_) {
+      // Keep previous cache on error
+    } finally {
+      if (mounted) setState(() => _loadingDrivers = false);
+    }
+  }
+
+  Future<void> _openRestaurantMap(
+    BuildContext context,
+    double lat,
+    double lng,
+  ) async {
+    final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+    );
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (ok) return;
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open maps.')),
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open maps.')),
+      );
+    }
+  }
 
   Future<void> _sendRejectionSMS(
       BuildContext context, String orderId, Map<String, dynamic> data) async {
@@ -1914,6 +2067,10 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
           return const CenteredMessage('No active orders today.');
         }
 
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _refreshDriverCacheIfNeeded();
+        });
+
         return ListView.separated(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(12),
@@ -1956,6 +2113,35 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                 !isOrderPlaced &&
                 !isOrderRejected &&
                 driverId.isNotEmpty;
+
+            final location =
+                _manualDispatchService.extractVendorLocation(data);
+            final hasValidVendor = location['latitude']! != 0.0 &&
+                location['longitude']! != 0.0;
+            Map<String, dynamic>? recommended;
+            if (driverId.isEmpty &&
+                i < _recommendationOrderLimit &&
+                _cachedDrivers != null &&
+                hasValidVendor) {
+              recommended =
+                  _driverAssignmentService.getRecommendedDriverFromList(
+                _cachedDrivers!,
+                location['latitude']!,
+                location['longitude']!,
+              );
+            }
+            final eligibleForRecommendationUi =
+                driverId.isEmpty && i < _recommendationOrderLimit;
+
+            if (i == 0) {
+              print(
+                  '[Recommendation] orderId=$id hasValidVendor=$hasValidVendor '
+                  'cachedDriversCount=${_cachedDrivers?.length ?? 0} '
+                  'recommended=${recommended != null}');
+              print(
+                  '[Recommendation] vendor lat=${location['latitude']} '
+                  'lng=${location['longitude']}');
+            }
 
             return Card(
               clipBehavior: Clip.antiAlias,
@@ -2049,10 +2235,58 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                                 label: vendorName,
                                 color: Colors.orange,
                               ),
+                            if (hasValidVendor)
+                              InkWell(
+                                onTap: () => _openRestaurantMap(
+                                  context,
+                                  location['latitude']!,
+                                  location['longitude']!,
+                                ),
+                                borderRadius: BorderRadius.circular(4),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Icon(
+                                    Icons.location_on,
+                                    color: Colors.orange,
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
                             if (shouldShowDriverName && !isOrderCompleted)
                               DriverNameChip(driverId: driverId),
                             // Show restaurant owner
                             RestaurantOwnerChip(orderData: data),
+                            if (eligibleForRecommendationUi) ...[
+                              if (_cachedDrivers == null && _loadingDrivers)
+                                _InfoChip(
+                                  icon: Icons.hourglass_empty,
+                                  label: 'Loading recommendation…',
+                                  color: Colors.grey,
+                                )
+                              else if (_cachedDrivers == null &&
+                                  !_loadingDrivers)
+                                _InfoChip(
+                                  icon: Icons.person_off,
+                                  label: 'No riders available',
+                                  color: Colors.grey,
+                                )
+                              else if (_cachedDrivers != null &&
+                                  recommended != null)
+                                _InfoChip(
+                                  icon: Icons.person_pin,
+                                  label:
+                                      'Recommended: ${recommended['driverName']} · '
+                                      '${(recommended['distance'] as double).toStringAsFixed(1)} km from restaurant',
+                                  color: Colors.teal,
+                                )
+                              else if (_cachedDrivers != null &&
+                                  recommended == null)
+                                _InfoChip(
+                                  icon: Icons.person_search,
+                                  label: 'No rider in range',
+                                  color: Colors.grey,
+                                ),
+                            ],
                             if (eta != null)
                               _InfoChip(
                                 icon: Icons.timer,

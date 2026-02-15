@@ -2,6 +2,7 @@ import 'dart:developer';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:foodie_customer/constants.dart';
+import 'package:http/http.dart' as http;
 
 class DispatchPrecheckResult {
   final bool canCheckout;
@@ -49,6 +50,19 @@ class DispatchPrecheckService {
     required String customerId,
     required String vendorId,
   }) async {
+    // #region agent log
+    log('[DispatchPrecheck] entry customerId=$customerId vendorId=$vendorId',
+        name: 'precheck');
+    try {
+      await http.post(
+        Uri.parse(
+            'http://127.0.0.1:7245/ingest/5f1a6d32-5b64-4784-b085-ee17060b4d34'),
+        headers: {'Content-Type': 'application/json'},
+        body: '{"location":"dispatch_precheck_service.dart:runPrecheck:entry","message":"precheck started","data":{"customerId":"$customerId","vendorId":"$vendorId"},"timestamp":${DateTime.now().millisecondsSinceEpoch},"hypothesisId":"A"}',
+      ).catchError((_) => null);
+    } catch (_) {}
+    // #endregion
+
     final activeOrders = await _countActiveOrders();
     final ridersSnapshot = await _firestore
         .collection(USERS)
@@ -73,9 +87,38 @@ class DispatchPrecheckService {
     }).toList();
 
     final activeRiders = filteredRiders.length;
-    final isOverloaded = activeOrders > (activeRiders * _maxOrdersPerRider);
+    final isOverloaded = activeOrders >= (activeRiders * _maxOrdersPerRider);
+
+    // #region agent log
+    log(
+        '[DispatchPrecheck] after query activeOrders=$activeOrders '
+        'rawRiderCount=${riders.length} activeRiders=$activeRiders '
+        'isOverloaded=$isOverloaded',
+        name: 'precheck');
+    try {
+      await http.post(
+        Uri.parse(
+            'http://127.0.0.1:7245/ingest/5f1a6d32-5b64-4784-b085-ee17060b4d34'),
+        headers: {'Content-Type': 'application/json'},
+        body:
+            '{"location":"dispatch_precheck_service.dart:after query","message":"counts and overload","data":{"activeOrders":$activeOrders,"rawRiderCount":${riders.length},"activeRiders":$activeRiders,"isOverloaded":$isOverloaded},"timestamp":${DateTime.now().millisecondsSinceEpoch},"hypothesisId":"A,B"}',
+      ).catchError((_) => null);
+    } catch (_) {}
+    // #endregion
 
     if (isOverloaded) {
+      // #region agent log
+      log('[DispatchPrecheck] BLOCKED overload', name: 'precheck');
+      try {
+        await http.post(
+          Uri.parse(
+              'http://127.0.0.1:7245/ingest/5f1a6d32-5b64-4784-b085-ee17060b4d34'),
+          headers: {'Content-Type': 'application/json'},
+          body:
+              '{"location":"dispatch_precheck_service.dart:blocked","message":"blocked overload","data":{"blockedEventType":"$_eventCheckoutBlockedOverload"},"timestamp":${DateTime.now().millisecondsSinceEpoch},"hypothesisId":"B"}',
+        ).catchError((_) => null);
+      } catch (_) {}
+      // #endregion
       await _tryLogEvent(
         eventType: _eventCheckoutBlockedOverload,
         customerId: customerId,
@@ -94,34 +137,46 @@ class DispatchPrecheckService {
       );
     }
 
-    final hasAnyCapacity = filteredRiders.any((r) {
-      final activeOrders = _getActiveOrdersCount(r);
-      if (activeOrders == 0) return true;
-      if (activeOrders == 1) {
-        return r['multipleOrders'] == true;
-      }
-      return false;
-    });
-
-    if (!hasAnyCapacity) {
-      await _tryLogEvent(
-        eventType: _eventCheckoutBlockedNoCapacity,
-        customerId: customerId,
-        vendorId: vendorId,
-        activeOrders: activeOrders,
-        activeRiders: activeRiders,
-      );
+    // No orders today: allow checkout; no competition for riders.
+    if (activeOrders == 0) {
+      // #region agent log
+      log('[DispatchPrecheck] ALLOW checkout (0 orders today)', name: 'precheck');
+      try {
+        await http.post(
+          Uri.parse(
+              'http://127.0.0.1:7245/ingest/5f1a6d32-5b64-4784-b085-ee17060b4d34'),
+          headers: {'Content-Type': 'application/json'},
+          body:
+              '{"location":"dispatch_precheck_service.dart:allow 0 orders","message":"allowing checkout (0 orders today)","data":{"activeOrders":0},"timestamp":${DateTime.now().millisecondsSinceEpoch},"hypothesisId":"E"}',
+        ).catchError((_) => null);
+      } catch (_) {}
+      // #endregion
       return DispatchPrecheckResult(
-        canCheckout: false,
-        blockedMessage:
-            "We're experiencing high demand in your area. "
-            'Please try again shortly.',
-        blockedEventType: _eventCheckoutBlockedNoCapacity,
+        canCheckout: true,
+        blockedMessage: null,
+        blockedEventType: null,
         activeOrders: activeOrders,
         activeRiders: activeRiders,
       );
     }
 
+    // Not overloaded: allow checkout. Only block when activeOrders > activeRiders * _maxOrdersPerRider.
+    // Per-rider assignment is handled by dispatch; we do not block for "no capacity" here.
+    // #region agent log
+    log(
+        '[DispatchPrecheck] ALLOW checkout (not overloaded) '
+        'activeOrders=$activeOrders activeRiders=$activeRiders',
+        name: 'precheck');
+    try {
+      await http.post(
+        Uri.parse(
+            'http://127.0.0.1:7245/ingest/5f1a6d32-5b64-4784-b085-ee17060b4d34'),
+        headers: {'Content-Type': 'application/json'},
+        body:
+            '{"location":"dispatch_precheck_service.dart:allow","message":"not overloaded","data":{"activeOrders":$activeOrders,"activeRiders":$activeRiders},"timestamp":${DateTime.now().millisecondsSinceEpoch}}',
+      ).catchError((_) => null);
+    } catch (_) {}
+    // #endregion
     return DispatchPrecheckResult(
       canCheckout: true,
       blockedMessage: null,

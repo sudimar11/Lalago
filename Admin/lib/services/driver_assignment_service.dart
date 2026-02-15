@@ -100,6 +100,88 @@ class DriverAssignmentService {
     }
   }
 
+  /// Fetch active drivers with valid location (for recommendation only).
+  /// Returns list of { 'id': doc.id, 'data': doc.data() }.
+  Future<List<Map<String, dynamic>>> fetchActiveDriversWithLocations() async {
+    final driversQuery = await _firestore
+        .collection('users')
+        .where('role', isEqualTo: 'driver')
+        .where('isActive', isEqualTo: true)
+        .get();
+
+    final List<Map<String, dynamic>> result = [];
+    for (final doc in driversQuery.docs) {
+      final driverData = doc.data();
+      final location = driverData['location'];
+      if (location != null && location is Map) {
+        final driverLat = _asDouble(location['latitude']) ?? 0.0;
+        final driverLng = _asDouble(location['longitude']) ?? 0.0;
+        if (driverLat != 0.0 && driverLng != 0.0) {
+          result.add({'id': doc.id, 'data': driverData});
+        }
+      }
+    }
+    print('[Recommendation] fetchActiveDriversWithLocations count=${result.length}');
+    return result;
+  }
+
+  /// Get best recommended driver from pre-fetched list (no Firestore).
+  /// Returns { 'driverId': String, 'driverName': String, 'distance': double }
+  /// or null.
+  Map<String, dynamic>? getRecommendedDriverFromList(
+    List<Map<String, dynamic>> drivers,
+    double vendorLat,
+    double vendorLng,
+  ) {
+    if (drivers.isEmpty || vendorLat == 0.0 || vendorLng == 0.0) {
+      return null;
+    }
+    final withDistance = _buildDriversListFromMaps(
+      drivers,
+      vendorLat,
+      vendorLng,
+    );
+    if (withDistance.isEmpty) return null;
+    _sortDriversByScore(withDistance);
+    final best = withDistance.first;
+    final driverId = best['id'] as String;
+    final driverData = best['data'] as Map<String, dynamic>;
+    final distance = best['distance'] as double;
+    final driverName =
+        '${driverData['firstName'] ?? ''} ${driverData['lastName'] ?? ''}'
+            .trim();
+    return {
+      'driverId': driverId,
+      'driverName': driverName.isEmpty ? 'Driver' : driverName,
+      'distance': distance,
+    };
+  }
+
+  /// Build list with distances from list of { 'id', 'data' } (no Firestore).
+  List<Map<String, dynamic>> _buildDriversListFromMaps(
+    List<Map<String, dynamic>> driverMaps,
+    double vendorLat,
+    double vendorLng,
+  ) {
+    final List<Map<String, dynamic>> list = [];
+    for (final entry in driverMaps) {
+      final id = entry['id'] as String?;
+      final driverData = entry['data'] as Map<String, dynamic>?;
+      if (id == null || driverData == null) continue;
+      final location = driverData['location'];
+      if (location != null && location is Map) {
+        final driverLat = _asDouble(location['latitude']) ?? 0.0;
+        final driverLng = _asDouble(location['longitude']) ?? 0.0;
+        if (driverLat != 0.0 && driverLng != 0.0) {
+          final distance =
+              _calculateDistance(vendorLat, vendorLng, driverLat, driverLng);
+          list.add({'id': id, 'data': driverData, 'distance': distance});
+        }
+      }
+    }
+    return list;
+  }
+
   /// Build list of available drivers with distances
   List<Map<String, dynamic>> _buildDriversList(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
