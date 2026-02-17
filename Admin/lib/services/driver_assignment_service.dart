@@ -9,6 +9,16 @@ class DriverAssignmentService {
   final OrderNotificationService _notificationService =
       OrderNotificationService();
 
+  /// Max active orders per rider; only riders with fewer are recommended/assigned
+  static const int maxActiveOrdersPerRider = 2;
+
+  static int _activeOrderCount(Map<String, dynamic> driverData) {
+    final raw = driverData['inProgressOrderID'];
+    if (raw is List) return raw.length;
+    if (raw is num) return raw.toInt();
+    return 0;
+  }
+
   /// Find and assign the best available driver to an order
   /// Returns a map with success status and driver information
   Future<Map<String, dynamic>> findAndAssignDriver({
@@ -23,15 +33,14 @@ class DriverAssignmentService {
     }) setupDriverResponseListener,
   }) async {
     try {
-      // Find active drivers
+      // Find drivers (signed-in/active = not checked out today, same as map)
       final driversQuery = await _firestore
           .collection('users')
           .where('role', isEqualTo: 'driver')
-          .where('isActive', isEqualTo: true)
           .get();
 
       if (driversQuery.docs.isEmpty) {
-        return {'success': false, 'reason': 'No active drivers'};
+        return {'success': false, 'reason': 'No drivers'};
       }
 
       // Calculate distances for all active drivers (excluding rejected one)
@@ -43,7 +52,10 @@ class DriverAssignmentService {
       );
 
       if (drivers.isEmpty) {
-        return {'success': false, 'reason': 'No drivers with valid location'};
+        return {
+          'success': false,
+          'reason': 'No active drivers with valid location',
+        };
       }
 
       // Sort drivers by optimal score
@@ -100,18 +112,50 @@ class DriverAssignmentService {
     }
   }
 
-  /// Fetch active drivers with valid location (for recommendation only).
+  /// Assign an order to a specific driver (e.g. the recommended rider).
+  /// Caller must ensure driver has fewer than maxActiveOrdersPerRider.
+  Future<void> assignOrderToDriver({
+    required String orderId,
+    required String driverId,
+    required double distance,
+    required void Function({
+      required String orderId,
+      required String driverId,
+      required String assignmentLogId,
+    }) setupDriverResponseListener,
+  }) async {
+    await _assignDriverToOrder(orderId, driverId, distance);
+    await _updateDriverStatus(driverId, orderId);
+    final assignmentLogRef =
+        await _logAssignment(orderId, driverId, distance);
+    setupDriverResponseListener(
+      orderId: orderId,
+      driverId: driverId,
+      assignmentLogId: assignmentLogRef.id,
+    );
+    await _notificationService.sendDriverAssignmentNotification(
+      driverId: driverId,
+      orderId: orderId,
+    );
+  }
+
+  /// Fetch drivers who are signed-in/active (same as Active Riders Live Map)
+  /// with valid location. Order of checks: (1) active (checkedOutToday != true),
+  /// (2) valid location. Max 2 orders is applied later when selecting the
+  /// recommended rider.
   /// Returns list of { 'id': doc.id, 'data': doc.data() }.
   Future<List<Map<String, dynamic>>> fetchActiveDriversWithLocations() async {
     final driversQuery = await _firestore
         .collection('users')
         .where('role', isEqualTo: 'driver')
-        .where('isActive', isEqualTo: true)
         .get();
 
     final List<Map<String, dynamic>> result = [];
     for (final doc in driversQuery.docs) {
       final driverData = doc.data();
+      // (1) Active = not checked out today, same as Active Riders Live Map
+      if (driverData['checkedOutToday'] == true) continue;
+      // (2) Valid location; max 2 orders applied in getRecommendedDriverFromList
       final location = driverData['location'];
       if (location != null && location is Map) {
         final driverLat = _asDouble(location['latitude']) ?? 0.0;
@@ -168,6 +212,7 @@ class DriverAssignmentService {
       final id = entry['id'] as String?;
       final driverData = entry['data'] as Map<String, dynamic>?;
       if (id == null || driverData == null) continue;
+      if (_activeOrderCount(driverData) >= maxActiveOrdersPerRider) continue;
       final location = driverData['location'];
       if (location != null && location is Map) {
         final driverLat = _asDouble(location['latitude']) ?? 0.0;
@@ -199,6 +244,9 @@ class DriverAssignmentService {
       }
 
       final driverData = doc.data();
+      // Same filter as Active Riders Live Map: active = not checked out today
+      if (driverData['checkedOutToday'] == true) continue;
+      if (_activeOrderCount(driverData) >= maxActiveOrdersPerRider) continue;
       final location = driverData['location'];
 
       if (location != null && location is Map) {

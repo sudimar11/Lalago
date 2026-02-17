@@ -76,6 +76,45 @@ class _ContainerScreen extends State<ContainerScreen> {
   bool _isInitializing = true;
   String? _initializationError;
 
+  int _loadingMessageIndex = 0;
+  int _pulseKey = 0;
+  Timer? _loadingMessageTimer;
+  Timer? _loadingPulseTimer;
+
+  static const List<String> _loadingMessages = [
+    'Setting up your experience...',
+    'Finding restaurants near you...',
+    'Almost ready...',
+    'Getting your favorites ready...',
+  ];
+  static const List<String> _loadingTips = [
+    'Discover new restaurants nearby',
+    'Order from your favorite spots in minutes',
+    'Earn rewards with every order',
+  ];
+
+  void _cycleLoadingMessage(Timer _) {
+    if (mounted && _isInitializing) {
+      setState(() {
+        _loadingMessageIndex =
+            (_loadingMessageIndex + 1) % _loadingMessages.length;
+      });
+    }
+  }
+
+  void _cyclePulse(Timer _) {
+    if (mounted && _isInitializing) {
+      setState(() => _pulseKey++);
+    }
+  }
+
+  void _cancelLoadingTimers() {
+    _loadingMessageTimer?.cancel();
+    _loadingMessageTimer = null;
+    _loadingPulseTimer?.cancel();
+    _loadingPulseTimer = null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -86,7 +125,17 @@ class _ContainerScreen extends State<ContainerScreen> {
       _initializeAfterUserSet();
     } else {
       _performInitialization();
+      _loadingMessageTimer =
+          Timer.periodic(const Duration(milliseconds: 2500), _cycleLoadingMessage);
+      _loadingPulseTimer =
+          Timer.periodic(const Duration(milliseconds: 1500), _cyclePulse);
     }
+  }
+
+  @override
+  void dispose() {
+    _cancelLoadingTimers();
+    super.dispose();
   }
 
   Future<void> _performInitialization() async {
@@ -151,6 +200,7 @@ class _ContainerScreen extends State<ContainerScreen> {
         
         if (mounted) {
           setState(() {
+            _cancelLoadingTimers();
             _isInitializing = false;
           });
         }
@@ -184,6 +234,7 @@ class _ContainerScreen extends State<ContainerScreen> {
         
         if (mounted) {
           setState(() {
+            _cancelLoadingTimers();
             _isInitializing = false;
           });
         }
@@ -227,6 +278,7 @@ class _ContainerScreen extends State<ContainerScreen> {
       // 8) Mark initialization as complete
       if (mounted) {
         setState(() {
+          _cancelLoadingTimers();
           _isInitializing = false;
         });
       }
@@ -234,6 +286,7 @@ class _ContainerScreen extends State<ContainerScreen> {
       debugPrint('Initialization error: $e');
       if (mounted) {
         setState(() {
+          _cancelLoadingTimers();
           _isInitializing = false;
           _initializationError = e.toString();
         });
@@ -433,6 +486,13 @@ class _ContainerScreen extends State<ContainerScreen> {
   DateTime preBackpress = DateTime.now();
 
   Widget _buildLoadingIndicator() {
+    final currentMessage =
+        _loadingMessages[_loadingMessageIndex % _loadingMessages.length];
+    final currentTip =
+        _loadingTips[_loadingMessageIndex % _loadingTips.length];
+    final pulseBegin = _pulseKey.isEven ? 0.95 : 1.05;
+    final pulseEnd = _pulseKey.isEven ? 1.05 : 0.95;
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: Center(
@@ -451,26 +511,38 @@ class _ContainerScreen extends State<ContainerScreen> {
                     backgroundColor: Colors.grey[200],
                   ),
                 ),
-                Container(
-                  width: 60,
-                  height: 60,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 8,
-                        offset: Offset(0, 2),
+                TweenAnimationBuilder<double>(
+                  key: ValueKey(_pulseKey),
+                  tween: Tween(begin: pulseBegin, end: pulseEnd),
+                  duration: const Duration(milliseconds: 1500),
+                  curve: Curves.easeInOut,
+                  builder: (context, value, child) {
+                    return Transform.scale(
+                      scale: value,
+                      child: child,
+                    );
+                  },
+                  child: Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Image.asset(
+                        'assets/images/app_logo.png',
+                        width: 40,
+                        height: 40,
+                        fit: BoxFit.contain,
                       ),
-                    ],
-                  ),
-                  child: Center(
-                    child: Image.asset(
-                      'assets/images/app_logo.png',
-                      width: 40,
-                      height: 40,
-                      fit: BoxFit.contain,
                     ),
                   ),
                 ),
@@ -478,11 +550,32 @@ class _ContainerScreen extends State<ContainerScreen> {
             ),
             SizedBox(height: 20),
             Text(
-              'Loading...',
+              currentMessage,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 22,
                 fontFamily: 'Poppinsm',
                 color: Color(COLOR_PRIMARY),
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'This usually takes just a few seconds',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[600],
+              ),
+            ),
+            SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                currentTip,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[500],
+                ),
               ),
             ),
           ],

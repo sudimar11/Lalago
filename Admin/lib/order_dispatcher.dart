@@ -1005,7 +1005,35 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
       final vendorLat = location['latitude']!;
       final vendorLng = location['longitude']!;
 
-      // Try to dispatch the order
+      // Auto-assign to recommended rider (max 2 active orders) when available
+      if (vendorLat != 0.0 && vendorLng != 0.0) {
+        final drivers =
+            await _driverAssignmentService.fetchActiveDriversWithLocations();
+        final recommended =
+            _driverAssignmentService.getRecommendedDriverFromList(
+          drivers,
+          vendorLat,
+          vendorLng,
+        );
+        if (recommended != null) {
+          await _driverAssignmentService.assignOrderToDriver(
+            orderId: orderId,
+            driverId: recommended['driverId'] as String,
+            distance: recommended['distance'] as double,
+            setupDriverResponseListener: _setupDriverResponseListener,
+          );
+          if (context.mounted) {
+            _manualDispatchService.showSuccessMessage(
+              context,
+              recommended['driverName'] as String,
+              recommended['distance'] as double,
+            );
+          }
+          return;
+        }
+      }
+
+      // Fallback: find and assign best driver
       final result = await _manualDispatchService.dispatchOrder(
         orderId: orderId,
         vendorLat: vendorLat,
@@ -1014,17 +1042,14 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
       );
 
       if (result['success']) {
-        // Successfully assigned
         _manualDispatchService.showSuccessMessage(
           context,
           result['driverName'] as String,
           result['distance'] as double,
         );
       } else if (result['needsRetry'] == true) {
-        // No active drivers - show retry message and wait
         _manualDispatchService.showRetryMessage(context);
 
-        // Retry dispatch after waiting
         final retryResult = await _manualDispatchService.retryDispatch(
           orderId: orderId,
           vendorLat: vendorLat,
@@ -1032,7 +1057,6 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
           findAndAssignDriver: _findAndAssignDriver,
         );
 
-        // Show retry success message
         _manualDispatchService.showRetrySuccessMessage(
           context,
           retryResult['driverName'] as String,
