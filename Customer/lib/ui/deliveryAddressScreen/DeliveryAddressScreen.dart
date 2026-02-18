@@ -709,7 +709,7 @@ import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/deliveryAddressScreen/add_address_screen.dart';
 
 class DeliveryAddressScreen extends StatefulWidget {
@@ -778,7 +778,7 @@ class _DeliveryAddressScreenState extends State<DeliveryAddressScreen> {
                   });
                 } else {
                   Navigator.pop(context);
-                  push(context, AuthScreen());
+                  push(context, LoginScreen());
                 }
               },
               child: Container(

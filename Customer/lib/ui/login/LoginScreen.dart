@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:foodie_customer/common/apple_signin_placeholder.dart';
 import 'package:foodie_customer/common/common_elevated_button.dart';
 import 'package:foodie_customer/common/common_image.dart';
 import 'package:foodie_customer/common/common_text_field.dart';
@@ -11,7 +10,6 @@ import 'package:foodie_customer/ui/location_permission_screen.dart';
 import 'package:foodie_customer/utils/extensions/context_extension.dart';
 
 import 'package:foodie_customer/constants.dart';
-import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import 'package:foodie_customer/main.dart';
 
@@ -27,14 +25,20 @@ import 'package:foodie_customer/ui/phoneAuth/PhoneNumberInputScreen.dart';
 
 import 'package:foodie_customer/ui/resetPasswordScreen/ResetPasswordScreen.dart';
 
+import 'package:foodie_customer/ui/signUp/SignUpScreen.dart';
+
 import '../../resources/assets.dart';
 import '../../resources/colors.dart';
-import '../vendorProductsScreen/widgets/ficon_button.dart';
 
 class LoginScreen extends StatefulWidget {
   final bool returnToCart;
-  
-  const LoginScreen({Key? key, this.returnToCart = false}) : super(key: key);
+  final bool isInitialScreen;
+
+  const LoginScreen({
+    Key? key,
+    this.returnToCart = false,
+    this.isInitialScreen = false,
+  }) : super(key: key);
   
   @override
   State createState() {
@@ -64,19 +68,35 @@ class _LoginScreen extends State<LoginScreen> {
     return GestureDetector(
       onTap: context.dismissKeyboard,
       child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.of(context).maybePop(),
-          ),
-        ),
+        appBar: widget.isInitialScreen
+            ? null
+            : AppBar(
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+              ),
         body: Form(
           key: _key,
           autovalidateMode: _validate,
           child: ListView(
-            padding: EdgeInsets.symmetric(horizontal: 16.0),
+            padding: EdgeInsets.only(
+              left: 16.0,
+              right: 16.0,
+              top: 16.0 + MediaQuery.of(context).padding.top,
+              bottom: 16.0,
+            ),
             children: <Widget>[
               const SizedBox(height: 16.0),
+              Center(
+                child: Image.asset(
+                  'assets/images/app_logo.png',
+                  fit: BoxFit.cover,
+                  width: 150,
+                  height: 150,
+                ),
+              ),
+              const SizedBox(height: 24.0),
               Text(
                 'Welcome back,',
                 style: TextStyle(
@@ -153,75 +173,86 @@ class _LoginScreen extends State<LoginScreen> {
                 ),
               ),
               const SizedBox(height: 16.0),
-              Row(
-                spacing: 8.0,
-                children: [
-                  Expanded(
-                    child: Divider(
-                      color: Colors.grey.shade300,
-                      thickness: 0.5,
-                    ),
-                  ),
-                  Text("Or"),
-                  Expanded(
-                    child: Divider(
-                      color: Colors.grey.shade300,
-                      thickness: 0.5,
-                    ),
-                  )
-                ],
-              ),
-              const SizedBox(height: 16.0),
-              SizedBox(
-                height: 50.0,
-                width: context.screenWidth,
-                child: CommonElevatedButton(
-                  onButtonPressed: loginWithGoogle,
-                  backgroundColor: Colors.white,
-                  borderRadius: BorderRadius.circular(24.0),
-                  borderSide: BorderSide(color: CustomColors.primary),
-                  custom: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    spacing: 8.0,
-                    children: [
-                      CommonImage(
-                          path: Assets.google, height: 18.0, width: 18.0),
-                      Text(
-                        "Login with Google",
-                        style: TextStyle(
-                            color: CustomColors.primary,
-                            fontSize: 16.0,
-                            fontWeight: FontWeight.w600),
-                      )
-                    ],
+              Center(
+                child: Text(
+                  "Or sign in with",
+                  style: TextStyle(
+                    fontSize: 14.0,
+                    color: Colors.grey.shade600,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ),
               const SizedBox(height: 16.0),
-              _buildSignInWithAppleButton(context),
-              const SizedBox(height: 16.0),
-              SizedBox(
-                height: 50.0,
-                width: context.screenWidth,
-                child: CommonElevatedButton(
-                  onButtonPressed: () =>
-                      push(context, PhoneNumberInputScreen(login: true)),
-                  backgroundColor: CustomColors.primary,
-                  borderRadius: BorderRadius.circular(24.0),
-                  custom: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    spacing: 8.0,
-                    children: [
-                      CommonImage(
-                          path: Assets.icPhoneCall, height: 18.0, width: 18.0),
-                      Text(
-                        "Login with Phone Number",
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16.0,
-                            fontWeight: FontWeight.w600),
-                      )
-                    ],
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildSignInOption(
+                    onTap: loginWithGoogle,
+                    icon: CommonImage(
+                      path: Assets.google,
+                      height: 24.0,
+                      width: 24.0,
+                    ),
+                    label: "Google",
+                    backgroundColor: Colors.white,
+                    borderColor: Colors.grey.shade300,
+                  ),
+                  _buildSignInOption(
+                    onTap: loginWithApple,
+                    icon: Icon(
+                      Icons.apple,
+                      size: 28.0,
+                      color: isDarkMode(context)
+                          ? Colors.white
+                          : Colors.black,
+                    ),
+                    label: "Apple",
+                    backgroundColor: isDarkMode(context)
+                        ? Colors.black
+                        : Colors.white,
+                    borderColor: isDarkMode(context)
+                        ? Colors.grey.shade700
+                        : Colors.grey.shade300,
+                  ),
+                  _buildSignInOption(
+                    onTap: () =>
+                        push(context, PhoneNumberInputScreen(login: true)),
+                    icon: CommonImage(
+                      path: Assets.icPhoneCall,
+                      height: 24.0,
+                      width: 24.0,
+                    ),
+                    label: "Phone",
+                    backgroundColor: CustomColors.primary,
+                    borderColor: CustomColors.primary,
+                    iconColor: Colors.white,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24.0),
+              Center(
+                child: GestureDetector(
+                  onTap: () => push(context, SignUpScreen()),
+                  child: Text.rich(
+                    TextSpan(
+                      text: "Don't have an account? ",
+                      style: TextStyle(
+                        fontSize: 14.0,
+                        color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      children: [
+                        TextSpan(
+                          text: "Register",
+                          style: TextStyle(
+                            fontSize: 14.0,
+                            color: CustomColors.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -233,29 +264,56 @@ class _LoginScreen extends State<LoginScreen> {
     );
   }
 
-  Widget _buildSignInWithAppleButton(BuildContext context) {
-    return FutureBuilder<bool>(
-      future: SignInWithApple.isAvailable(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return buildAppleSignInPlaceholder(context);
-        }
-        if (snapshot.hasData && snapshot.data == true) {
-          return SizedBox(
-            height: 50.0,
-            width: context.screenWidth,
-            child: SignInWithAppleButton(
-              onPressed: loginWithApple,
-              height: 50.0,
-              style: isDarkMode(context)
-                  ? SignInWithAppleButtonStyle.white
-                  : SignInWithAppleButtonStyle.black,
-              borderRadius: BorderRadius.circular(24.0),
+  Widget _buildSignInOption({
+    required VoidCallback onTap,
+    required Widget icon,
+    required String label,
+    required Color backgroundColor,
+    required Color borderColor,
+    Color? iconColor,
+  }) {
+    final iconWidget = iconColor != null
+        ? ColorFiltered(
+            colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
+            child: icon,
+          )
+        : icon;
+    return Expanded(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Material(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(28.0),
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(28.0),
+              child: Container(
+                width: 56.0,
+                height: 56.0,
+                decoration: BoxDecoration(
+                  color: backgroundColor,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: borderColor, width: 1.0),
+                ),
+                alignment: Alignment.center,
+                child: iconWidget,
+              ),
             ),
-          );
-        }
-        return const SizedBox.shrink();
-      },
+          ),
+          const SizedBox(height: 8.0),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            style: TextStyle(
+              fontSize: 11.0,
+              color: Colors.grey.shade700,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -374,60 +432,6 @@ class _LoginScreen extends State<LoginScreen> {
     _passwordController.dispose();
 
     super.dispose();
-  }
-
-  loginWithFacebook() async {
-    try {
-      await showProgress(context, "Logging in, please wait...", false);
-
-      dynamic result = await FireStoreUtils.loginWithFacebook();
-
-      await hideProgress();
-
-      if (!mounted) return;
-
-      if (result != null && result is User) {
-        MyAppState.currentUser = result;
-
-        if (MyAppState.currentUser!.active == true) {
-          if (MyAppState.currentUser!.shippingAddress != null &&
-              MyAppState.currentUser!.shippingAddress!.isNotEmpty) {
-            if (MyAppState.currentUser!.shippingAddress!
-                .where((element) => element.isDefault == true)
-                .isNotEmpty) {
-              MyAppState.selectedPosotion = MyAppState
-                  .currentUser!.shippingAddress!
-                  .where((element) => element.isDefault == true)
-                  .single;
-            } else {
-              MyAppState.selectedPosotion =
-                  MyAppState.currentUser!.shippingAddress!.first;
-            }
-
-          }
-          
-          _navigateAfterLogin(result);
-        } else {
-          showAlertDialog(
-              context,
-              "Your account has been disabled, Please contact to admin.",
-              "",
-              true);
-        }
-      } else if (result != null && result is String) {
-        showAlertDialog(context, 'error', result, true);
-      } else {
-        showAlertDialog(
-            context, 'error', "Couldn't login with facebook.", true);
-      }
-    } catch (e, s) {
-      await hideProgress();
-
-      print('_LoginScreen.loginWithFacebook $e $s');
-
-      if (!mounted) return;
-      showAlertDialog(context, 'error', "Couldn't login with facebook.", true);
-    }
   }
 
   loginWithApple() async {

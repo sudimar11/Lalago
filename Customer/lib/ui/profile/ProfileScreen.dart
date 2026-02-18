@@ -12,7 +12,7 @@ import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:intl/intl.dart';
 import 'package:foodie_customer/ui/accountDetails/AccountDetailsScreen.dart';
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/contactUs/ContactUsScreen.dart';
 import 'package:foodie_customer/ui/feedback/FeedbackScreen.dart';
 import 'package:foodie_customer/ui/reauthScreen/reauth_user_screen.dart';
@@ -488,14 +488,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           case 'phone':
                             authProvider = AuthProviders.PHONE;
                             break;
-                          case 'facebook.com':
-                            authProvider = AuthProviders.FACEBOOK;
-                            break;
                           case 'apple.com':
                             authProvider = AuthProviders.APPLE;
                             break;
                         }
                       });
+                      if (authProvider == null) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Delete account is not available for this '
+                                'sign-in method.',
+                              ),
+                            ),
+                          );
+                        }
+                        return;
+                      }
                       bool? result = await showDialog(
                         context: context,
                         builder: (context) => ReAuthUserScreen(
@@ -512,7 +522,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         await FireStoreUtils.deleteUser();
                         await hideProgress();
                         MyAppState.currentUser = null;
-                        pushAndRemoveUntil(context, AuthScreen(), false);
+                        pushAndRemoveUntil(context, LoginScreen(), false);
                       }
                     },
                     title: Text(
@@ -559,7 +569,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     await FireStoreUtils.updateCurrentUser(user);
                     await auth.FirebaseAuth.instance.signOut();
                     MyAppState.currentUser = null;
-                    pushAndRemoveUntil(context, AuthScreen(), false);
+                    pushAndRemoveUntil(context, LoginScreen(), false);
                   },
                 ),
               ),

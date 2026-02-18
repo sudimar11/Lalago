@@ -49,7 +49,7 @@ import 'package:foodie_customer/services/coupon_service.dart';
 
 import 'package:foodie_customer/services/localDatabase.dart';
 
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/categoryDetailsScreen/CategoryDetailsScreen.dart';
 
 import 'package:foodie_customer/ui/cuisinesScreen/CuisinesScreen.dart';
@@ -749,7 +749,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _onMessageTap = () {
       if (MyAppState.currentUser == null) {
-        push(context, AuthScreen());
+        push(context, LoginScreen());
       } else {
         push(context, InboxDriverScreen());
       }
@@ -757,7 +757,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _onFavoriteTap = () {
       if (MyAppState.currentUser == null) {
-        push(context, AuthScreen());
+        push(context, LoginScreen());
       } else {
         push(context, FavouriteRestaurantScreen());
       }

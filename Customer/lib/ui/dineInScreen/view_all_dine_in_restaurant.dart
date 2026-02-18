@@ -8,7 +8,7 @@ import 'package:foodie_customer/model/FavouriteModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/dineInScreen/dine_in_restaurant_details_screen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:geoflutterfire3/geoflutterfire3.dart';
@@ -192,7 +192,7 @@ class _ViewAllDineInRestaurantState extends State<ViewAllDineInRestaurant> {
                           GestureDetector(
                             onTap: () {
                               if (MyAppState.currentUser == null) {
-                                push(context, AuthScreen());
+                                push(context, LoginScreen());
                               } else {
                                 setState(() {
                                   if (lstFav.contains(vendorModel.id) == true) {

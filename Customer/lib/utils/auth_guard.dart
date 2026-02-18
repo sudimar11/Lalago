@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/services/helper.dart';
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 
 class AuthGuard {
   /// Shows login dialog if user is not authenticated
@@ -21,7 +21,7 @@ class AuthGuard {
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(context);
-                push(context, AuthScreen());
+                push(context, LoginScreen());
               },
               child: Text('Login'),
             ),

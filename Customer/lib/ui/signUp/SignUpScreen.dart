@@ -25,7 +25,6 @@ import 'package:intl_phone_number_input/intl_phone_number_input.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
-import '../../common/apple_signin_placeholder.dart';
 import '../../common/common_elevated_button.dart';
 import '../../common/common_image.dart';
 import '../../resources/assets.dart';
@@ -830,28 +829,17 @@ class _SignUpState extends State<SignUpScreen> {
           ),
         ),
         const SizedBox(height: 16.0),
-        FutureBuilder<bool>(
-          future: SignInWithApple.isAvailable(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return buildAppleSignInPlaceholder(context);
-            }
-            if (snapshot.hasData && snapshot.data == true) {
-              return SizedBox(
-                height: 50.0,
-                width: context.screenWidth,
-                child: SignInWithAppleButton(
-                  onPressed: _signUpWithApple,
-                  height: 50.0,
-                  style: isDarkMode(context)
-                      ? SignInWithAppleButtonStyle.white
-                      : SignInWithAppleButtonStyle.black,
-                  borderRadius: BorderRadius.circular(24.0),
-                ),
-              );
-            }
-            return const SizedBox.shrink();
-          },
+        SizedBox(
+          height: 50.0,
+          width: context.screenWidth,
+          child: SignInWithAppleButton(
+            onPressed: _signUpWithApple,
+            height: 50.0,
+            style: isDarkMode(context)
+                ? SignInWithAppleButtonStyle.white
+                : SignInWithAppleButtonStyle.black,
+            borderRadius: BorderRadius.circular(24.0),
+          ),
         ),
         const SizedBox(height: 16.0),
         SizedBox(

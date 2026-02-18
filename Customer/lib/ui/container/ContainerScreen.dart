@@ -18,7 +18,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/services/version_service.dart';
 
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 import 'package:foodie_customer/ui/home/HomeScreen.dart';
 import 'package:foodie_customer/ui/location_permission_screen.dart';
@@ -176,33 +176,15 @@ class _ContainerScreen extends State<ContainerScreen> {
       }
 
       if (fbUser == null) {
-        debugPrint('[AUTH_INIT] No user logged in, proceeding as guest');
-        // Allow guest mode - set currentUser to null and continue
+        debugPrint('[AUTH_INIT] No user logged in, redirecting to LoginScreen');
         MyAppState.currentUser = null;
         user = null;
-        
-        // Set default location for guests to browse restaurants
-        // Using Manila, Philippines as default (can be changed to any location)
-        if (MyAppState.selectedPosotion.location == null ||
-            (MyAppState.selectedPosotion.location!.latitude == 0 &&
-             MyAppState.selectedPosotion.location!.longitude == 0)) {
-          MyAppState.selectedPosotion = AddressModel(
-            location: UserLocation(
-              latitude: 14.5995,  // Manila, Philippines
-              longitude: 120.9842,
-            ),
-            locality: 'Metro Manila, Philippines',
-          );
-        }
-        
-        // Initialize screens for guest mode
-        await _initializeAfterUserSet();
-        
         if (mounted) {
           setState(() {
             _cancelLoadingTimers();
             _isInitializing = false;
           });
+          pushReplacement(context, LoginScreen(isInitialScreen: true));
         }
         return;
       }
@@ -211,32 +193,15 @@ class _ContainerScreen extends State<ContainerScreen> {
       // 3) Fetch Firestore user record
       final fetchedUser = await FireStoreUtils.getCurrentUser(fbUser.uid);
       if (fetchedUser == null || fetchedUser.role != USER_ROLE_CUSTOMER) {
-        // Invalid user - log them out and proceed as guest
         await auth.FirebaseAuth.instance.signOut();
         MyAppState.currentUser = null;
         user = null;
-        
-        // Set default location for guests to browse restaurants
-        if (MyAppState.selectedPosotion.location == null ||
-            (MyAppState.selectedPosotion.location!.latitude == 0 &&
-             MyAppState.selectedPosotion.location!.longitude == 0)) {
-          MyAppState.selectedPosotion = AddressModel(
-            location: UserLocation(
-              latitude: 14.5995,  // Manila, Philippines
-              longitude: 120.9842,
-            ),
-            locality: 'Metro Manila, Philippines',
-          );
-        }
-        
-        // Initialize screens for guest mode
-        await _initializeAfterUserSet();
-        
         if (mounted) {
           setState(() {
             _cancelLoadingTimers();
             _isInitializing = false;
           });
+          pushReplacement(context, LoginScreen(isInitialScreen: true));
         }
         return;
       }
@@ -713,7 +678,7 @@ class _ContainerScreen extends State<ContainerScreen> {
                       child: Text('Browsing as guest. Login to place orders.'),
                     ),
                     TextButton(
-                      onPressed: () => push(context, AuthScreen()),
+                      onPressed: () => push(context, LoginScreen()),
                       child: Text('Login'),
                     ),
                   ],
@@ -815,7 +780,7 @@ class _ContainerScreen extends State<ContainerScreen> {
           Text('Sign in to view your profile', style: TextStyle(fontSize: 18)),
           SizedBox(height: 16),
           ElevatedButton(
-            onPressed: () => push(context, AuthScreen()),
+            onPressed: () => push(context, LoginScreen()),
             child: Text('Login / Register'),
           ),
         ],
