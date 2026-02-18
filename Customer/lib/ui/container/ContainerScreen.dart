@@ -127,11 +127,25 @@ class _ContainerScreen extends State<ContainerScreen> {
       }
 
       if (fbUser == null) {
-        debugPrint('[AUTH_INIT] No user logged in, redirecting to LoginScreen');
         MyAppState.currentUser = null;
         user = null;
+        final loc = MyAppState.selectedPosotion.location;
+        final hasValidGuestLocation = loc != null &&
+            !(loc.latitude == 0 && loc.longitude == 0);
+        if (hasValidGuestLocation) {
+          debugPrint('[AUTH_INIT] Guest mode with valid location');
+          await _initializeAfterUserSet();
+          if (mounted) {
+            setState(() {
+              _isInitializing = false;
+            });
+          }
+          return;
+        }
+        debugPrint(
+            '[AUTH_INIT] No user, no location; redirecting to location pick');
         if (mounted) {
-          pushReplacement(context, LoginScreen(isInitialScreen: true));
+          pushReplacement(context, LocationPermissionScreen());
         }
         return;
       }
