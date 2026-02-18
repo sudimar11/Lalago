@@ -10,7 +10,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/OrderDetailsScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:provider/provider.dart';
 
 class OrdersScreen extends StatefulWidget {
@@ -156,7 +156,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
               Text('Login to view your orders', style: TextStyle(fontSize: 18)),
               SizedBox(height: 16),
               ElevatedButton(
-                onPressed: () => push(context, AuthScreen()),
+                onPressed: () => push(context, LoginScreen()),
                 child: Text('Login / Register'),
               ),
             ],

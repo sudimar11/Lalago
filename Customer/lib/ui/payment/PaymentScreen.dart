@@ -10,7 +10,7 @@ import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/checkoutScreen/CheckoutScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -126,7 +126,7 @@ class PaymentScreenState extends State<PaymentScreen> {
 
     if (shouldLogin == true) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => AuthScreen()),
+        MaterialPageRoute(builder: (_) => LoginScreen()),
       );
     } else {
       Navigator.of(context).maybePop();

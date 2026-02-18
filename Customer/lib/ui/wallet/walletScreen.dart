@@ -24,7 +24,7 @@ import '../../model/getPaytmTxtToken.dart';
 import '../../services/helper.dart';
 import '../../userPrefrence.dart';
 import '../orderDetailsScreen/OrderDetailsScreen.dart';
-import '../auth/AuthScreen.dart';
+import '../login/LoginScreen.dart';
 
 class WalletScreen extends StatefulWidget {
   const WalletScreen({Key? key}) : super(key: key);
@@ -134,7 +134,7 @@ class WalletScreenState extends State<WalletScreen> {
               Text('Login to view your wallet', style: TextStyle(fontSize: 18)),
               SizedBox(height: 16),
               ElevatedButton(
-                onPressed: () => push(context, AuthScreen()),
+                onPressed: () => push(context, LoginScreen()),
                 child: Text('Login / Register'),
               ),
             ],

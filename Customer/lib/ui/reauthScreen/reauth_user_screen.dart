@@ -1,6 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/material.dart';
-import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
@@ -8,7 +7,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:pin_code_fields/pin_code_fields.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
-enum AuthProviders { PASSWORD, PHONE, FACEBOOK, APPLE }
+enum AuthProviders { PASSWORD, PHONE, APPLE }
 
 class ReAuthUserScreen extends StatefulWidget {
   final AuthProviders provider;
@@ -114,38 +113,6 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget buildFacebookButton() {
-    return ElevatedButton.icon(
-      label: Expanded(
-        child: Text(
-          'Facebook Verify',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-              fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-        ),
-      ),
-      icon: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8.0),
-        child: Image.asset(
-          'assets/images/facebook_logo.png',
-          color: Colors.white,
-          height: 30,
-          width: 30,
-        ),
-      ),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Color(FACEBOOK_BUTTON_COLOR),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12.0),
-          side: BorderSide(
-            color: Color(FACEBOOK_BUTTON_COLOR),
-          ),
-        ),
-      ),
-      onPressed: () async => facebookButtonPressed(),
     );
   }
 
@@ -290,35 +257,6 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
           ),
         );
       }
-    }
-  }
-
-  facebookButtonPressed() async {
-    try {
-      await showProgress(context, "Verifying", false);
-      AccessToken? token;
-      FacebookAuth facebookAuth = FacebookAuth.instance;
-      if (await facebookAuth.accessToken == null) {
-        LoginResult result = await facebookAuth.login();
-        if (result.status == LoginStatus.success) {
-          token = await facebookAuth.accessToken;
-        }
-      } else {
-        token = await facebookAuth.accessToken;
-      }
-      if (token != null)
-        await FireStoreUtils.reAuthUser(widget.provider, accessToken: token);
-      await hideProgress();
-      Navigator.pop(context, true);
-    } catch (e, s) {
-      await hideProgress();
-      print('facebookButtonPressed $e $s');
-      showAlertDialog(
-        context,
-        'error',
-        "Couldn't verify with facebook.",
-        true,
-      );
     }
   }
 
@@ -487,9 +425,6 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
       case AuthProviders.PHONE:
         await _submitPhoneNumber();
         body = buildPhoneField();
-        break;
-      case AuthProviders.FACEBOOK:
-        body = buildFacebookButton();
         break;
       case AuthProviders.APPLE:
         body = buildAppleButton();

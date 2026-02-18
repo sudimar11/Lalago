@@ -40,7 +40,7 @@ import 'package:foodie_customer/services/helper.dart';
 
 import 'package:foodie_customer/services/localDatabase.dart';
 
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
 
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 
@@ -419,7 +419,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             ),
             onPressed: () {
               if (MyAppState.currentUser == null) {
-                push(context, AuthScreen());
+                push(context, LoginScreen());
               } else {
                 setState(() {
                   var contain = lstFav

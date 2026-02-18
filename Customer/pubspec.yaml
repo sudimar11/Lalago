@@ -19,7 +19,6 @@ dependencies:
   firebase_messaging: ^15.2.10
   cloud_functions: ^5.6.2
   flutter_local_notifications: ^18.0.1
-  flutter_facebook_auth: ^7.0.1
   google_sign_in: ^6.1.0
   geoflutterfire3: ^1.0.1
   geolocator: ^10.1.1

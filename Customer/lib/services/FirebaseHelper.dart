@@ -15,7 +15,6 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:intl/intl.dart';
@@ -2952,49 +2951,6 @@ class FireStoreUtils {
     return file;
   }
 
-  static Future<dynamic> loginWithFacebook() async {
-    try {
-      final FacebookAuth facebookAuth = FacebookAuth.instance;
-      final AccessToken? existingToken = await facebookAuth.accessToken;
-      if (existingToken != null) {
-        return await handleFacebookLogin(
-            await facebookAuth.getUserData(
-                fields: "name,email,picture.width(200)"),
-            existingToken);
-      }
-
-      final LoginResult result = await facebookAuth.login(
-        permissions: [
-          'public_profile',
-          'email',
-        ],
-      );
-
-      switch (result.status) {
-        case LoginStatus.success:
-          final AccessToken? token = await facebookAuth.accessToken;
-          if (token == null) {
-            return 'Missing Facebook auth token. Is Facebook provider enabled in Firebase?';
-          }
-          return await handleFacebookLogin(
-              await facebookAuth.getUserData(
-                  fields: "name,email,picture.width(200)"),
-              token);
-        case LoginStatus.cancelled:
-          return 'Facebook sign-in was cancelled.';
-        case LoginStatus.failed:
-          return result.message ?? 'Facebook sign-in failed.';
-        case LoginStatus.operationInProgress:
-          return 'Facebook sign-in is already in progress.';
-      }
-    } on PlatformException catch (pe) {
-      return 'Facebook sign-in failed: ${pe.code}';
-    } catch (e, s) {
-      print('loginWithFacebook error: $e $s');
-      return 'Login failed, Please try again.';
-    }
-  }
-
   static Future<dynamic> loginWithGoogle() async {
     try {
       // Configure GoogleSignIn with Web Client ID (required for Android release builds)
@@ -3114,78 +3070,6 @@ class FireStoreUtils {
       }
     } catch (e, s) {
       print('loginWithGoogle error: $e $s');
-      return 'Login failed, Please try again.';
-    }
-  }
-
-  static Future<dynamic> handleFacebookLogin(
-      Map<String, dynamic> userData, AccessToken token) async {
-    try {
-      final auth.UserCredential authResult = await auth.FirebaseAuth.instance
-          .signInWithCredential(
-              auth.FacebookAuthProvider.credential(token.tokenString));
-
-      User? user = await getCurrentUser(authResult.user?.uid ?? '');
-      final List<String> fullName = (userData['name'] as String).split(' ');
-      String firstName = '';
-      String lastName = '';
-      if (fullName.isNotEmpty) {
-        firstName = fullName.first;
-        lastName = fullName.skip(1).join(' ');
-      }
-
-      if (user != null) {
-        if (user.role != USER_ROLE_CUSTOMER) {
-          return 'notSignUp';
-        }
-        user.profilePictureURL = userData['picture']['data']['url'];
-        user.firstName = firstName;
-        user.lastName = lastName;
-        user.email = userData['email'];
-        user.role = USER_ROLE_CUSTOMER;
-        // Ensure user has referral code via backend
-        await _ensureReferralCodeAfterLogin(user);
-
-        final updatedUser = await updateCurrentUser(user);
-        unawaited(refreshFcmTokenForUser(user));
-        return updatedUser;
-      } else {
-        user = User(
-            email: userData['email'] ?? '',
-            firstName: firstName,
-            profilePictureURL: userData['picture']['data']['url'] ?? '',
-            userID: authResult.user?.uid ?? '',
-            lastOnlineTimestamp: Timestamp.now(),
-            lastName: lastName,
-            active: true,
-            role: USER_ROLE_CUSTOMER,
-            fcmToken: '',
-            phoneNumber: '',
-            createdAt: Timestamp.now(),
-            settings: UserSettings());
-        final String? errorMessage = await firebaseCreateNewUser(user, "");
-        if (errorMessage == null) {
-          unawaited(refreshFcmTokenForUser(user));
-          return user;
-        } else {
-          return errorMessage;
-        }
-      }
-    } on auth.FirebaseAuthException catch (fae) {
-      switch (fae.code) {
-        case 'account-exists-with-different-credential':
-          return 'Account exists with different sign-in method.';
-        case 'invalid-credential':
-          return 'Invalid Facebook credential.';
-        case 'operation-not-allowed':
-          return 'Facebook sign-in is disabled in Firebase Authentication.';
-        case 'user-disabled':
-          return 'This user has been disabled.';
-        default:
-          return 'Firebase auth failed: ${fae.code}';
-      }
-    } catch (e, s) {
-      print('handleFacebookLogin error: $e $s');
       return 'Login failed, Please try again.';
     }
   }
@@ -4915,7 +4799,6 @@ class FireStoreUtils {
     String? password,
     String? smsCode,
     String? verificationId,
-    AccessToken? accessToken,
     AuthorizationCredentialAppleID? signInWithAppleCredential,
   }) async {
     late auth.AuthCredential credential;
@@ -4938,16 +4821,6 @@ class FireStoreUtils {
         } else {
           throw ArgumentError(
               'smsCode and verificationId must not be null for PHONE authentication.');
-        }
-        break;
-
-      case AuthProviders.FACEBOOK:
-        if (accessToken != null) {
-          credential =
-              auth.FacebookAuthProvider.credential(accessToken.tokenString);
-        } else {
-          throw ArgumentError(
-              'AccessToken must not be null for FACEBOOK authentication.');
         }
         break;
 

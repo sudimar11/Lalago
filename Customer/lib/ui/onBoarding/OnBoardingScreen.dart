@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:smooth_page_indicator/smooth_page_indicator.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/services/helper.dart';
-import 'package:foodie_customer/ui/auth/AuthScreen.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 
 class OnBoardingScreen extends StatefulWidget {
