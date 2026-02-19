@@ -19,6 +19,7 @@ import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/services/version_service.dart';
 
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
+import 'package:foodie_customer/ui/signUp/SignUpScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 import 'package:foodie_customer/ui/home/HomeScreen.dart';
 import 'package:foodie_customer/ui/location_permission_screen.dart';
@@ -127,12 +128,31 @@ class _ContainerScreen extends State<ContainerScreen> {
       }
 
       if (fbUser == null) {
-        debugPrint('[AUTH_INIT] No user logged in, redirecting to LoginScreen');
+        debugPrint('[AUTH_INIT] Guest mode detected – initializing as guest');
         MyAppState.currentUser = null;
         user = null;
-        if (mounted) {
-          pushReplacement(context, LoginScreen(isInitialScreen: true));
+
+        // Guest does not have Firestore user
+        // Skip Firestore fetch logic
+
+        // Guest must set location first
+        final pos = MyAppState.selectedPosotion;
+        final hasValidLocation = pos.location != null &&
+            (pos.location!.latitude != 0 || pos.location!.longitude != 0);
+
+        if (!hasValidLocation && mounted) {
+          pushAndRemoveUntil(context, LocationPermissionScreen(), false);
+          return;
         }
+
+        await _initializeAfterUserSet();
+
+        if (mounted) {
+          setState(() {
+            _isInitializing = false;
+          });
+        }
+
         return;
       }
       debugPrint('[AUTH_INIT] Proceeding with uid=${fbUser.uid}');
@@ -672,19 +692,91 @@ class _ContainerScreen extends State<ContainerScreen> {
   }
 
   Widget _buildGuestProfilePlaceholder() {
+    final dark = isDarkMode(context);
+    final textColor = dark ? Colors.white70 : const Color(0xFF424242);
+
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.person_outline, size: 80, color: Colors.grey),
-          SizedBox(height: 16),
-          Text('Sign in to view your profile', style: TextStyle(fontSize: 18)),
-          SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: () => push(context, LoginScreen()),
-            child: Text('Login / Register'),
-          ),
-        ],
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                color: Color(COLOR_PRIMARY).withOpacity(0.08),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(COLOR_PRIMARY).withOpacity(0.15),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Icon(
+                Icons.person_outline_rounded,
+                size: 48,
+                color: Color(COLOR_PRIMARY),
+              ),
+            ),
+            const SizedBox(height: 28),
+            Text(
+              'Sign in to view your profile',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: textColor,
+                letterSpacing: 0.2,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Create an account or sign in to access your orders and preferences',
+              style: TextStyle(
+                fontSize: 14,
+                color: dark ? Colors.white54 : const Color(0xFF757575),
+                height: 1.4,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 32),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => push(context, LoginScreen()),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Color(COLOR_PRIMARY),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Login'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () => push(context, SignUpScreen()),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Color(COLOR_PRIMARY),
+                  side: BorderSide(color: Color(COLOR_PRIMARY)),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('Register'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
