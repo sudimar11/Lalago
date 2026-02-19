@@ -804,67 +804,51 @@ class _SignUpState extends State<SignUpScreen> {
         ),
         const SizedBox(height: 24.0),
 
-        SizedBox(
-          height: 50.0,
-          width: context.screenWidth,
-          child: CommonElevatedButton(
-            onButtonPressed: _signUpWithGoogle,
-            backgroundColor: Colors.white,
-            borderRadius: BorderRadius.circular(24.0),
-            borderSide: BorderSide(color: CustomColors.primary),
-            custom: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              spacing: 8.0,
-              children: [
-                CommonImage(path: Assets.google, height: 18.0, width: 18.0),
-                Text(
-                  "Register with Google",
-                  style: TextStyle(
-                      color: CustomColors.primary,
-                      fontSize: 16.0,
-                      fontWeight: FontWeight.w600),
-                )
-              ],
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _buildSignUpOption(
+              onTap: _signUpWithGoogle,
+              icon: CommonImage(
+                path: Assets.google,
+                height: 24.0,
+                width: 24.0,
+              ),
+              label: "Google",
+              backgroundColor: Colors.white,
+              borderColor: Colors.grey.shade300,
             ),
-          ),
-        ),
-        const SizedBox(height: 16.0),
-        SizedBox(
-          height: 50.0,
-          width: context.screenWidth,
-          child: SignInWithAppleButton(
-            onPressed: _signUpWithApple,
-            height: 50.0,
-            style: isDarkMode(context)
-                ? SignInWithAppleButtonStyle.white
-                : SignInWithAppleButtonStyle.black,
-            borderRadius: BorderRadius.circular(24.0),
-          ),
-        ),
-        const SizedBox(height: 16.0),
-        SizedBox(
-          height: 50.0,
-          width: context.screenWidth,
-          child: CommonElevatedButton(
-            onButtonPressed: () =>
-                push(context, PhoneNumberInputScreen(login: false)),
-            borderRadius: BorderRadius.circular(24.0),
-            custom: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              spacing: 8.0,
-              children: [
-                CommonImage(
-                    path: Assets.icPhoneCall, height: 18.0, width: 18.0),
-                Text(
-                  "Register with Phone Number",
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16.0,
-                      fontWeight: FontWeight.w600),
-                )
-              ],
+            _buildSignUpOption(
+              onTap: _signUpWithApple,
+              icon: Icon(
+                Icons.apple,
+                size: 28.0,
+                color: isDarkMode(context)
+                    ? Colors.white
+                    : Colors.black,
+              ),
+              label: "Apple",
+              backgroundColor: isDarkMode(context)
+                  ? Colors.black
+                  : Colors.white,
+              borderColor: isDarkMode(context)
+                  ? Colors.grey.shade700
+                  : Colors.grey.shade300,
             ),
-          ),
+            _buildSignUpOption(
+              onTap: () =>
+                  push(context, PhoneNumberInputScreen(login: false)),
+              icon: CommonImage(
+                path: Assets.icPhoneCall,
+                height: 24.0,
+                width: 24.0,
+              ),
+              label: "Phone",
+              backgroundColor: CustomColors.primary,
+              borderColor: CustomColors.primary,
+              iconColor: Colors.white,
+            ),
+          ],
         ),
         const SizedBox(height: 36.0),
         //Padding(
@@ -1521,5 +1505,58 @@ class _SignUpState extends State<SignUpScreen> {
       showAlertDialog(
           context, 'error', "Couldn't sign up with Apple.", true);
     }
+  }
+
+  Widget _buildSignUpOption({
+    required VoidCallback onTap,
+    required Widget icon,
+    required String label,
+    required Color backgroundColor,
+    required Color borderColor,
+    Color? iconColor,
+  }) {
+    final iconWidget = iconColor != null
+        ? ColorFiltered(
+            colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
+            child: icon,
+          )
+        : icon;
+    return Expanded(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Material(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(28.0),
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(28.0),
+              child: Container(
+                width: 56.0,
+                height: 56.0,
+                decoration: BoxDecoration(
+                  color: backgroundColor,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: borderColor, width: 1.0),
+                ),
+                alignment: Alignment.center,
+                child: iconWidget,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8.0),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            style: TextStyle(
+              fontSize: 11.0,
+              color: Colors.grey.shade700,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

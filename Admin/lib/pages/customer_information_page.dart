@@ -45,20 +45,29 @@ class _CustomerInformationPageState extends State<CustomerInformationPage> {
 
           if (!userSnapshot.hasData || userSnapshot.data == null) {
             return _buildErrorState(
-              'Customer not found',
-              'The customer record may have been deleted or is unavailable.',
+              'Failed to load',
+              'Could not load customer data. Please try again.',
             );
           }
 
-          final userDataRaw = userSnapshot.data!.data();
-          if (userDataRaw == null) {
+          final docSnapshot = userSnapshot.data!;
+          if (!docSnapshot.exists) {
             return _buildErrorState(
-              'Invalid customer data',
-              'The customer record exists but contains no data.',
+              'Customer not found',
+              'No account exists for this user. They may have left feedback '
+              'before signing up, or their account was removed.',
             );
           }
 
-          final userData = userDataRaw as Map<String, dynamic>;
+          final userDataRaw = docSnapshot.data() as Map<String, dynamic>?;
+          if (userDataRaw == null || userDataRaw.isEmpty) {
+            return _buildErrorState(
+              'No profile data',
+              'This user has no profile information on file.',
+            );
+          }
+
+          final userData = userDataRaw;
 
           // Safely extract fields with null handling
           final firstName = (userData['firstName'] ?? '').toString();

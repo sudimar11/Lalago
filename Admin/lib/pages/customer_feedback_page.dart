@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:brgy/model/customer_feedback_entry.dart';
+import 'package:brgy/pages/customer_information_page.dart';
 import 'package:brgy/services/customer_feedback_service.dart';
 import 'package:intl/intl.dart';
 
@@ -371,31 +372,59 @@ class _CustomerFeedbackPageState extends State<CustomerFeedbackPage> {
               ],
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                const Icon(Icons.person, size: 16, color: Colors.grey),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    displayName,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
+            InkWell(
+              onTap: entry.userId.isNotEmpty
+                  ? () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (context) =>
+                              CustomerInformationPage(userId: entry.userId),
+                        ),
+                      );
+                    }
+                  : null,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.person, size: 16, color: Colors.grey),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            displayName,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: entry.userId.isNotEmpty
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
+                              decoration: entry.userId.isNotEmpty
+                                  ? TextDecoration.underline
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ),
-              ],
-            ),
-            if (entry.userId.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                'ID: ${entry.userId}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
+                    if (entry.userId.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'ID: ${entry.userId}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            ],
+            ),
             const SizedBox(height: 8),
             Row(
               children: [
