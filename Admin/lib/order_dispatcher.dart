@@ -9,6 +9,7 @@ import 'package:brgy/services/manual_dispatch_service.dart';
 import 'package:brgy/services/driver_change_service.dart';
 import 'package:brgy/services/auto_redispatch_service.dart';
 import 'package:brgy/services/driver_assignment_service.dart';
+import 'package:brgy/services/delivery_zone_service.dart';
 import 'package:brgy/services/driver_response_tracking_service.dart';
 import 'package:brgy/widgets/orders/assignments_log_list.dart';
 import 'package:brgy/widgets/orders/order_helpers.dart';
@@ -464,6 +465,15 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                               icon: const Icon(Icons.edit, size: 18),
                               onPressed: () =>
                                   _showChangeStatusDialog(context, id, status),
+                            ),
+                            IconButton(
+                              tooltip: 'Delete order',
+                              icon: Icon(
+                                Icons.delete,
+                                size: 18,
+                                color: Colors.red.shade700,
+                              ),
+                              onPressed: () => _showDeleteOrderDialog(context, id),
                             ),
                           ],
                         ),
@@ -1000,15 +1010,30 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
         return;
       }
 
-      // Extract vendor location from order data
       final location = _manualDispatchService.extractVendorLocation(data);
       final vendorLat = location['latitude']!;
       final vendorLng = location['longitude']!;
+      final deliveryAddr =
+          _manualDispatchService.extractDeliveryAddress(data);
+      final deliveryLat = deliveryAddr['lat'] as double?;
+      final deliveryLng = deliveryAddr['lng'] as double?;
+      final deliveryLocality = deliveryAddr['locality'] as String?;
 
-      // Auto-assign to recommended rider (max 2 active orders) when available
+      List<String>? zoneDriverIds;
+      if (deliveryLat != null ||
+          deliveryLng != null ||
+          (deliveryLocality?.trim().isNotEmpty == true)) {
+        zoneDriverIds = await DeliveryZoneService()
+            .getAssignedDriverIdsForDelivery(
+          lat: deliveryLat,
+          lng: deliveryLng,
+          locality: deliveryLocality,
+        );
+      }
+
       if (vendorLat != 0.0 && vendorLng != 0.0) {
-        final drivers =
-            await _driverAssignmentService.fetchActiveDriversWithLocations();
+        final drivers = await _driverAssignmentService
+            .fetchActiveDriversInZone(zoneDriverIds);
         final recommended =
             _driverAssignmentService.getRecommendedDriverFromList(
           drivers,
@@ -1033,11 +1058,13 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
         }
       }
 
-      // Fallback: find and assign best driver
       final result = await _manualDispatchService.dispatchOrder(
         orderId: orderId,
         vendorLat: vendorLat,
         vendorLng: vendorLng,
+        deliveryLat: deliveryLat,
+        deliveryLng: deliveryLng,
+        deliveryLocality: deliveryLocality,
         findAndAssignDriver: _findAndAssignDriver,
       );
 
@@ -1054,6 +1081,9 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
           orderId: orderId,
           vendorLat: vendorLat,
           vendorLng: vendorLng,
+          deliveryLat: deliveryLat,
+          deliveryLng: deliveryLng,
+          deliveryLocality: deliveryLocality,
           findAndAssignDriver: _findAndAssignDriver,
         );
 
@@ -1152,13 +1182,15 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
         // No active drivers - show retry message and wait
         _autoRedispatchService.showRetryMessage(context);
 
-        // Retry dispatch after waiting
         final retryResult =
             await _autoRedispatchService.retryDispatchAfterRejection(
           orderId: orderId,
           vendorLat: result['vendorLat'] as double,
           vendorLng: result['vendorLng'] as double,
           rejectedDriverId: result['rejectedDriverId'] as String?,
+          deliveryLat: result['deliveryLat'] as double?,
+          deliveryLng: result['deliveryLng'] as double?,
+          deliveryLocality: result['deliveryLocality'] as String?,
           findAndAssignDriver: _findAndAssignDriver,
         );
 
@@ -1173,13 +1205,15 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
           // Still no drivers - set up listener
           _autoRedispatchService.showWaitingForDriversMessage(context);
 
-          // Set up listener for when drivers come online
           _setupDriverOnlineListener(
             context: context,
             orderId: orderId,
             vendorLat: retryResult['vendorLat'] as double,
             vendorLng: retryResult['vendorLng'] as double,
             excludeDriverId: retryResult['rejectedDriverId'] as String?,
+            deliveryLat: retryResult['deliveryLat'] as double?,
+            deliveryLng: retryResult['deliveryLng'] as double?,
+            deliveryLocality: retryResult['deliveryLocality'] as String?,
           );
         }
       }
@@ -1198,8 +1232,11 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
     required double vendorLat,
     required double vendorLng,
     String? excludeDriverId,
+    double? deliveryLat,
+    double? deliveryLng,
+    String? deliveryLocality,
   }) async {
-    // Guard: Check order status before attempting to assign driver
+    Map<String, dynamic>? orderData;
     try {
       final orderDoc = await FirebaseFirestore.instance
           .collection('restaurant_orders')
@@ -1211,14 +1248,13 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
         return {'success': false, 'message': 'Order not found'};
       }
 
-      final orderData = orderDoc.data() as Map<String, dynamic>;
-      final statusRaw = orderData['status'];
+      orderData = orderDoc.data() as Map<String, dynamic>?;
+      final statusRaw = orderData?['status'];
       final status = _statusToText(statusRaw);
 
-      // Skip dispatch if order is already completed or in transit
       if (status == 'Order Completed' || status == 'In Transit') {
         print(
-            '[Find and Assign Driver] Order $orderId is already $status. Skipping dispatch.');
+            '[Find and Assign Driver] Order $orderId is already $status.');
         return {
           'success': false,
           'message': 'Order is already $status',
@@ -1227,7 +1263,17 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
       }
     } catch (e) {
       print('[Find and Assign Driver] Error checking order status: $e');
-      // Continue with dispatch if we can't verify status
+    }
+
+    double? dLat = deliveryLat;
+    double? dLng = deliveryLng;
+    String? dLoc = deliveryLocality;
+    if (orderData != null) {
+      final addr =
+          _manualDispatchService.extractDeliveryAddress(orderData);
+      dLat ??= addr['lat'] as double?;
+      dLng ??= addr['lng'] as double?;
+      dLoc ??= addr['locality'] as String?;
     }
 
     return await _driverAssignmentService.findAndAssignDriver(
@@ -1235,6 +1281,9 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
       vendorLat: vendorLat,
       vendorLng: vendorLng,
       excludeDriverId: excludeDriverId,
+      deliveryLat: dLat,
+      deliveryLng: dLng,
+      deliveryLocality: dLoc,
       setupDriverResponseListener: _setupDriverResponseListener,
     );
   }
@@ -1245,17 +1294,21 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
     required double vendorLat,
     required double vendorLng,
     String? excludeDriverId,
+    double? deliveryLat,
+    double? deliveryLng,
+    String? deliveryLocality,
   }) {
-    // Cancel any existing listener for this order
     _driverListeners[orderId]?.cancel();
 
-    // Set up a listener using the service
     final listener = _autoRedispatchService.setupDriverOnlineListener(
       context: context,
       orderId: orderId,
       vendorLat: vendorLat,
       vendorLng: vendorLng,
       excludeDriverId: excludeDriverId,
+      deliveryLat: deliveryLat,
+      deliveryLng: deliveryLng,
+      deliveryLocality: deliveryLocality,
       findAndAssignDriver: _findAndAssignDriver,
       onListenerCancel: (orderId) {
         // Cancel and remove the listener when assignment succeeds
@@ -1576,6 +1629,53 @@ Color _getStatusColor(String status) {
       return Colors.red;
     default:
       return Colors.grey;
+  }
+}
+
+Future<void> _showDeleteOrderDialog(
+    BuildContext context, String orderId) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Delete order?'),
+      content: Text(
+        'Delete order #${orderId.length > 8 ? orderId.substring(0, 8) : orderId}? '
+        'This cannot be undone.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          style: TextButton.styleFrom(foregroundColor: Colors.red),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+  try {
+    await FirebaseFirestore.instance
+        .collection('restaurant_orders')
+        .doc(orderId)
+        .delete();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Order deleted'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  } catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Failed to delete: $e'),
+        backgroundColor: Colors.red,
+      ),
+    );
   }
 }
 
@@ -2236,6 +2336,16 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                               icon: const Icon(Icons.edit, size: 18),
                               onPressed: () =>
                                   _showChangeStatusDialog(context, id, status),
+                            ),
+                            IconButton(
+                              tooltip: 'Delete order',
+                              icon: Icon(
+                                Icons.delete,
+                                size: 18,
+                                color: Colors.red.shade700,
+                              ),
+                              onPressed: () =>
+                                  _showDeleteOrderDialog(context, id),
                             ),
                           ],
                         ),

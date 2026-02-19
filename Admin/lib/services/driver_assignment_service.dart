@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:brgy/services/order_notification_service.dart';
+import 'package:brgy/services/delivery_zone_service.dart';
 
 /// Service responsible for finding and assigning drivers to orders
 /// Uses AI-powered algorithms to select optimal drivers
@@ -20,12 +21,16 @@ class DriverAssignmentService {
   }
 
   /// Find and assign the best available driver to an order
-  /// Returns a map with success status and driver information
+  /// Returns a map with success status and driver information.
+  /// When delivery info is provided, restricts to riders in matching service area.
   Future<Map<String, dynamic>> findAndAssignDriver({
     required String orderId,
     required double vendorLat,
     required double vendorLng,
     String? excludeDriverId,
+    double? deliveryLat,
+    double? deliveryLng,
+    String? deliveryLocality,
     required void Function({
       required String orderId,
       required String driverId,
@@ -33,19 +38,45 @@ class DriverAssignmentService {
     }) setupDriverResponseListener,
   }) async {
     try {
-      // Find drivers (signed-in/active = not checked out today, same as map)
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> driverDocs;
+      List<String>? zoneDriverIds;
+
+      if (deliveryLat != null ||
+          deliveryLng != null ||
+          (deliveryLocality?.trim().isNotEmpty == true)) {
+        zoneDriverIds = await DeliveryZoneService()
+            .getAssignedDriverIdsForDelivery(
+          lat: deliveryLat,
+          lng: deliveryLng,
+          locality: deliveryLocality,
+        );
+      }
+
       final driversQuery = await _firestore
           .collection('users')
           .where('role', isEqualTo: 'driver')
           .get();
 
-      if (driversQuery.docs.isEmpty) {
+      if (zoneDriverIds != null && zoneDriverIds.isNotEmpty) {
+        driverDocs = driversQuery.docs
+            .where((d) => zoneDriverIds!.contains(d.id))
+            .toList();
+        if (driverDocs.isEmpty) {
+          return {
+            'success': false,
+            'reason': 'No active drivers in this delivery zone',
+          };
+        }
+      } else {
+        driverDocs = driversQuery.docs;
+      }
+
+      if (driverDocs.isEmpty) {
         return {'success': false, 'reason': 'No drivers'};
       }
 
-      // Calculate distances for all active drivers (excluding rejected one)
       final drivers = _buildDriversList(
-        driversQuery.docs,
+        driverDocs,
         vendorLat,
         vendorLng,
         excludeDriverId,
@@ -137,6 +168,16 @@ class DriverAssignmentService {
       driverId: driverId,
       orderId: orderId,
     );
+  }
+
+  /// Fetch drivers filtered by zone. If [driverIds] is null or empty,
+  /// returns all active drivers (same as fetchActiveDriversWithLocations).
+  Future<List<Map<String, dynamic>>> fetchActiveDriversInZone(
+    List<String>? driverIds,
+  ) async {
+    final all = await fetchActiveDriversWithLocations();
+    if (driverIds == null || driverIds.isEmpty) return all;
+    return all.where((e) => driverIds.contains(e['id'] as String)).toList();
   }
 
   /// Fetch drivers who are signed-in/active (same as Active Riders Live Map)

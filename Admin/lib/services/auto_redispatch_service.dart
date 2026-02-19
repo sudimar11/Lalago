@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:brgy/services/manual_dispatch_service.dart';
 
 /// Service responsible for handling auto-dispatch after driver rejection
 /// Manages automatic reassignment with retry logic and driver exclusion
 class AutoRedispatchService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  final _manualDispatch = ManualDispatchService();
+
   /// Auto-dispatch an order after driver rejection
-  /// Excludes the rejected driver and tries to find another
   Future<Map<String, dynamic>> dispatchAfterRejection({
     required String orderId,
     required Map<String, dynamic> orderData,
@@ -17,6 +19,9 @@ class AutoRedispatchService {
       required double vendorLat,
       required double vendorLng,
       String? excludeDriverId,
+      double? deliveryLat,
+      double? deliveryLng,
+      String? deliveryLocality,
     }) findAndAssignDriver,
   }) async {
     try {
@@ -60,33 +65,36 @@ class AutoRedispatchService {
         throw Exception('Invalid vendor location');
       }
 
-      // Get the previously rejected driver ID to exclude them
       final rejectedDriverId = extractRejectedDriverId(orderData);
+      final deliveryAddr = _manualDispatch.extractDeliveryAddress(orderData);
+      final deliveryLat = deliveryAddr['lat'] as double?;
+      final deliveryLng = deliveryAddr['lng'] as double?;
+      final deliveryLocality = deliveryAddr['locality'] as String?;
 
-      // Try to find available drivers (excluding rejected one)
       final result = await findAndAssignDriver(
         orderId: orderId,
         vendorLat: vendorLat,
         vendorLng: vendorLng,
         excludeDriverId: rejectedDriverId,
+        deliveryLat: deliveryLat,
+        deliveryLng: deliveryLng,
+        deliveryLocality: deliveryLocality,
       );
 
-      if (result['success']) {
-        // Successfully assigned to a new driver
-        return result;
-      } else {
-        // No active drivers available - needs retry
-        print(
-            '[Auto Re-Dispatch] No active riders available. Waiting 20 seconds to retry...');
+      if (result['success']) return result;
 
-        return {
-          'success': false,
-          'needsRetry': true,
-          'vendorLat': vendorLat,
-          'vendorLng': vendorLng,
-          'rejectedDriverId': rejectedDriverId,
-        };
-      }
+      print(
+          '[Auto Re-Dispatch] No active riders available. Waiting 20 seconds...');
+      return {
+        'success': false,
+        'needsRetry': true,
+        'vendorLat': vendorLat,
+        'vendorLng': vendorLng,
+        'rejectedDriverId': rejectedDriverId,
+        'deliveryLat': deliveryLat,
+        'deliveryLng': deliveryLng,
+        'deliveryLocality': deliveryLocality,
+      };
     } catch (e, stackTrace) {
       print('[Auto Re-Dispatch] Error: $e\n$stackTrace');
       rethrow;
@@ -99,11 +107,17 @@ class AutoRedispatchService {
     required double vendorLat,
     required double vendorLng,
     required String? rejectedDriverId,
+    double? deliveryLat,
+    double? deliveryLng,
+    String? deliveryLocality,
     required Future<Map<String, dynamic>> Function({
       required String orderId,
       required double vendorLat,
       required double vendorLng,
       String? excludeDriverId,
+      double? deliveryLat,
+      double? deliveryLng,
+      String? deliveryLocality,
     }) findAndAssignDriver,
     int waitSeconds = 20,
   }) async {
@@ -140,30 +154,30 @@ class AutoRedispatchService {
 
       print('[Auto Re-Dispatch] Retrying after $waitSeconds seconds...');
 
-      // Retry finding a driver (excluding rejected one)
       final retryResult = await findAndAssignDriver(
         orderId: orderId,
         vendorLat: vendorLat,
         vendorLng: vendorLng,
         excludeDriverId: rejectedDriverId,
+        deliveryLat: deliveryLat,
+        deliveryLng: deliveryLng,
+        deliveryLocality: deliveryLocality,
       );
 
-      if (retryResult['success']) {
-        // Successfully assigned to a driver after retry
-        return retryResult;
-      } else {
-        // Still no drivers available - needs listener setup
-        print(
-            '[Auto Re-Dispatch] Still no riders available after retry. Setting up listener...');
+      if (retryResult['success']) return retryResult;
 
-        return {
-          'success': false,
-          'needsListener': true,
-          'vendorLat': vendorLat,
-          'vendorLng': vendorLng,
-          'rejectedDriverId': rejectedDriverId,
-        };
-      }
+      print(
+          '[Auto Re-Dispatch] Still no riders. Setting up listener...');
+      return {
+        'success': false,
+        'needsListener': true,
+        'vendorLat': vendorLat,
+        'vendorLng': vendorLng,
+        'rejectedDriverId': rejectedDriverId,
+        'deliveryLat': deliveryLat,
+        'deliveryLng': deliveryLng,
+        'deliveryLocality': deliveryLocality,
+      };
     } catch (e, stackTrace) {
       print('[Auto Re-Dispatch] Retry error: $e\n$stackTrace');
       rethrow;
@@ -338,11 +352,17 @@ class AutoRedispatchService {
     required double vendorLat,
     required double vendorLng,
     String? excludeDriverId,
+    double? deliveryLat,
+    double? deliveryLng,
+    String? deliveryLocality,
     required Future<Map<String, dynamic>> Function({
       required String orderId,
       required double vendorLat,
       required double vendorLng,
       String? excludeDriverId,
+      double? deliveryLat,
+      double? deliveryLng,
+      String? deliveryLocality,
     }) findAndAssignDriver,
     required void Function(String orderId) onListenerCancel,
   }) {
@@ -388,13 +408,15 @@ class AutoRedispatchService {
         }
       }
 
-      // Try to assign to a driver
       try {
         final result = await findAndAssignDriver(
           orderId: orderId,
           vendorLat: vendorLat,
           vendorLng: vendorLng,
           excludeDriverId: excludeDriverId,
+          deliveryLat: deliveryLat,
+          deliveryLng: deliveryLng,
+          deliveryLocality: deliveryLocality,
         );
 
         if (result['success']) {

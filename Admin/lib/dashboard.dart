@@ -43,6 +43,8 @@ import 'package:brgy/pages/first_order_coupon_settings_page.dart';
 import 'package:brgy/pages/coupon_management_page.dart';
 import 'package:brgy/pages/new_user_promo_settings_page.dart';
 import 'package:brgy/pages/referral_settings_page.dart';
+import 'package:brgy/pages/delivery_zone_settings_page.dart';
+import 'package:brgy/pages/rider_overview_page.dart';
 import 'package:brgy/driver_wallet_page.dart';
 import 'package:brgy/driver_collection_page.dart';
 import 'package:brgy/pages/customer_suggestions_page.dart';
@@ -514,6 +516,11 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             icon: Icons.local_shipping,
             label: 'Rider orders (today)',
             onTap: () => push(const RidersOrdersTodayPage()),
+          ),
+          _DashboardNavItem(
+            icon: Icons.people_outline,
+            label: 'Rider overview',
+            onTap: () => push(const RiderOverviewPage()),
           ),
           _DashboardNavItem(
             icon: Icons.calendar_view_week,
@@ -2947,7 +2954,7 @@ class SettingsPage extends StatelessWidget {
       ),
       body: ListView.separated(
         padding: EdgeInsets.all(12),
-        itemCount: _docIds.length + 10,
+        itemCount: _docIds.length + 11,
         separatorBuilder: (_, __) => SizedBox(height: 8),
         itemBuilder: (context, index) {
           if (index == 0) {
@@ -2980,7 +2987,10 @@ class SettingsPage extends StatelessWidget {
           if (index == 9) {
             return _AssignmentLogTile();
           }
-          final String docId = _docIds[index - 10];
+          if (index == 10) {
+            return _DeliveryZoneSettingsTile();
+          }
+          final String docId = _docIds[index - 11];
           return _SettingsDocTile(collection: 'settings', docId: docId);
         },
       ),
@@ -3355,6 +3365,28 @@ class _AssignmentLogTile extends StatelessWidget {
             context,
             MaterialPageRoute(
               builder: (context) => AssignmentsLogPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DeliveryZoneSettingsTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.location_on, color: Colors.orange),
+        title: Text('Delivery Zone Settings'),
+        subtitle: Text('Service areas, barangays, and rider assignment'),
+        trailing: Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const DeliveryZoneSettingsPage(),
             ),
           );
         },

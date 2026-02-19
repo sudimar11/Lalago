@@ -1,3 +1,6 @@
+/// Google Maps/Geocoding API key (same as web index.html)
+const String GOOGLE_API_KEY = 'AIzaSyBXNXXV60p-VYnIMD0mevMk8HeW9kSJnPs';
+
 const USERS = 'users';
 const USER_ROLE_CUSTOMER = 'customer';
 const USER_ROLE_ADMIN = 'admin';
