@@ -128,29 +128,11 @@ class _ContainerScreen extends State<ContainerScreen> {
       }
 
       if (fbUser == null) {
-        debugPrint('[AUTH_INIT] Guest mode detected – initializing as guest');
+        debugPrint('[AUTH_INIT] No user logged in, redirecting to LoginScreen');
         MyAppState.currentUser = null;
         user = null;
-
-        // Guest does not have Firestore user
-        // Skip Firestore fetch logic
-
-        // Guest must set location first
-        final pos = MyAppState.selectedPosotion;
-        final hasValidLocation = pos.location != null &&
-            (pos.location!.latitude != 0 || pos.location!.longitude != 0);
-
-        if (!hasValidLocation && mounted) {
-          pushAndRemoveUntil(context, LocationPermissionScreen(), false);
-          return;
-        }
-
-        await _initializeAfterUserSet();
-
         if (mounted) {
-          setState(() {
-            _isInitializing = false;
-          });
+          pushReplacement(context, LoginScreen(isInitialScreen: true));
         }
 
         return;
