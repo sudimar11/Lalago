@@ -113,28 +113,50 @@ class _ContainerScreen extends State<ContainerScreen> {
       auth.User? fbUser = auth.FirebaseAuth.instance.currentUser;
       debugPrint('[AUTH_INIT] Initial currentUser: ${fbUser?.uid}');
 
-      if (fbUser == null) {
-        debugPrint(
-            '[AUTH_INIT] currentUser is null, waiting for authStateChanges (2s timeout)...');
-        try {
-          fbUser = await auth.FirebaseAuth.instance
-              .authStateChanges()
-              .first
-              .timeout(const Duration(milliseconds: 2000));
-        } catch (_) {
-          // Timeout or error - fbUser stays null
-        }
-        debugPrint('[AUTH_INIT] After wait, currentUser: ${fbUser?.uid}');
-      }
-
-      if (fbUser == null) {
-        debugPrint('[AUTH_INIT] No user logged in, redirecting to LoginScreen');
+if (fbUser == null) {
         MyAppState.currentUser = null;
         user = null;
-        if (mounted) {
-          pushReplacement(context, LoginScreen(isInitialScreen: true));
+        final loc = MyAppState.selectedPosotion.location;
+        final hasValidGuestLocation = loc != null &&
+            !(loc.latitude == 0 && loc.longitude == 0);
+        if (hasValidGuestLocation) {
+          debugPrint('[AUTH_INIT] Guest mode with valid location');
+          await _initializeAfterUserSet();
+          if (mounted) {
+            setState(() {
+              _isInitializing = false;
+            });
+          }
+          return;
         }
-
+        debugPrint(
+            '[AUTH_INIT] No user, no location; redirecting to location pick');
+        if (mounted) {
+          pushReplacement(context, LocationPermissionScreen());
+        }
+        return;
+      }
+      if (fbUser == null) {
+        MyAppState.currentUser = null;
+        user = null;
+        final loc = MyAppState.selectedPosotion.location;
+        final hasValidGuestLocation = loc != null &&
+            !(loc.latitude == 0 && loc.longitude == 0);
+        if (hasValidGuestLocation) {
+          debugPrint('[AUTH_INIT] Guest mode with valid location');
+          await _initializeAfterUserSet();
+          if (mounted) {
+            setState(() {
+              _isInitializing = false;
+            });
+          }
+          return;
+        }
+        debugPrint(
+            '[AUTH_INIT] No user, no location; redirecting to location pick');
+        if (mounted) {
+          pushReplacement(context, LocationPermissionScreen());
+        }
         return;
       }
       debugPrint('[AUTH_INIT] Proceeding with uid=${fbUser.uid}');
