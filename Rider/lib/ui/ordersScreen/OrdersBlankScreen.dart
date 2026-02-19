@@ -6,8 +6,11 @@ import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/widgets/refreshable_order_list.dart';
 import 'package:foodie_driver/ui/home/orderdetails.dart';
 import 'package:foodie_driver/main.dart';
-import 'package:foodie_driver/ui/profile/ProfileScreen.dart';
 import 'package:foodie_driver/ui/group_chat/GroupChatScreen.dart';
+import 'package:foodie_driver/services/FirebaseHelper.dart';
+import 'package:foodie_driver/services/driver_performance_service.dart';
+import 'package:foodie_driver/userPrefrence.dart';
+import 'package:intl/intl.dart';
 import 'package:foodie_driver/ui/chat_screen/admin_driver_inbox_screen.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/services/group_chat_service.dart';
@@ -41,6 +44,8 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
 
   int _refreshNonce = 0;
   bool _hasShownOfflineDialog = false;
+  double _sliderPosition = 0.0;
+  bool _isSavingGoOnline = false;
   Stream<QuerySnapshot>? _ordersStream;
   String? _ordersStreamUserId;
 
@@ -172,80 +177,99 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
           (isCheckedInToday && !isCheckedOutToday) &&
               (MyAppState.currentUser!.isOnline == true);
 
+      // Slider card is shown in body when !canReceiveOrders; no dialog.
       if (mounted &&
           MyAppState.currentUser != null &&
           MyAppState.currentUser!.suspended != true &&
-          !canReceiveOrders &&
-          !_hasShownOfflineDialog) {
-        // #region agent log
-        debugPrint(
-            '[DEBUG LOG] Showing offline dialog - condition met: isOnline=${MyAppState.currentUser!.isOnline}, checkedInToday=${(MyAppState.currentUser! as dynamic).checkedInToday}, checkedOutToday=${(MyAppState.currentUser! as dynamic).checkedOutToday}');
-        http
-            .post(
-                Uri.parse(
-                    'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-                headers: {'Content-Type': 'application/json'},
-                body: jsonEncode({
-                  'location': 'OrdersBlankScreen.dart:96',
-                  'message': 'Showing offline dialog - condition met',
-                  'data': {
-                    'isOnline': MyAppState.currentUser!.isOnline,
-                    'checkedInToday':
-                        (MyAppState.currentUser! as dynamic).checkedInToday,
-                    'checkedOutToday':
-                        (MyAppState.currentUser! as dynamic).checkedOutToday,
-                    'canReceiveOrders': canReceiveOrders
-                  },
-                  'timestamp': DateTime.now().millisecondsSinceEpoch,
-                  'sessionId': 'debug-session',
-                  'runId': 'run1',
-                  'hypothesisId': 'B,D'
-                }))
-            .catchError((e) => http.Response('', 500));
-        // #endregion
+          !canReceiveOrders) {
         _hasShownOfflineDialog = true;
-        _showOfflineDialog();
       }
     });
   }
 
-  void _showOfflineDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('You are Offline'),
-          content: const Text(
-            'You cannot receive orders unless you are checked in and online. Please check in to start receiving orders.',
+  Future<void> _slideGoOnline() async {
+    if (MyAppState.currentUser == null) return;
+    if (_isSavingGoOnline) return;
+    _isSavingGoOnline = true;
+    setState(() {});
+
+    try {
+      final now = DateTime.now();
+      final timeString = DateFormat('h:mm a').format(now);
+      final todayString = DateFormat('yyyy-MM-dd').format(now);
+
+      MyAppState.currentUser!.checkedInToday = true;
+      MyAppState.currentUser!.isOnline = true;
+      MyAppState.currentUser!.isActive = true;
+      MyAppState.currentUser!.active = true;
+      MyAppState.currentUser!.todayCheckInTime = timeString;
+      MyAppState.currentUser!.checkedOutToday = false;
+      MyAppState.currentUser!.todayCheckOutTime = '';
+
+      try {
+        final absentDaysMarked =
+            await DriverPerformanceService.detectAndMarkMissingAbsences(
+                MyAppState.currentUser!.userID);
+        if (absentDaysMarked > 0 && mounted) {
+          final pointsDeducted =
+              absentDaysMarked * DriverPerformanceService.ADJUSTMENT_ABSENT;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '$absentDaysMarked absent day(s) detected and marked. '
+                'Performance deducted: ${pointsDeducted.toStringAsFixed(1)} points',
+              ),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint(
+            'Error detecting missing absences during slide-go-online: $e');
+      }
+
+      if (MyAppState.currentUser!.checkInTime != null &&
+          MyAppState.currentUser!.checkInTime!.isNotEmpty) {
+        final newPerformance =
+            await DriverPerformanceService.applyCheckInAdjustment(
+                MyAppState.currentUser!.userID,
+                MyAppState.currentUser!.checkInTime!,
+                timeString);
+        MyAppState.currentUser!.driverPerformance = newPerformance;
+      }
+
+      await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
+      UserPreference.setLastCheckInDate(date: todayString);
+
+      if (mounted) {
+        setState(() {
+          _sliderPosition = 0.0;
+          _isSavingGoOnline = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Successfully went online at $timeString!'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                // Navigate to Profile screen with navigation bar
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => ProfileScreen(
-                      user: MyAppState.currentUser!,
-                      showNavigationBar: true,
-                    ),
-                  ),
-                );
-              },
-              child: const Text('Check In'),
-            ),
-          ],
         );
-      },
-    );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _sliderPosition = 0.0;
+          _isSavingGoOnline = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to go online: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -482,8 +506,12 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
     );
   }
 
-  // Build offline warning card
-  Widget _buildOfflineWarningCard() {
+  static const double _sliderTrackWidth = 280;
+  static const double _sliderTrackHeight = 48;
+  static const double _sliderKnobSize = 44;
+  static const double _sliderTriggerThreshold = 0.85;
+
+  Widget _buildSlideToGoOnlineCard() {
     return Center(
       child: SingleChildScrollView(
         child: Padding(
@@ -521,9 +549,9 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                           : Colors.red.shade900,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 8),
                   Text(
-                    'You cannot receive orders unless you are checked in and online. Please check in to start receiving orders.',
+                    'Slide to go online to receive orders.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 16,
@@ -533,33 +561,103 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      // Navigate to Profile screen with navigation bar
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ProfileScreen(
-                            user: MyAppState.currentUser!,
-                            showNavigationBar: true,
+                  GestureDetector(
+                    onHorizontalDragUpdate: _isSavingGoOnline
+                        ? null
+                        : (details) {
+                            final maxDrag =
+                                _sliderTrackWidth - _sliderKnobSize - 4;
+                            final delta = details.delta.dx / maxDrag;
+                            setState(() {
+                              _sliderPosition =
+                                  (_sliderPosition + delta).clamp(0.0, 1.0);
+                              if (_sliderPosition >= _sliderTriggerThreshold) {
+                                _slideGoOnline();
+                              }
+                            });
+                          },
+                    onHorizontalDragEnd: _isSavingGoOnline
+                        ? null
+                        : (_) {
+                            if (_sliderPosition < _sliderTriggerThreshold) {
+                              setState(() => _sliderPosition = 0.0);
+                            }
+                          },
+                    child: SizedBox(
+                      width: _sliderTrackWidth,
+                      height: _sliderTrackHeight,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Container(
+                            width: _sliderTrackWidth,
+                            height: _sliderTrackHeight,
+                            decoration: BoxDecoration(
+                              color: isDarkMode(context)
+                                  ? Colors.grey.shade700
+                                  : Colors.grey.shade300,
+                              borderRadius: BorderRadius.circular(
+                                  _sliderTrackHeight / 2),
+                            ),
                           ),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.login),
-                    label: const Text('Check In Now'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.shade700,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                          Positioned(
+                            left: 2 +
+                                (_sliderPosition *
+                                    (_sliderTrackWidth -
+                                        _sliderKnobSize -
+                                        4)),
+                            top: (_sliderTrackHeight - _sliderKnobSize) / 2,
+                            child: IgnorePointer(
+                              ignoring: _isSavingGoOnline,
+                              child: Container(
+                                width: _sliderKnobSize,
+                                height: _sliderKnobSize,
+                                decoration: BoxDecoration(
+                                  color: _isSavingGoOnline
+                                      ? Colors.grey
+                                      : Color(COLOR_ACCENT),
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black26,
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: _isSavingGoOnline
+                                    ? const Padding(
+                                        padding: EdgeInsets.all(8),
+                                        child: CircularProgressIndicator
+                                            .adaptive(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : Icon(
+                                        Icons.chevron_right,
+                                        color: Colors.white,
+                                        size: _sliderKnobSize * 0.6,
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
+                  if (_isSavingGoOnline)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(
+                        'Saving...',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: isDarkMode(context)
+                              ? Colors.grey.shade400
+                              : Colors.grey.shade600,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1185,7 +1283,7 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                                 }))
                             .catchError((e) => http.Response('', 500));
                         // #endregion
-                        return _buildOfflineWarningCard();
+                        return _buildSlideToGoOnlineCard();
                       }
 
                       if (snapshot.connectionState == ConnectionState.waiting) {
