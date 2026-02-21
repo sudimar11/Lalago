@@ -14,7 +14,9 @@ import 'package:intl/intl.dart';
 import 'package:foodie_driver/ui/chat_screen/admin_driver_inbox_screen.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/services/group_chat_service.dart';
+import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -185,6 +187,113 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
         _hasShownOfflineDialog = true;
       }
     });
+  }
+
+  Future<void> _showLocationPickerThenGoOnline() async {
+    if (MyAppState.currentUser == null) return;
+    setState(() => _sliderPosition = 0.0);
+
+    try {
+      final savedId = MyAppState.currentUser!.selectedPresetLocationId;
+      if (savedId != null && savedId.trim().isNotEmpty) {
+        final preset =
+            await RiderPresetLocationService.getPresetById(savedId);
+        if (preset != null && mounted) {
+          MyAppState.currentUser!.location = UserLocation(
+            latitude: preset.latitude,
+            longitude: preset.longitude,
+          );
+          MyAppState.currentUser!.locationUpdatedAt = Timestamp.now();
+          await _slideGoOnline();
+          return;
+        }
+        MyAppState.currentUser!.selectedPresetLocationId = null;
+      }
+
+      final presets =
+          await RiderPresetLocationService.getPresetLocations();
+      if (!mounted) return;
+      if (presets.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No preset locations. Contact admin.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+
+      final selected = await showModalBottomSheet<
+          RiderPresetLocationData>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (ctx) => DraggableScrollableSheet(
+          initialChildSize: 0.5,
+          minChildSize: 0.3,
+          maxChildSize: 0.8,
+          expand: false,
+          builder: (_, controller) => Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Saan ka mag-aantay ng order?',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  controller: controller,
+                  itemCount: presets.length,
+                  itemBuilder: (_, i) {
+                    final p = presets[i];
+                    return ListTile(
+                      leading: const Icon(Icons.place),
+                      title: Text(p.name),
+                      subtitle: Text(
+                        '${p.latitude.toStringAsFixed(5)}, '
+                        '${p.longitude.toStringAsFixed(5)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      onTap: () => Navigator.pop(ctx, p),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      if (selected == null || !mounted) return;
+
+      MyAppState.currentUser!.location = UserLocation(
+        latitude: selected.latitude,
+        longitude: selected.longitude,
+      );
+      MyAppState.currentUser!.locationUpdatedAt = Timestamp.now();
+      MyAppState.currentUser!.selectedPresetLocationId = selected.id;
+      await _slideGoOnline();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load locations: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _slideGoOnline() async {
@@ -572,7 +681,7 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                               _sliderPosition =
                                   (_sliderPosition + delta).clamp(0.0, 1.0);
                               if (_sliderPosition >= _sliderTriggerThreshold) {
-                                _slideGoOnline();
+                                _showLocationPickerThenGoOnline();
                               }
                             });
                           },

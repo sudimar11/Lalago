@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:brgy/constants.dart';
+import 'package:brgy/services/rider_performance_service.dart';
 
 // Match Rider DriverPerformanceService constants
 const double _adjLateCheckin = -1.0;
@@ -249,6 +250,28 @@ class _RiderPerformancePageState extends State<RiderPerformancePage> {
                                     ),
                                   ),
                                 ],
+                                IconButton(
+                                  icon: const Icon(Icons.edit, size: 18),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  style: IconButton.styleFrom(
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  onPressed: () async {
+                                    final ok = await showDialog<bool>(
+                                      context: context,
+                                      builder: (ctx) =>
+                                          _EditPerformanceDialog(
+                                        riderId: s.riderId,
+                                        riderName: s.riderName,
+                                        currentPerformance:
+                                            s.performancePercent ?? 100.0,
+                                      ),
+                                    );
+                                    if (ok == true) _onRefresh();
+                                  },
+                                ),
                                 Text(
                                   avgMin != null
                                       ? '${_formatDuration(avgMin)} avg'
@@ -506,6 +529,141 @@ class _PerformanceHistorySection extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _EditPerformanceDialog extends StatefulWidget {
+  final String riderId;
+  final String riderName;
+  final double currentPerformance;
+
+  const _EditPerformanceDialog({
+    required this.riderId,
+    required this.riderName,
+    required this.currentPerformance,
+  });
+
+  @override
+  State<_EditPerformanceDialog> createState() => _EditPerformanceDialogState();
+}
+
+class _EditPerformanceDialogState extends State<_EditPerformanceDialog> {
+  late final TextEditingController _valueController;
+  late final TextEditingController _reasonController;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _valueController = TextEditingController(
+      text: widget.currentPerformance.toStringAsFixed(1),
+    );
+    _reasonController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _valueController.dispose();
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final valueStr = _valueController.text.trim();
+    final value = double.tryParse(valueStr);
+    if (value == null || value < 50 || value > 100) {
+      setState(() {
+        _error = 'Enter a value between 50 and 100';
+      });
+      return;
+    }
+    setState(() {
+      _error = null;
+      _saving = true;
+    });
+    try {
+      await RiderPerformanceService.updateRiderPerformance(
+        widget.riderId,
+        value,
+        _reasonController.text.trim().isEmpty
+            ? 'Admin override'
+            : _reasonController.text.trim(),
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit Performance'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.riderName,
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _valueController,
+              decoration: const InputDecoration(
+                labelText: 'Performance (50-100)',
+                border: OutlineInputBorder(),
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _reasonController,
+              decoration: const InputDecoration(
+                labelText: 'Reason (optional)',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 2,
+              textInputAction: TextInputAction.done,
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: TextStyle(color: Colors.red[700], fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Save'),
+        ),
+      ],
     );
   }
 }

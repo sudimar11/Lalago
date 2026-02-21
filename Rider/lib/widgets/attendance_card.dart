@@ -258,67 +258,42 @@ class AttendanceCard extends StatelessWidget {
                   ),
                 if (isLate == true && hoursLate != null && hoursLate! > 0)
                   const SizedBox(height: 12),
-                // Check In and Check Out Buttons in One Row
-                Row(
-                  children: [
-                    // Check In Today Button
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: canCheckInToday ? onCheckInTodayTap : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: canCheckInToday
-                              ? Color(COLOR_ACCENT)
-                              : Colors.grey.shade400,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 12, horizontal: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          elevation: canCheckInToday ? 2 : 0,
-                        ),
-                        child: Text(
-                          checkedInToday == true
-                              ? 'Already Checked In'
-                              : 'Check In Today',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    // Check Out Today Button
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: canCheckOutToday ? onCheckOutTodayTap : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: canCheckOutToday
+                // Single toggle button for Check In / Check Out
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: checkedInToday == true
+                        ? (canCheckOutToday ? onCheckOutTodayTap : null)
+                        : (canCheckInToday ? onCheckInTodayTap : null),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: checkedOutToday == true
+                          ? Colors.grey.shade400
+                          : checkedInToday == true
                               ? Colors.blue
-                              : Colors.grey.shade400,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 12, horizontal: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          elevation: canCheckOutToday ? 2 : 0,
-                        ),
-                        child: Text(
-                          checkedOutToday == true
-                              ? 'Already Checked Out'
-                              : 'Check Out Today',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
+                              : Color(COLOR_ACCENT),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 12,
+                        horizontal: 16,
                       ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      elevation: checkedOutToday == true ? 0 : 2,
                     ),
-                  ],
+                    child: Text(
+                      checkedOutToday == true
+                          ? 'Already Checked Out'
+                          : checkedInToday == true
+                              ? 'Check Out Today'
+                              : 'Check In Today',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
                 ),
               ],
             ),

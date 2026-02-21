@@ -10,6 +10,7 @@ class DriverPerformanceService {
   static const double ADJUSTMENT_UNDERTIME = -2.0;
   static const double ADJUSTMENT_ABSENT = -3.0;
   static const double ADJUSTMENT_CANCELLATION = -1.0;
+  static const double ADJUSTMENT_OUTSIDE_SERVICE_AREA = -1.0;
   static const double ADJUSTMENT_COMPLETE_5_HOURS = 1.0;
   static const double ADJUSTMENT_ON_TIME_CHECKIN = 0.5;
   static const double ADJUSTMENT_PERFECT_ATTENDANCE_7_DAYS = 2.0;
@@ -356,6 +357,31 @@ class DriverPerformanceService {
       return newPerformance;
     } catch (e) {
       print('❌ Error applying check-out adjustments: $e');
+      return 100.0;
+    }
+  }
+
+  /// Apply penalty when rider stays outside service area for 30+ minutes
+  static Future<double> applyOutsideServiceAreaPenalty(String driverId) async {
+    try {
+      final currentUserDoc =
+          await _firestore.collection('users').doc(driverId).get();
+      if (!currentUserDoc.exists) return 100.0;
+
+      final currentPerformance =
+          (currentUserDoc.data()?['driver_performance'] as num?)?.toDouble() ??
+              100.0;
+
+      final newPerformance =
+          clampPerformance(currentPerformance + ADJUSTMENT_OUTSIDE_SERVICE_AREA);
+
+      await _firestore.collection('users').doc(driverId).update({
+        'driver_performance': newPerformance,
+      });
+
+      return newPerformance;
+    } catch (e) {
+      print('❌ Error applying outside service area penalty: $e');
       return 100.0;
     }
   }

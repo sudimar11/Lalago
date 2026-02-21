@@ -26,6 +26,7 @@ import 'package:foodie_driver/widgets/attendance_card.dart';
 import 'package:foodie_driver/widgets/time_input_dialog.dart';
 import 'package:foodie_driver/services/time_tracking_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
+import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/ui/profile/AttendanceHistoryScreen.dart';
 import 'package:foodie_driver/widgets/shared_app_bar.dart';
 
@@ -153,6 +154,101 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() {});
     } catch (e) {
       print('❌ Error refreshing profile: $e');
+    }
+  }
+
+  Future<void> _showChangeLocationPicker(BuildContext context) async {
+    try {
+      final presets =
+          await RiderPresetLocationService.getPresetLocations();
+      if (!mounted) return;
+      if (presets.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No preset locations. Contact admin.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      final selected = await showModalBottomSheet<
+          RiderPresetLocationData>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (ctx) => DraggableScrollableSheet(
+          initialChildSize: 0.5,
+          minChildSize: 0.3,
+          maxChildSize: 0.8,
+          expand: false,
+          builder: (_, controller) => Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Change delivery location',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  controller: controller,
+                  itemCount: presets.length,
+                  itemBuilder: (_, i) {
+                    final p = presets[i];
+                    return ListTile(
+                      leading: const Icon(Icons.place),
+                      title: Text(p.name),
+                      subtitle: Text(
+                        '${p.latitude.toStringAsFixed(5)}, '
+                        '${p.longitude.toStringAsFixed(5)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      onTap: () => Navigator.pop(ctx, p),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      if (selected == null || !mounted) return;
+
+      MyAppState.currentUser!.location = UserLocation(
+        latitude: selected.latitude,
+        longitude: selected.longitude,
+      );
+      MyAppState.currentUser!.locationUpdatedAt = Timestamp.now();
+      MyAppState.currentUser!.selectedPresetLocationId = selected.id;
+      await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Location updated'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update location: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -695,6 +791,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     CupertinoIcons.person_alt,
                     color: Colors.blue,
                   ),
+                ),
+                ListTile(
+                  onTap: () => _showChangeLocationPicker(context),
+                  title: Text(
+                    'Change delivery location',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  leading: Icon(Icons.place, color: Colors.orange),
                 ),
                 // ListTile(
                 //   onTap: () {

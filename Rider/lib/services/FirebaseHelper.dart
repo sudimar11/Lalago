@@ -306,18 +306,19 @@ class FireStoreUtils {
   }
 
   static Future<User?> updateCurrentUser(User user) async {
-    // Strip wallet-related fields so generic merges do not overwrite
-    // server-owned balances or payout/transmit data.
+    // Strip wallet-related and server-owned fields so generic merges do not
+    // overwrite server/admin data (e.g. driver_performance from Admin edits).
     final sanitized = Map<String, dynamic>.from(user.toJson());
-    const walletKeys = <String>{
+    const serverOwnedKeys = <String>{
       'wallet_amount',
       'wallet_credit',
       'payoutRequests',
       'transmitRequests',
       'todayVoucherEarned',
       'totalVouchers',
+      'driver_performance',
     };
-    walletKeys.forEach(sanitized.remove);
+    serverOwnedKeys.forEach(sanitized.remove);
 
     return await firestore
         .collection(USERS)

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:developer';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:foodie_driver/constants.dart';
 import 'package:foodie_driver/main.dart';
 import 'package:foodie_driver/model/CurrencyModel.dart';
@@ -11,6 +12,7 @@ import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/session_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/order_location_service.dart';
+import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/notification_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
@@ -23,6 +25,7 @@ import 'package:foodie_driver/ui/heat_map/DriverHeatMapScreen.dart';
 import 'package:foodie_driver/widgets/shared_bottom_navigation_bar.dart';
 import 'package:foodie_driver/widgets/shared_app_bar.dart';
 import 'package:geolocator/geolocator.dart' hide LocationAccuracy;
+import 'package:intl/intl.dart';
 import 'package:location/location.dart';
 import 'package:provider/provider.dart';
 
@@ -331,6 +334,16 @@ class _ContainerScreen extends State<ContainerScreen> {
   User? _cachedDriverUser;
   DateTime? _cachedDriverUserFetchedAt;
 
+  /// Last time we showed "outside service area" warning (throttle).
+  DateTime? _lastOutsideRadiusWarningAt;
+  static const _outsideRadiusWarningThrottle = Duration(minutes: 5);
+
+  /// When rider first went outside radius; null when inside.
+  DateTime? _firstOutsideRadiusAt;
+  /// True after penalty applied this session (until rider returns inside).
+  bool _outsideRadiusPenaltyApplied = false;
+  static const _outsideRadiusPenaltyThreshold = Duration(minutes: 30);
+
   /// Max distance filter (m) when rider has no active order for accurate ETA.
   static const double _maxDistanceFilterWhenAvailable = 20.0;
 
@@ -346,6 +359,95 @@ class _ContainerScreen extends State<ContainerScreen> {
       _minMovementThresholdMeters = 100.0;
       _duplicateThresholdMeters = 10.0;
     }
+  }
+
+  /// Check if rider is outside selected service area radius and show warning.
+  Future<void> _checkAndWarnOutsideServiceArea(
+    User value,
+    UserLocation currentLocation,
+  ) async {
+    final presetId = value.selectedPresetLocationId;
+    if (presetId == null || presetId.trim().isEmpty) return;
+
+    final preset =
+        await RiderPresetLocationService.getPresetById(presetId);
+    if (preset == null || !preset.hasRadius) return;
+
+    final isInside =
+        RiderPresetLocationService.isWithinRadius(currentLocation, preset);
+
+    if (isInside) {
+      _firstOutsideRadiusAt = null;
+      _outsideRadiusPenaltyApplied = false;
+      return;
+    }
+
+    final now = DateTime.now();
+    _firstOutsideRadiusAt ??= now;
+
+    final hasActiveOrder = value.inProgressOrderID != null &&
+        value.inProgressOrderID!.isNotEmpty;
+
+    if (!hasActiveOrder &&
+        !_outsideRadiusPenaltyApplied &&
+        now.difference(_firstOutsideRadiusAt!) >=
+            _outsideRadiusPenaltyThreshold) {
+      _outsideRadiusPenaltyApplied = true;
+      try {
+        final newPerf = await DriverPerformanceService
+            .applyOutsideServiceAreaPenalty(value.userID);
+        if (MyAppState.currentUser?.userID == value.userID) {
+          MyAppState.currentUser!.driverPerformance = newPerf;
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Bawasan ang performance (-1.0) dahil nasa labas ng service '
+                'area ng 30+ minuto. Bumalik sa loob para makareceive ng orders.',
+              ),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+      } catch (e) {
+        log('Error applying outside service area penalty: $e');
+      }
+    }
+
+    if (_lastOutsideRadiusWarningAt != null &&
+        now.difference(_lastOutsideRadiusWarningAt!) <
+            _outsideRadiusWarningThrottle) {
+      return;
+    }
+    _lastOutsideRadiusWarningAt = now;
+
+    if (!mounted) return;
+    HapticFeedback.heavyImpact();
+    _showOutsideServiceAreaDialog(preset.name);
+  }
+
+  void _showOutsideServiceAreaDialog(String areaName) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+        title: const Text('Labas ng Service Area'),
+        content: Text(
+          'Nasa labas ka na ng "$areaName". '
+          'Bumalik sa loob ng radius para makareceive ng orders.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   updateCurrentLocation() async {
@@ -554,6 +656,9 @@ class _ContainerScreen extends State<ContainerScreen> {
         }
         await OrderLocationService.onLocationUpdate(newLocation, activeOrderId);
 
+        // Check if rider went outside their selected service area radius
+        _checkAndWarnOutsideServiceArea(value, newLocation);
+
         // Fix #7: Debug Logging (periodic summary)
         if (_rawLocationEventCount % 10 == 0) {
           log('📍 Location Stats: raw=$_rawLocationEventCount, accepted=$_acceptedLocationUpdateCount, skipped=$_skippedLocationUpdateCount, writes=$_firestoreWriteCount');
@@ -582,6 +687,33 @@ class _ContainerScreen extends State<ContainerScreen> {
     } catch (e, st) {
       log('Location permission check failed: $e');
     }
+  }
+
+  void _toggleAttendance() async {
+    final user = MyAppState.currentUser;
+    if (user == null) return;
+
+    final now = DateTime.now();
+    final timeString = DateFormat('h:mm a').format(now);
+
+    if (user.checkedInToday != true) {
+      user.checkedInToday = true;
+      user.isOnline = true;
+      user.isActive = true;
+      user.active = true;
+      user.todayCheckInTime = timeString;
+      user.checkedOutToday = false;
+      user.todayCheckOutTime = '';
+    } else if (user.checkedOutToday != true) {
+      user.checkedOutToday = true;
+      user.isOnline = false;
+      user.todayCheckOutTime = timeString;
+    } else {
+      return;
+    }
+
+    await FireStoreUtils.updateCurrentUser(user);
+    if (mounted) setState(() {});
   }
 
   void _onBottomNavTap(int index) {
@@ -667,6 +799,10 @@ class _ContainerScreen extends State<ContainerScreen> {
                 user: user,
                 automaticallyImplyLeading: false,
                 centerTitle: _bottomNavSelection == BottomNavSelection.Wallet,
+                isOutsideServiceArea: _firstOutsideRadiusAt != null,
+                firstOutsideAt: _firstOutsideRadiusAt,
+                outsidePenaltyThresholdMinutes: 30,
+                onToggleAttendance: _toggleAttendance,
               ),
               body: isLoading == true
                   ? const Center(child: CircularProgressIndicator())

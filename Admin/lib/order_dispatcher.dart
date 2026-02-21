@@ -555,6 +555,31 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                                   label: 'No rider in range',
                                   color: Colors.grey,
                                 ),
+                              const SizedBox(width: 4),
+                              TextButton.icon(
+                                onPressed: () {
+                                  // TODO: recommend rider action
+                                },
+                                icon: const Icon(
+                                  Icons.person_add,
+                                  size: 16,
+                                  color: Colors.teal,
+                                ),
+                                label: const Text(
+                                  'Recommend rider',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.teal,
+                                  ),
+                                ),
+                                style: TextButton.styleFrom(
+                                  minimumSize: Size.zero,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                ),
+                              ),
                             ],
                             if (eta != null)
                               _InfoChip(
@@ -2420,6 +2445,31 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                                   label: 'No rider in range',
                                   color: Colors.grey,
                                 ),
+                              const SizedBox(width: 4),
+                              TextButton.icon(
+                                onPressed: () {
+                                  // TODO: recommend rider action
+                                },
+                                icon: const Icon(
+                                  Icons.person_add,
+                                  size: 16,
+                                  color: Colors.teal,
+                                ),
+                                label: const Text(
+                                  'Recommend rider',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.teal,
+                                  ),
+                                ),
+                                style: TextButton.styleFrom(
+                                  minimumSize: Size.zero,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                ),
+                              ),
                             ],
                             if (eta != null)
                               _InfoChip(

@@ -57,6 +57,7 @@ class User with ChangeNotifier {
   String? lastAdminOverrideBy;
   String? lastAdminOverrideReason;
   String? lastAdminOverrideAction;
+  String? selectedPresetLocationId;
 
   User(
       {this.email = '',
@@ -107,7 +108,8 @@ class User with ChangeNotifier {
       this.lastAdminOverrideDate,
       this.lastAdminOverrideBy,
       this.lastAdminOverrideReason,
-      this.lastAdminOverrideAction})
+      this.lastAdminOverrideAction,
+      this.selectedPresetLocationId})
       : this.lastOnlineTimestamp = lastOnlineTimestamp ?? Timestamp.now(),
         this.settings = settings ?? UserSettings(),
         this.appIdentifier =
@@ -279,6 +281,7 @@ class User with ChangeNotifier {
       lastAdminOverrideBy: parsedJson['lastAdminOverrideBy'],
       lastAdminOverrideReason: parsedJson['lastAdminOverrideReason'],
       lastAdminOverrideAction: parsedJson['lastAdminOverrideAction'],
+      selectedPresetLocationId: parsedJson['selectedPresetLocationId'],
     );
   }
 
@@ -328,6 +331,7 @@ class User with ChangeNotifier {
       'lastAdminOverrideBy': this.lastAdminOverrideBy,
       'lastAdminOverrideReason': this.lastAdminOverrideReason,
       'lastAdminOverrideAction': this.lastAdminOverrideAction,
+      'selectedPresetLocationId': this.selectedPresetLocationId,
     };
     if (this.role == USER_ROLE_DRIVER) {
       json.addAll({
