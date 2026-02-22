@@ -11,14 +11,13 @@ class PerformanceNotificationListener {
   final NotificationService _notificationService;
   final String _userId;
 
-  // Performance thresholds
-  static const double threshold80 = 80.0;
-  static const double threshold70 = 70.0;
-  static const double threshold50 = 50.0;
+  static const double thresholdSilver = 75.0;
+  static const double thresholdBronze = 60.0;
+  static const double thresholdCritical = 50.0;
 
-  // Track last notified threshold to prevent spam
   double? _lastNotifiedThreshold;
-  static const String _prefKeyLastThreshold = 'last_performance_threshold';
+  static const String _prefKeyLastThreshold =
+      'last_performance_threshold';
 
   PerformanceNotificationListener(
     this._notificationService,
@@ -27,11 +26,9 @@ class PerformanceNotificationListener {
 
   Future<void> start() async {
     try {
-      // Load last notified threshold
       await _loadLastThreshold();
       log('📊 Last notified threshold: $_lastNotifiedThreshold');
 
-      // Listen to user document changes
       _userSubscription = FirebaseFirestore.instance
           .collection('users')
           .doc(_userId)
@@ -39,9 +36,10 @@ class PerformanceNotificationListener {
           .listen(
         (snapshot) {
           if (snapshot.exists && snapshot.data() != null) {
-            final performance =
-                (snapshot.data()!['driver_performance'] as num?)?.toDouble() ??
-                    100.0;
+            final performance = (snapshot.data()![
+                        'driver_performance'] as num?)
+                    ?.toDouble() ??
+                75.0;
             log('📊 Performance update received: $performance%');
             _checkPerformanceThresholds(performance);
           }
@@ -59,9 +57,11 @@ class PerformanceNotificationListener {
 
   Future<void> _loadLastThreshold() async {
     try {
-      final prefs = await SharedPreferencesHelper.getInstanceSafe();
+      final prefs =
+          await SharedPreferencesHelper.getInstanceSafe();
       if (prefs != null) {
-        _lastNotifiedThreshold = prefs.getDouble(_prefKeyLastThreshold);
+        _lastNotifiedThreshold =
+            prefs.getDouble(_prefKeyLastThreshold);
       }
     } catch (e) {
       log('⚠️ Error loading last threshold: $e');
@@ -70,9 +70,11 @@ class PerformanceNotificationListener {
 
   Future<void> _saveLastThreshold(double threshold) async {
     try {
-      final prefs = await SharedPreferencesHelper.getInstanceSafe();
+      final prefs =
+          await SharedPreferencesHelper.getInstanceSafe();
       if (prefs != null) {
-        await prefs.setDouble(_prefKeyLastThreshold, threshold);
+        await prefs.setDouble(
+            _prefKeyLastThreshold, threshold);
         _lastNotifiedThreshold = threshold;
       }
     } catch (e) {
@@ -81,44 +83,43 @@ class PerformanceNotificationListener {
   }
 
   void _checkPerformanceThresholds(double performance) {
-    // Check thresholds in descending order (most critical first)
-    if (performance <= threshold50) {
-      if (_lastNotifiedThreshold == null || _lastNotifiedThreshold! > threshold50) {
+    if (performance <= thresholdCritical) {
+      if (_lastNotifiedThreshold == null ||
+          _lastNotifiedThreshold! > thresholdCritical) {
         _showPerformanceNotification(
           performance,
-          threshold50,
+          thresholdCritical,
           NotificationPriority.critical,
           'Critical: Performance at ${performance.toStringAsFixed(0)}%. Contact support if needed.',
         );
-        _saveLastThreshold(threshold50);
+        _saveLastThreshold(thresholdCritical);
       }
-    } else if (performance <= threshold70) {
+    } else if (performance <= thresholdBronze) {
       if (_lastNotifiedThreshold == null ||
-          _lastNotifiedThreshold! > threshold70) {
+          _lastNotifiedThreshold! > thresholdBronze) {
         _showPerformanceNotification(
           performance,
-          threshold70,
+          thresholdBronze,
           NotificationPriority.high,
-          'Performance at ${performance.toStringAsFixed(0)}%. Check in on time to improve!',
+          'Performance dropped to Bronze (${performance.toStringAsFixed(0)}%). Improve acceptance rate and attendance!',
         );
-        _saveLastThreshold(threshold70);
+        _saveLastThreshold(thresholdBronze);
       }
-    } else if (performance <= threshold80) {
+    } else if (performance <= thresholdSilver) {
       if (_lastNotifiedThreshold == null ||
-          _lastNotifiedThreshold! > threshold80) {
+          _lastNotifiedThreshold! > thresholdSilver) {
         _showPerformanceNotification(
           performance,
-          threshold80,
+          thresholdSilver,
           NotificationPriority.normal,
-          'Performance at ${performance.toStringAsFixed(0)}%. Keep up the good work!',
+          'Performance at Silver (${performance.toStringAsFixed(0)}%). Keep improving to reach Gold!',
         );
-        _saveLastThreshold(threshold80);
+        _saveLastThreshold(thresholdSilver);
       }
     } else {
-      // Performance is good (above 80%), reset threshold tracking
       if (_lastNotifiedThreshold != null) {
         _lastNotifiedThreshold = null;
-        _saveLastThreshold(0); // Use 0 to indicate "good performance"
+        _saveLastThreshold(0);
       }
     }
   }
@@ -130,14 +131,16 @@ class PerformanceNotificationListener {
     String message,
   ) async {
     try {
-      // Use unique ID based on threshold to avoid collision
       int notificationId;
-      if (threshold == threshold50) {
-        notificationId = NotificationService.idPerformance + 1;
-      } else if (threshold == threshold70) {
-        notificationId = NotificationService.idPerformance + 2;
+      if (threshold == thresholdCritical) {
+        notificationId =
+            NotificationService.idPerformance + 1;
+      } else if (threshold == thresholdBronze) {
+        notificationId =
+            NotificationService.idPerformance + 2;
       } else {
-        notificationId = NotificationService.idPerformance + 3;
+        notificationId =
+            NotificationService.idPerformance + 3;
       }
 
       await _notificationService.showNotification(
@@ -172,21 +175,22 @@ class PerformanceNotificationListener {
   }
 }
 
-/// Handler class that processes performance notifications (used by UnifiedNotificationListener)
 class PerformanceNotificationHandler {
   final NotificationService _notificationService;
   final String _userId;
 
-  // Performance thresholds
-  static const double threshold80 = 80.0;
-  static const double threshold70 = 70.0;
-  static const double threshold50 = 50.0;
+  static const double thresholdSilver = 75.0;
+  static const double thresholdBronze = 60.0;
+  static const double thresholdCritical = 50.0;
 
-  // Track last notified threshold to prevent spam
   double? _lastNotifiedThreshold;
-  static const String _prefKeyLastThreshold = 'last_performance_threshold';
+  static const String _prefKeyLastThreshold =
+      'last_performance_threshold';
 
-  PerformanceNotificationHandler(this._notificationService, this._userId);
+  PerformanceNotificationHandler(
+    this._notificationService,
+    this._userId,
+  );
 
   Future<void> initialize() async {
     await _loadLastThreshold();
@@ -200,9 +204,11 @@ class PerformanceNotificationHandler {
 
   Future<void> _loadLastThreshold() async {
     try {
-      final prefs = await SharedPreferencesHelper.getInstanceSafe();
+      final prefs =
+          await SharedPreferencesHelper.getInstanceSafe();
       if (prefs != null) {
-        _lastNotifiedThreshold = prefs.getDouble(_prefKeyLastThreshold);
+        _lastNotifiedThreshold =
+            prefs.getDouble(_prefKeyLastThreshold);
       }
     } catch (e) {
       log('⚠️ Error loading last threshold: $e');
@@ -211,9 +217,11 @@ class PerformanceNotificationHandler {
 
   Future<void> _saveLastThreshold(double threshold) async {
     try {
-      final prefs = await SharedPreferencesHelper.getInstanceSafe();
+      final prefs =
+          await SharedPreferencesHelper.getInstanceSafe();
       if (prefs != null) {
-        await prefs.setDouble(_prefKeyLastThreshold, threshold);
+        await prefs.setDouble(
+            _prefKeyLastThreshold, threshold);
         _lastNotifiedThreshold = threshold;
       }
     } catch (e) {
@@ -222,44 +230,43 @@ class PerformanceNotificationHandler {
   }
 
   void _checkPerformanceThresholds(double performance) {
-    // Check thresholds in descending order (most critical first)
-    if (performance <= threshold50) {
-      if (_lastNotifiedThreshold == null || _lastNotifiedThreshold! > threshold50) {
+    if (performance <= thresholdCritical) {
+      if (_lastNotifiedThreshold == null ||
+          _lastNotifiedThreshold! > thresholdCritical) {
         _showPerformanceNotification(
           performance,
-          threshold50,
+          thresholdCritical,
           NotificationPriority.critical,
           'Critical: Performance at ${performance.toStringAsFixed(0)}%. Contact support if needed.',
         );
-        _saveLastThreshold(threshold50);
+        _saveLastThreshold(thresholdCritical);
       }
-    } else if (performance <= threshold70) {
+    } else if (performance <= thresholdBronze) {
       if (_lastNotifiedThreshold == null ||
-          _lastNotifiedThreshold! > threshold70) {
+          _lastNotifiedThreshold! > thresholdBronze) {
         _showPerformanceNotification(
           performance,
-          threshold70,
+          thresholdBronze,
           NotificationPriority.high,
-          'Performance at ${performance.toStringAsFixed(0)}%. Check in on time to improve!',
+          'Performance dropped to Bronze (${performance.toStringAsFixed(0)}%). Improve acceptance rate and attendance!',
         );
-        _saveLastThreshold(threshold70);
+        _saveLastThreshold(thresholdBronze);
       }
-    } else if (performance <= threshold80) {
+    } else if (performance <= thresholdSilver) {
       if (_lastNotifiedThreshold == null ||
-          _lastNotifiedThreshold! > threshold80) {
+          _lastNotifiedThreshold! > thresholdSilver) {
         _showPerformanceNotification(
           performance,
-          threshold80,
+          thresholdSilver,
           NotificationPriority.normal,
-          'Performance at ${performance.toStringAsFixed(0)}%. Keep up the good work!',
+          'Performance at Silver (${performance.toStringAsFixed(0)}%). Keep improving to reach Gold!',
         );
-        _saveLastThreshold(threshold80);
+        _saveLastThreshold(thresholdSilver);
       }
     } else {
-      // Performance is good (above 80%), reset threshold tracking
       if (_lastNotifiedThreshold != null) {
         _lastNotifiedThreshold = null;
-        _saveLastThreshold(0); // Use 0 to indicate "good performance"
+        _saveLastThreshold(0);
       }
     }
   }
@@ -271,14 +278,16 @@ class PerformanceNotificationHandler {
     String message,
   ) async {
     try {
-      // Use unique ID based on threshold to avoid collision
       int notificationId;
-      if (threshold == threshold50) {
-        notificationId = NotificationService.idPerformance + 1;
-      } else if (threshold == threshold70) {
-        notificationId = NotificationService.idPerformance + 2;
+      if (threshold == thresholdCritical) {
+        notificationId =
+            NotificationService.idPerformance + 1;
+      } else if (threshold == thresholdBronze) {
+        notificationId =
+            NotificationService.idPerformance + 2;
       } else {
-        notificationId = NotificationService.idPerformance + 3;
+        notificationId =
+            NotificationService.idPerformance + 3;
       }
 
       await _notificationService.showNotification(
@@ -302,7 +311,5 @@ class PerformanceNotificationHandler {
     }
   }
 
-  void dispose() {
-    // Cleanup if needed
-  }
+  void dispose() {}
 }

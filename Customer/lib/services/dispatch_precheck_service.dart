@@ -67,32 +67,16 @@ class DispatchPrecheckService {
     final ridersSnapshot = await _firestore
         .collection(USERS)
         .where('role', isEqualTo: USER_ROLE_DRIVER)
-        .where('isOnline', isEqualTo: true)
-        .where('checkedInToday', isEqualTo: true)
+        .where('riderAvailability', isEqualTo: 'available')
         .get();
 
-    final riders = ridersSnapshot.docs.map((d) => d.data()).toList();
-
-    final filteredRiders = riders.where((r) {
-      final isSuspended = r['suspended'] == true ||
-          (r['attendanceStatus']?.toString().toLowerCase() == 'suspended');
-      if (isSuspended) return false;
-
-      final isCheckedOutToday = r['checkedOutToday'] == true ||
-          (r['todayCheckOutTime'] != null &&
-              r['todayCheckOutTime'].toString().isNotEmpty);
-      if (isCheckedOutToday) return false;
-
-      return true;
-    }).toList();
-
-    final activeRiders = filteredRiders.length;
+    final activeRiders = ridersSnapshot.docs.length;
     final isOverloaded = activeOrders >= (activeRiders * _maxOrdersPerRider);
 
     // #region agent log
     log(
         '[DispatchPrecheck] after query activeOrders=$activeOrders '
-        'rawRiderCount=${riders.length} activeRiders=$activeRiders '
+        'activeRiders=$activeRiders '
         'isOverloaded=$isOverloaded',
         name: 'precheck');
     try {
@@ -101,7 +85,7 @@ class DispatchPrecheckService {
             'http://127.0.0.1:7245/ingest/5f1a6d32-5b64-4784-b085-ee17060b4d34'),
         headers: {'Content-Type': 'application/json'},
         body:
-            '{"location":"dispatch_precheck_service.dart:after query","message":"counts and overload","data":{"activeOrders":$activeOrders,"rawRiderCount":${riders.length},"activeRiders":$activeRiders,"isOverloaded":$isOverloaded},"timestamp":${DateTime.now().millisecondsSinceEpoch},"hypothesisId":"A,B"}',
+            '{"location":"dispatch_precheck_service.dart:after query","message":"counts and overload","data":{"activeOrders":$activeOrders,"activeRiders":$activeRiders,"isOverloaded":$isOverloaded},"timestamp":${DateTime.now().millisecondsSinceEpoch},"hypothesisId":"A,B"}',
       ).catchError((_) => null);
     } catch (_) {}
     // #endregion

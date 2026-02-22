@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:foodie_driver/main.dart';
 import 'package:foodie_driver/utils/dialog_utils.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/order_chat_service.dart';
@@ -73,29 +74,32 @@ class OrderService {
         throw Exception("Driver location not available");
       }
 
-      // Check if driver already has an active order (only if multipleOrders is false)
-      if (!multipleOrders) {
-        final activeOrderCheck = await _firestore
-            .collection('restaurant_orders')
-            .where('driverID', isEqualTo: currentUserId)
-            .where('status', whereIn: [
-              'Driver Pending',
-              'Driver Accepted',
-              'Order Shipped',
-              'In Transit',
-            ])
-            .limit(1)
-            .get();
+      // Dynamic capacity check
+      final effectiveCap = await _getEffectiveCapacity(
+        driverData: driverData ?? {},
+        multipleOrders: multipleOrders,
+      );
 
-        if (activeOrderCheck.docs.isNotEmpty) {
-          await DialogUtils.showAlertDialog(
-            context,
-            title: "Active Order Exists",
-            content:
-                "You already have an ongoing order. Please complete or deliver it before accepting a new one.",
-          );
-          return false;
-        }
+      final activeOrderCheck = await _firestore
+          .collection('restaurant_orders')
+          .where('driverID', isEqualTo: currentUserId)
+          .where('status', whereIn: [
+            'Driver Pending',
+            'Driver Accepted',
+            'Order Shipped',
+            'In Transit',
+          ])
+          .get();
+
+      if (activeOrderCheck.docs.length >= effectiveCap) {
+        await DialogUtils.showAlertDialog(
+          context,
+          title: "Active Order Exists",
+          content: effectiveCap <= 1
+              ? "You already have an ongoing order. Please complete or deliver it before accepting a new one."
+              : "You already have ${activeOrderCheck.docs.length} active order(s) (limit: $effectiveCap). Complete one first.",
+        );
+        return false;
       }
 
       // Get order data for system message
@@ -126,6 +130,8 @@ class OrderService {
         },
         SetOptions(merge: true),
       );
+
+      await updateRiderStatus();
 
       // Send system message
       if (customerId != null) {
@@ -212,6 +218,198 @@ class OrderService {
       DialogUtils.showSnackBar(
         context,
         message: 'Failed to reject order: $e',
+        backgroundColor: Colors.red,
+      );
+      return false;
+    }
+  }
+
+  /// Accept all orders in a batch atomically.
+  /// Guards run once; all orders are updated in a WriteBatch.
+  static Future<bool> acceptBatch(
+    List<Map<String, dynamic>> orders,
+    List<String> orderIds,
+    BuildContext context,
+  ) async {
+    try {
+      final currentUserId = _auth.currentUser?.uid ?? '';
+      if (currentUserId.isEmpty) {
+        throw Exception('No user is logged in.');
+      }
+
+      final canProceed =
+          await _guardAttendanceStatus(context, currentUserId);
+      if (!canProceed) return false;
+
+      final remittanceOk =
+          await _guardRemittanceStatus(context, currentUserId);
+      if (!remittanceOk) return false;
+
+      final driverSnapshot = await _firestore
+          .collection('users')
+          .doc(currentUserId)
+          .get();
+      if (!driverSnapshot.exists) {
+        throw Exception('Driver not found');
+      }
+
+      final driverData = driverSnapshot.data();
+      final driverLocation = driverData?['location'] ?? {};
+      if (driverLocation.isEmpty) {
+        throw Exception('Driver location not available');
+      }
+
+      final wb = _firestore.batch();
+
+      for (final orderId in orderIds) {
+        final ref = _firestore
+            .collection('restaurant_orders')
+            .doc(orderId);
+        wb.update(ref, {
+          'status': 'Driver Accepted',
+          'driverId': currentUserId,
+          'driverID': currentUserId,
+          'driverName':
+              '${driverData?['firstName']} ${driverData?['lastName']}',
+          'driverLocation': {
+            'latitude': driverLocation['latitude'],
+            'longitude': driverLocation['longitude'],
+          },
+        });
+      }
+
+      final driverRef =
+          _firestore.collection('users').doc(currentUserId);
+      wb.set(
+        driverRef,
+        {
+          'orderRequestData':
+              FieldValue.arrayRemove(orderIds),
+          'inProgressOrderID':
+              FieldValue.arrayUnion(orderIds),
+        },
+        SetOptions(merge: true),
+      );
+
+      await wb.commit();
+
+      await updateRiderStatus();
+
+      // Update batch doc status
+      if (orders.isNotEmpty) {
+        final batchId =
+            orders.first['batch']?['batchId'] as String?;
+        if (batchId != null) {
+          await _firestore
+              .collection('order_batches')
+              .doc(batchId)
+              .update({'status': 'accepted'});
+        }
+      }
+
+      // Send system messages for each order
+      for (int i = 0; i < orders.length; i++) {
+        final author = orders[i]['author']
+            as Map<String, dynamic>? ?? {};
+        final customerId =
+            author['id'] ?? author['customerID'];
+        final token = author['fcmToken'] as String?;
+        if (customerId != null) {
+          await OrderChatService.sendSystemMessage(
+            orderId: orderIds[i],
+            status: 'Driver Accepted',
+            customerId: customerId.toString(),
+            customerFcmToken: token,
+            restaurantId: currentUserId,
+          );
+        }
+      }
+
+      DialogUtils.showSnackBar(
+        context,
+        message:
+            'Batch accepted (${orderIds.length} orders)!',
+        backgroundColor: Colors.green,
+      );
+      return true;
+    } catch (e) {
+      DialogUtils.showSnackBar(
+        context,
+        message: 'Failed to accept batch: $e',
+        backgroundColor: Colors.red,
+      );
+      return false;
+    }
+  }
+
+  /// Reject all orders in a batch. Performance penalty is
+  /// applied once, not per order.
+  static Future<bool> rejectBatch(
+    List<Map<String, dynamic>> orders,
+    List<String> orderIds,
+    BuildContext context,
+  ) async {
+    try {
+      final currentUserId = _auth.currentUser?.uid ?? '';
+
+      final canProceed =
+          await _guardAttendanceStatus(context, currentUserId);
+      if (!canProceed) return false;
+
+      final wb = _firestore.batch();
+      for (final orderId in orderIds) {
+        final ref = _firestore
+            .collection('restaurant_orders')
+            .doc(orderId);
+        wb.update(ref, {'status': 'Driver Rejected'});
+      }
+      await wb.commit();
+
+      // Update batch doc
+      if (orders.isNotEmpty) {
+        final batchId =
+            orders.first['batch']?['batchId'] as String?;
+        if (batchId != null) {
+          await _firestore
+              .collection('order_batches')
+              .doc(batchId)
+              .update({'status': 'cancelled'});
+        }
+      }
+
+      if (currentUserId.isNotEmpty) {
+        await DriverPerformanceService
+            .applyCancellationPenalty(currentUserId);
+      }
+
+      // Send system messages
+      for (int i = 0; i < orders.length; i++) {
+        final author = orders[i]['author']
+            as Map<String, dynamic>? ?? {};
+        final customerId =
+            author['id'] ?? author['customerID'];
+        final token = author['fcmToken'] as String?;
+        if (customerId != null) {
+          await OrderChatService.sendSystemMessage(
+            orderId: orderIds[i],
+            status: 'Driver Rejected',
+            customerId: customerId.toString(),
+            customerFcmToken: token,
+          );
+        }
+      }
+
+      DialogUtils.showSnackBar(
+        context,
+        message:
+            'Batch rejected (${orderIds.length} orders).',
+        backgroundColor: Colors.green,
+      );
+      return true;
+    } catch (e) {
+      DialogUtils.showSnackBar(
+        context,
+        message: 'Failed to reject batch: $e',
         backgroundColor: Colors.red,
       );
       return false;
@@ -329,6 +527,65 @@ class OrderService {
     }
   }
 
+  /// Compute and persist `riderAvailability` + `riderDisplayStatus`.
+  /// Call after every action that changes the rider's logical state
+  /// (accept, complete, check-in, check-out, break).
+  static Future<void> updateRiderStatus({
+    String? overrideAvailability,
+  }) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return;
+    final user = MyAppState.currentUser;
+    if (user == null) return;
+
+    String availability;
+    String displayStatus;
+
+    if (user.suspended == true ||
+        (user.attendanceStatus?.toLowerCase() == 'suspended')) {
+      availability = 'suspended';
+      displayStatus = '🔴 Suspended';
+    } else if (user.checkedOutToday == true) {
+      availability = 'checked_out';
+      displayStatus = '⚫ Checked Out';
+    } else if (overrideAvailability == 'on_break') {
+      availability = 'on_break';
+      displayStatus = '⏸ On Break';
+    } else if (user.checkedInToday != true ||
+        user.isOnline != true) {
+      availability = 'offline';
+      displayStatus = '⚪ Offline';
+    } else {
+      final orders =
+          user.inProgressOrderID as List? ?? [];
+      final cap = await _getEffectiveCapacity(
+        driverData: {
+          'driver_performance': user.driverPerformance,
+          'multipleOrders': user.multipleOrders,
+        },
+        multipleOrders: user.multipleOrders,
+      );
+      if (orders.isNotEmpty && orders.length >= cap) {
+        availability = 'on_delivery';
+        displayStatus = '🟡 On Delivery';
+      } else if (orders.isNotEmpty) {
+        availability = 'available';
+        displayStatus = '🟡 On Delivery';
+      } else {
+        availability = 'available';
+        displayStatus = '🟢 Available';
+      }
+    }
+
+    user.riderAvailability = availability;
+    user.riderDisplayStatus = displayStatus;
+
+    await _firestore.collection('users').doc(uid).update({
+      'riderAvailability': availability,
+      'riderDisplayStatus': displayStatus,
+    });
+  }
+
   static Future<bool> _guardRemittanceStatus(
     BuildContext context,
     String userId,
@@ -411,5 +668,66 @@ class OrderService {
         ],
       ),
     );
+  }
+
+  /// Compute effective order capacity for the current rider using
+  /// the dynamic capacity config from Firestore.
+  static Future<int> _getEffectiveCapacity({
+    required Map<String, dynamic> driverData,
+    required bool multipleOrders,
+  }) async {
+    if (!multipleOrders) return 1;
+    try {
+      final configDoc = await _firestore
+          .collection('config')
+          .doc('dispatch_weights')
+          .get();
+      final m = configDoc.data() ?? {};
+      final enabled = m['dynamicCapacityEnabled'] as bool? ?? true;
+      if (!enabled) {
+        return (m['maxActiveOrdersPerRider'] as num?)?.toInt() ?? 2;
+      }
+
+      final baseCapacity =
+          (m['baseCapacity'] as num?)?.toInt() ?? 2;
+      final peakReduction =
+          (m['peakCapacityReduction'] as num?)?.toInt() ?? 1;
+      final boostThreshold =
+          (m['performanceBoostThreshold'] as num?)?.toDouble() ?? 90;
+      final penaltyThreshold =
+          (m['performancePenaltyThreshold'] as num?)?.toDouble() ?? 65;
+      final weather =
+          m['weatherCondition'] as String? ?? 'normal';
+
+      final peakStart = (m['peakHourStart'] as num?)?.toInt() ?? 11;
+      final peakEnd = (m['peakHourEnd'] as num?)?.toInt() ?? 14;
+      final peakStart2 =
+          (m['peakHourStart2'] as num?)?.toInt() ?? 17;
+      final peakEnd2 = (m['peakHourEnd2'] as num?)?.toInt() ?? 21;
+      final hour = DateTime.now().hour;
+      final isPeak = (hour >= peakStart && hour < peakEnd) ||
+          (hour >= peakStart2 && hour < peakEnd2);
+
+      int cap = baseCapacity;
+      if (isPeak) cap -= peakReduction;
+
+      final perf =
+          (driverData['driver_performance'] as num?)?.toDouble() ?? 0;
+      if (perf >= boostThreshold) {
+        cap += 1;
+      } else if (perf < penaltyThreshold) {
+        cap -= 1;
+      }
+
+      if (weather == 'rain') {
+        cap -= 1;
+      } else if (weather == 'storm') {
+        cap -= 2;
+      }
+
+      return cap.clamp(1, 4);
+    } catch (_) {
+      return 2;
+    }
   }
 }

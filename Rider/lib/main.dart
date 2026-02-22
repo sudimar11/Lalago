@@ -17,6 +17,7 @@ import 'package:foodie_driver/services/session_service.dart';
 import 'package:foodie_driver/services/time_tracking_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
+import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/ui/container/ContainerScreen.dart';
 import 'package:foodie_driver/ui/onBoarding/OnBoardingScreen.dart';
@@ -148,6 +149,7 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
       try {
         await FireStoreUtils.updateCurrentUser(currentUser!)
             .timeout(Duration(seconds: 10));
+        await OrderService.updateRiderStatus();
         print(
             '✅ Automatic checkout completed successfully at $timeString. Work duration: ${TimeTrackingService.formatDuration(workDuration)}');
       } catch (e) {
@@ -494,29 +496,16 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
       }
 
       if (state == AppLifecycleState.paused) {
-        //user offline
         if (MyAppState.currentUser != null) {
           MyAppState.currentUser!.lastOnlineTimestamp = Timestamp.now();
-          // Don't change isActive when app is paused if driver has active orders
-          if (MyAppState.currentUser!.inProgressOrderID != null &&
-              (MyAppState.currentUser!.inProgressOrderID as List).isNotEmpty) {
-            // Keep isActive as is when driver has active orders
-          } else {
-            // Set isActive to false when app is paused (driver goes offline)
-            if (MyAppState.currentUser!.isActive != false) {
-              MyAppState.currentUser!.isActive = false;
-              try {
-                await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!)
-                    .timeout(Duration(seconds: 10));
-              } catch (e) {
-                print('❌ Error updating user on pause: $e');
-              }
-            }
+          try {
+            await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!)
+                .timeout(Duration(seconds: 10));
+          } catch (e) {
+            print('❌ Error updating user on pause: $e');
           }
         }
       } else if (state == AppLifecycleState.resumed) {
-        //user online
-        // Check closing time when app resumes - perform checkout if passed
         bool hasPassedClosing = false;
         try {
           hasPassedClosing = await SessionService.hasPassedClosingTime()
@@ -536,23 +525,8 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
           }
         }
 
-        // Set isActive to true when app resumes (don't toggle)
         if (MyAppState.currentUser != null) {
-          if (MyAppState.currentUser!.inProgressOrderID != null &&
-              (MyAppState.currentUser!.inProgressOrderID as List).isNotEmpty) {
-            // Keep isActive as is when driver has active orders
-          } else {
-            // Set isActive to true when app resumes (driver is back online)
-            if (MyAppState.currentUser!.isActive != true) {
-              MyAppState.currentUser!.isActive = true;
-              try {
-                await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!)
-                    .timeout(Duration(seconds: 10));
-              } catch (e) {
-                print('❌ Error updating user on resume: $e');
-              }
-            }
-          }
+          MyAppState.currentUser!.lastOnlineTimestamp = Timestamp.now();
           try {
             await AttendanceService.touchLastActiveDate(
               MyAppState.currentUser!,

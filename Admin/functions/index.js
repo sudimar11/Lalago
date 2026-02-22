@@ -431,19 +431,48 @@ exports.autoDispatcher = functions.firestore
     // Only trigger when order status changes to 'Order Accepted' (ready for AI auto-dispatch)
     if (beforeData.status !== 'Order Accepted' && afterData.status === 'Order Accepted') {
         try {
-          // Guard: rider-first flow handles dispatch itself.
-          if (
-            afterData?.dispatchFlow === 'rider_first_v1' ||
-            afterData?.dispatch?.flow === 'rider_first_v1' ||
-            afterData?.driverID
-          ) {
+          // Restaurant-first model: dispatch all orders reaching 'Order Accepted'.
+          if (afterData?.driverID) {
             console.log(
-              `[AI AutoDispatcher] Skipping order ${orderId} (rider-first or driver already assigned)`
+              `[AI AutoDispatcher] Skipping order ${orderId} (driver already assigned)`
+            );
+            return null;
+          }
+
+          // Guard: batched orders are dispatched by orderBatchingCron.
+          if (afterData?.batch?.batchId) {
+            console.log(
+              `[AI AutoDispatcher] Skipping order ${orderId} (part of batch ${afterData.batch.batchId})`
             );
             return null;
           }
 
           console.log(`[AI AutoDispatcher] Processing order ${orderId} for automatic rider assignment`);
+
+          // Phase 1A: Acquire dispatch lock to prevent race conditions
+          const orderRef = change.after.ref;
+          const lockAcquired = await getDb().runTransaction(async (tx) => {
+            const snap = await tx.get(orderRef);
+            const d = snap.data() || {};
+            const lock = d?.dispatch?.lock;
+            const lockExpires = d?.dispatch?.lockExpiresAt;
+            const tsNow = admin.firestore.Timestamp.now();
+            if (lock === true && lockExpires && lockExpires.seconds > tsNow.seconds) {
+              return false;
+            }
+            tx.update(orderRef, {
+              'dispatch.lock': true,
+              'dispatch.lockHolder': 'cloud_function',
+              'dispatch.lockAcquiredAt': admin.firestore.FieldValue.serverTimestamp(),
+              'dispatch.lockExpiresAt': _addSeconds(tsNow, 60),
+            });
+            return true;
+          });
+
+          if (!lockAcquired) {
+            console.log(`[AI AutoDispatcher] Skipping order ${orderId} (dispatch lock held by another path)`);
+            return null;
+          }
 
           // 1. Get order details
         // Extract restaurant location from vendor data
@@ -463,6 +492,30 @@ exports.autoDispatcher = functions.firestore
         console.log(`[AI AutoDispatcher] Restaurant location:`, restaurantLocation);
         console.log(`[AI AutoDispatcher] Delivery location:`, deliveryLocation);
 
+        // Zone capacity check
+        if (deliveryLocation.lat && deliveryLocation.lng) {
+          const capCheck = await _checkZoneCapacity(
+            deliveryLocation.lat,
+            deliveryLocation.lng,
+          );
+          if (capCheck.atCapacity) {
+            console.log(
+              `[AI AutoDispatcher] Zone at capacity for order ${orderId}: ` +
+              `${capCheck.currentCount}/${capCheck.maxRiders} in ${capCheck.zoneName}`
+            );
+            await change.after.ref.update({
+              status: 'Order Accepted',
+              dispatchStatus: 'zone_at_capacity',
+              dispatchZoneId: capCheck.zoneId,
+              dispatchZoneName: capCheck.zoneName,
+              dispatchCapacityCurrent: capCheck.currentCount,
+              dispatchCapacityMax: capCheck.maxRiders,
+              dispatchAttemptedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            return null;
+          }
+        }
+
         const order = {
           id: orderId,
           ...afterData,
@@ -471,10 +524,10 @@ exports.autoDispatcher = functions.firestore
           createdAt: afterData.createdAt || admin.firestore.Timestamp.now(),
         };
 
-        // 2. Find available drivers (using LalaGo-Restaurant field names)
+        // 2. Find available drivers
         const driversSnapshot = await getDb().collection('users')
           .where('role', '==', 'driver')
-          .where('isActive', '==', true)
+          .where('riderAvailability', '==', 'available')
           .get();
 
         if (driversSnapshot.empty) {
@@ -487,58 +540,149 @@ exports.autoDispatcher = functions.firestore
           return null;
         }
 
-        // 3. Calculate scores for each driver
+        // 3. Load dispatch weights and calculate scores for each driver
+        const weights = await _loadDispatchWeights();
+
+        // Prefer historical average prep time over restaurant-entered estimate
+        let prepMinutes = 0;
+        const vendorId = afterData.vendorID || afterData.vendor?.id || '';
+        if (vendorId) {
+          try {
+            const statsSnap = await getDb()
+              .collection('vendors')
+              .doc(vendorId)
+              .collection('restaurant_stats')
+              .doc('prep_times')
+              .get();
+            if (statsSnap.exists) {
+              const avg = statsSnap.data()?.averagePrepTimeMinutes;
+              if (avg && avg > 0) {
+                prepMinutes = avg;
+                console.log(`[AI AutoDispatcher] Using historical prep time for ${vendorId}: ${avg}m`);
+              }
+            }
+          } catch (statsErr) {
+            console.error('[AI AutoDispatcher] Failed to load prep stats:', statsErr);
+          }
+        }
+        if (!prepMinutes) {
+          prepMinutes = _asNumber(
+            afterData.estimatedTimeToPrepare ||
+            afterData.preparationTime ||
+            0
+          );
+        }
         const driverScores = [];
-        
+        const excludedIds = new Set(afterData?.dispatch?.excludedDriverIds || []);
+
+        // Pass 1: filter eligible drivers and collect IDs for batch queries
+        const eligibleDrivers = [];
         for (const driverDoc of driversSnapshot.docs) {
           const driver = { id: driverDoc.id, ...driverDoc.data() };
+          if (excludedIds.has(driver.id)) continue;
           
-          // Get driver's current location from various possible fields
-          const driverLocation = driver.currentLocation || 
-                                 (driver.location ? { 
-                                   lat: driver.location.latitude, 
-                                   lng: driver.location.longitude 
-                                 } : { lat: 0, lng: 0 });
+          const driverLocation = _extractDriverLocation(driver);
+          if (!driverLocation.lat && !driverLocation.lng) continue;
           
-          console.log(`[AI AutoDispatcher] Driver ${driver.id} location:`, driverLocation);
+          const activeOrders = _activeOrdersCount(driver);
+          const effectiveCap = _calculateDynamicCapacity(driver, weights);
+          if (activeOrders >= effectiveCap) continue;
           
-          // Calculate ETA (simplified: straight-line distance)
-          const eta = calculateETA(
-            driverLocation,
-            order.restaurantLocation
-          );
+          const eta = calculateETA(driverLocation, order.restaurantLocation);
+          const distanceKm = _distanceMeters(driverLocation, order.restaurantLocation) / 1000;
+          const headingMatch = _calculateDriverHeading(driver, driverLocation, order.restaurantLocation);
 
-          // Get ML acceptance probability (stubbed for now)
-          const mlAcceptanceProbability = await getMLAcceptanceProbability(
+          eligibleDrivers.push({
             driver,
-            order,
-            eta
-          );
-
-          // Get fairness score (based on completed orders today)
-          const fairnessScore = await calculateFairnessScore(driver.id);
-
-          // Calculate composite score
-          // Lower is better: weighted sum of normalized metrics
-          const compositeScore = calculateCompositeScore({
+            driverLocation,
+            activeOrders,
+            effectiveCap,
             eta,
+            distanceKm,
+            headingMatch,
+          });
+        }
+
+        // Pass 2: batch acceptance probability and fairness queries
+        const eligibleIds = eligibleDrivers.map(d => d.driver.id);
+        const [batchBaseRates, batchFairness] = await Promise.all([
+          getMLAcceptanceProbabilityBatch(eligibleIds),
+          Promise.resolve(calculateFairnessScoreBatch(eligibleDrivers.map(d => d.driver))),
+        ]);
+
+        const hour = new Date().getHours();
+        const timeBonus = (hour >= 10 && hour <= 21) ? 0.05 : 0;
+
+        // Pass 3: score each driver using batched data
+        for (const e of eligibleDrivers) {
+          const baseRate = batchBaseRates[e.driver.id] || 0.7;
+          const distancePenalty = Math.min(e.eta / 60, 0.3);
+          const workloadPenalty = e.activeOrders * 0.15;
+          const mlAcceptanceProbability = Math.max(0.05, Math.min(0.95,
+            baseRate - distancePenalty - workloadPenalty + timeBonus
+          ));
+          const fairnessScore = batchFairness[e.driver.id] || 50;
+
+          const compositeScore = calculateCompositeScore({
+            eta: e.eta,
             mlAcceptanceProbability,
-            fairnessScore
+            effectiveCapacity: e.effectiveCap,
+            fairnessScore,
+            headingMatch: e.headingMatch,
+            currentOrders: e.activeOrders,
+            restaurantPrepMinutes: prepMinutes,
           });
 
           driverScores.push({
-            driverId: driver.id,
-            driverName: `${driver.firstName || ''} ${driver.lastName || ''}`.trim(),
-            fcmToken: driver.fcmToken,
-            eta,
+            driverId: e.driver.id,
+            driverName: `${e.driver.firstName || ''} ${e.driver.lastName || ''}`.trim(),
+            fcmToken: e.driver.fcmToken,
+            driverLocation: e.driverLocation,
+            activeOrders: e.activeOrders,
+            eta: e.eta,
+            distance: e.distanceKm,
             mlAcceptanceProbability,
             fairnessScore,
-            compositeScore
+            headingMatch: e.headingMatch,
+            compositeScore,
+            routingSource: 'haversine',
           });
         }
 
         // 4. Sort by composite score (lower is better)
         driverScores.sort((a, b) => a.compositeScore - b.compositeScore);
+
+        // 4b. Two-pass: refine top candidates with road-network ETA
+        const TOP_N = Math.min(8, driverScores.length);
+        if (TOP_N > 0) {
+          const topCandidates = driverScores.slice(0, TOP_N);
+          try {
+            const destinations = [order.restaurantLocation];
+            const driverLocs = topCandidates.map(d => d.driverLocation);
+            const routePromises = driverLocs.map(loc =>
+              _getRouteDataSingle(loc, order.restaurantLocation)
+            );
+            const routeResults = await Promise.all(routePromises);
+            for (let ri = 0; ri < topCandidates.length; ri++) {
+              const route = routeResults[ri];
+              topCandidates[ri].routingSource = route.isFallback ? 'haversine' : 'google_distance_matrix';
+              topCandidates[ri].compositeScore = calculateCompositeScore({
+                eta: route.durationMinutes,
+                mlAcceptanceProbability: topCandidates[ri].mlAcceptanceProbability,
+                fairnessScore: topCandidates[ri].fairnessScore,
+                headingMatch: topCandidates[ri].headingMatch,
+                currentOrders: topCandidates[ri].activeOrders || 0,
+                restaurantPrepMinutes: prepMinutes,
+              });
+              topCandidates[ri].eta = route.durationMinutes;
+              topCandidates[ri].distance = route.roadDistanceKm;
+            }
+            topCandidates.sort((a, b) => a.compositeScore - b.compositeScore);
+            driverScores.splice(0, TOP_N, ...topCandidates);
+          } catch (routeErr) {
+            console.warn('[AI AutoDispatcher] Road-network refinement failed, using Haversine:', routeErr.message || routeErr);
+          }
+        }
 
         const bestDriver = driverScores[0];
         
@@ -546,12 +690,14 @@ exports.autoDispatcher = functions.firestore
           driverId: bestDriver.driverId,
           driverName: bestDriver.driverName,
           eta: bestDriver.eta,
+          routingSource: bestDriver.routingSource || 'haversine',
           mlAcceptanceProbability: bestDriver.mlAcceptanceProbability,
           fairnessScore: bestDriver.fairnessScore,
           compositeScore: bestDriver.compositeScore
         });
 
         // 5. Assign rider to order using AI prescription (LalaGo-Restaurant pattern)
+        const riderDeadline = _addSeconds(_nowTimestamp(), RIDER_ACCEPT_TIMEOUT_SECONDS);
         await change.after.ref.update({
           driverID: bestDriver.driverId,
           driverDistance: bestDriver.distance,
@@ -561,6 +707,9 @@ exports.autoDispatcher = functions.firestore
           assignedAt: admin.firestore.FieldValue.serverTimestamp(),
           dispatchStatus: 'success',
           dispatchMethod: 'AI Auto-Dispatch',
+          'dispatch.lock': false,
+          'dispatch.riderAcceptDeadline': riderDeadline,
+          'dispatch.attemptCount': admin.firestore.FieldValue.increment(1),
           dispatchMetrics: {
             eta: bestDriver.eta,
             distance: bestDriver.distance,
@@ -571,11 +720,25 @@ exports.autoDispatcher = functions.firestore
           }
         });
 
-        // 6. Update driver status (following LalaGo-Restaurant pattern)
-        await getDb().collection('users').doc(bestDriver.driverId).update({
+        // 6. Update driver status
+        const driverRef = getDb().collection('users').doc(bestDriver.driverId);
+        const driverSnap = await driverRef.get();
+        const driverDataForStatus = driverSnap.exists ? driverSnap.data() : {};
+        const updatedDriverData = {
+          ...driverDataForStatus,
+          inProgressOrderID: [
+            ...(driverDataForStatus.inProgressOrderID || []),
+            orderId,
+          ],
+        };
+        const { riderAvailability: newAvail, riderDisplayStatus: newDisplay } =
+          _computeRiderStatus(updatedDriverData);
+        await driverRef.update({
           isActive: false,
           inProgressOrderID: admin.firestore.FieldValue.arrayUnion(orderId),
-          lastAssignedAt: admin.firestore.FieldValue.serverTimestamp()
+          lastAssignedAt: admin.firestore.FieldValue.serverTimestamp(),
+          riderAvailability: newAvail,
+          riderDisplayStatus: newDisplay,
         });
 
         // 7. Send FCM notification to rider
@@ -629,17 +792,56 @@ exports.autoDispatcher = functions.firestore
           deliveryLocation: order.deliveryLocation
         });
 
+        // Phase 4: Enhanced dispatch event logging
+        await _logDispatchEvent({
+          type: 'auto_dispatch_assigned',
+          orderId,
+          riderId: bestDriver.driverId,
+          factors: {
+            distanceKm: bestDriver.distance || 0,
+            etaMinutes: bestDriver.eta,
+            riderCurrentOrders: _activeOrdersCount(
+              driversSnapshot.docs.find((d) => d.id === bestDriver.driverId)?.data() || {},
+            ),
+            riderHeadingMatch: bestDriver.headingMatch || 0,
+            predictedAcceptanceProb: bestDriver.mlAcceptanceProbability,
+            restaurantPrepMinutes: prepMinutes,
+            zoneId: afterData?.zoneId || afterData?.vendorID || '',
+            routingSource: bestDriver.routingSource || 'haversine',
+          },
+          totalScore: bestDriver.compositeScore,
+          scoringComponents: {
+            eta: bestDriver.eta,
+            fairness: bestDriver.fairnessScore,
+            headingMatch: bestDriver.headingMatch,
+            acceptance: bestDriver.mlAcceptanceProbability,
+          },
+          alternativeRiders: driverScores.slice(1, 6).map((d) => ({
+            riderId: d.driverId,
+            score: d.compositeScore,
+            distance: d.distance,
+          })),
+          activeWeights: {
+            weightETA: weights.weightETA,
+            weightWorkload: weights.weightWorkload,
+            weightDirection: weights.weightDirection,
+            weightAcceptanceProb: weights.weightAcceptanceProb,
+            weightFairness: weights.weightFairness,
+          },
+        });
+
         console.log(`[AI AutoDispatcher] Successfully dispatched order ${orderId} to rider ${bestDriver.driverId} using AI prescription`);
         return { success: true, driverId: bestDriver.driverId };
 
       } catch (error) {
         console.error(`[AI AutoDispatcher] Error processing order ${orderId}:`, error);
         
-        // Update order with error status
+        // Release dispatch lock on error
         await change.after.ref.update({
-          status: 'Order Accepted',  // Keep status as Order Accepted on error
+          status: 'Order Accepted',
           dispatchStatus: 'error',
           dispatchError: error.message,
+          'dispatch.lock': false,
           dispatchAttemptedAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
@@ -750,6 +952,125 @@ function _distanceMeters(a, b) {
   return R * c * 1000;
 }
 
+// --- Road-network routing via Google Distance Matrix API ---
+
+const GOOGLE_MAPS_API_KEY = 'AIzaSyBXNXXV60p-VYnIMD0mevMk8HeW9kSJnPs';
+const ROUTE_CACHE_TTL_DAYS = 30;
+const ROUTE_COORD_PRECISION = 3; // ~111 m grid
+
+function _roundCoord(v) {
+  const f = Math.pow(10, ROUTE_COORD_PRECISION);
+  return Math.round(v * f) / f;
+}
+
+function _routeCacheKey(oLat, oLng, dLat, dLng) {
+  return `${_roundCoord(oLat)},${_roundCoord(oLng)}->${_roundCoord(dLat)},${_roundCoord(dLng)}`;
+}
+
+async function _getRouteDataBatch(origin, destinations) {
+  const db = getDb();
+  const results = new Array(destinations.length).fill(null);
+  const uncachedIndices = [];
+
+  for (let i = 0; i < destinations.length; i++) {
+    const dest = destinations[i];
+    const key = _routeCacheKey(origin.lat, origin.lng, dest.lat, dest.lng);
+    try {
+      const doc = await db.collection('routes_cache').doc(key).get();
+      if (doc.exists) {
+        const d = doc.data();
+        const now = admin.firestore.Timestamp.now();
+        if (d.expiresAt && d.expiresAt.toMillis() > now.toMillis()) {
+          results[i] = {
+            roadDistanceKm: d.roadDistanceKm,
+            durationMinutes: d.durationMinutes,
+            isFallback: false,
+          };
+          continue;
+        }
+      }
+    } catch (_) { /* cache miss */ }
+    uncachedIndices.push(i);
+  }
+
+  if (uncachedIndices.length > 0) {
+    try {
+      const destParam = uncachedIndices
+        .map(i => `${destinations[i].lat},${destinations[i].lng}`)
+        .join('|');
+      const url =
+        `https://maps.googleapis.com/maps/api/distancematrix/json` +
+        `?origins=${origin.lat},${origin.lng}` +
+        `&destinations=${destParam}` +
+        `&mode=driving&key=${GOOGLE_MAPS_API_KEY}`;
+
+      const https = require('https');
+      const body = await new Promise((resolve, reject) => {
+        https.get(url, (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => resolve(data));
+        }).on('error', reject);
+      });
+
+      const json = JSON.parse(body);
+      if (json.status === 'OK' && json.rows && json.rows[0]) {
+        const elements = json.rows[0].elements;
+        const now = admin.firestore.Timestamp.now();
+        const expiresAt = admin.firestore.Timestamp.fromMillis(
+          now.toMillis() + ROUTE_CACHE_TTL_DAYS * 86400000
+        );
+        const batch = db.batch();
+
+        for (let j = 0; j < uncachedIndices.length; j++) {
+          const idx = uncachedIndices[j];
+          const el = elements[j];
+          if (el && el.status === 'OK') {
+            const km = el.distance.value / 1000;
+            const mins = el.duration.value / 60;
+            results[idx] = { roadDistanceKm: km, durationMinutes: mins, isFallback: false };
+            const key = _routeCacheKey(
+              origin.lat, origin.lng,
+              destinations[idx].lat, destinations[idx].lng
+            );
+            batch.set(db.collection('routes_cache').doc(key), {
+              originLat: _roundCoord(origin.lat),
+              originLng: _roundCoord(origin.lng),
+              destLat: _roundCoord(destinations[idx].lat),
+              destLng: _roundCoord(destinations[idx].lng),
+              roadDistanceKm: km,
+              durationMinutes: mins,
+              source: 'google_distance_matrix',
+              createdAt: now,
+              expiresAt,
+            });
+          }
+        }
+        await batch.commit();
+      }
+    } catch (err) {
+      console.warn('[Routing] Distance Matrix API error:', err.message || err);
+    }
+  }
+
+  for (let i = 0; i < results.length; i++) {
+    if (!results[i]) {
+      const dist = _distanceMeters(origin, destinations[i]) / 1000;
+      results[i] = {
+        roadDistanceKm: dist,
+        durationMinutes: Math.max(dist / 0.5, 1),
+        isFallback: true,
+      };
+    }
+  }
+  return results;
+}
+
+async function _getRouteDataSingle(origin, destination) {
+  const arr = await _getRouteDataBatch(origin, [destination]);
+  return arr[0];
+}
+
 function _activeOrdersCount(driverData) {
   const v = driverData?.inProgressOrderID;
   return Array.isArray(v) ? v.length : 0;
@@ -775,24 +1096,65 @@ function _isDriverEligibleBase(driverData) {
   return true;
 }
 
-function _computeIsActiveForDispatch(driverData, activeOrdersCount) {
+function _computeIsActiveForDispatch(driverData, activeOrdersCount, weights) {
   if (!_isDriverEligibleBase(driverData)) return false;
 
-  const multipleOrders = driverData?.multipleOrders === true;
-  const hasCapacity =
-    activeOrdersCount === 0 || (activeOrdersCount === 1 && multipleOrders);
-  return hasCapacity;
+  const w = weights || _dispatchWeightsCache || DEFAULT_DISPATCH_WEIGHTS;
+  const effectiveCap = _calculateDynamicCapacity(driverData, w);
+  return activeOrdersCount < effectiveCap;
 }
 
-async function _logDispatchEvent({ type, orderId, payload }) {
+async function _logDispatchEvent({
+  type,
+  orderId,
+  payload,
+  riderId,
+  batchId,
+  factors,
+  totalScore,
+  scoringComponents,
+  alternativeRiders,
+  activeWeights,
+}) {
   try {
-    await getDb().collection('dispatch_events').add({
+    const now = new Date();
+    const doc = {
       type,
       orderId,
-      payload: payload || {},
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      decisionTime: admin.firestore.FieldValue.serverTimestamp(),
       source: 'functions',
-    });
+    };
+
+    if (riderId) doc.riderId = riderId;
+    if (batchId) doc.batchId = batchId;
+
+    if (factors) {
+      doc.factors = factors;
+    } else if (payload?.factors) {
+      doc.factors = payload.factors;
+    }
+
+    if (totalScore != null) doc.totalScore = totalScore;
+    if (scoringComponents) doc.scoringComponents = scoringComponents;
+    if (alternativeRiders) doc.alternativeRiders = alternativeRiders;
+    if (activeWeights) doc.activeWeights = activeWeights;
+
+    if (!doc.factors) {
+      doc.factors = {};
+    }
+    if (!doc.factors.timeOfDay) doc.factors.timeOfDay = `${now.getHours()}:00`;
+    if (!doc.factors.dayOfWeek) doc.factors.dayOfWeek = now.getDay();
+    if (!doc.factors.isPeakHour) {
+      doc.factors.isPeakHour = _isPeakHour(
+        activeWeights || _dispatchWeightsCache || DEFAULT_DISPATCH_WEIGHTS,
+      );
+    }
+
+    if (payload) doc.payload = payload;
+    doc.outcome = null;
+
+    await getDb().collection('dispatch_events').add(doc);
   } catch (e) {
     console.error(`[RiderFirst] Failed to log event ${type}:`, e);
   }
@@ -868,11 +1230,16 @@ async function _releaseDriverFromOrder(driverId, orderId) {
       const activeOrdersCount = next.length;
 
       const isActive = _computeIsActiveForDispatch(data, activeOrdersCount);
+      const updatedData = { ...data, inProgressOrderID: next };
+      const { riderAvailability, riderDisplayStatus } =
+        _computeRiderStatus(updatedData);
 
       tx.update(ref, {
         inProgressOrderID: next,
         orderRequestData: admin.firestore.FieldValue.arrayRemove(orderId),
         isActive,
+        riderAvailability,
+        riderDisplayStatus,
       });
     });
   } catch (e) {
@@ -883,7 +1250,7 @@ async function _releaseDriverFromOrder(driverId, orderId) {
   }
 }
 
-async function _recomputeDriverIsActive(driverId) {
+async function _recomputeDriverStatus(driverId) {
   if (!driverId) return;
   try {
     const db = getDb();
@@ -893,10 +1260,84 @@ async function _recomputeDriverIsActive(driverId) {
     const data = snap.data() || {};
     const activeOrdersCount = _activeOrdersCount(data);
     const isActive = _computeIsActiveForDispatch(data, activeOrdersCount);
-    await ref.update({ isActive });
+    const { riderAvailability, riderDisplayStatus } = _computeRiderStatus(data);
+    await ref.update({ isActive, riderAvailability, riderDisplayStatus });
   } catch (e) {
-    console.error(`[RiderFirst] Failed to recompute isActive for ${driverId}:`, e);
+    console.error(`[RiderFirst] Failed to recompute driver status for ${driverId}:`, e);
   }
+}
+
+/**
+ * Check zone capacity: count active riders assigned to a zone
+ * whose locationUpdatedAt is within the last 5 minutes.
+ * Returns { atCapacity, currentCount, maxRiders, zoneId, zoneName }
+ */
+async function _checkZoneCapacity(deliveryLat, deliveryLng) {
+  const db = getDb();
+  const zonesSnap = await db.collection('service_areas').get();
+  if (zonesSnap.empty) return { atCapacity: false };
+
+  let matchedZone = null;
+  let matchedDoc = null;
+
+  for (const doc of zonesSnap.docs) {
+    const z = doc.data();
+    const ids = z.assignedDriverIds || [];
+    if (!ids.length) continue;
+
+    if (z.boundaryType === 'radius') {
+      const cLat = _asNumber(z.centerLat);
+      const cLng = _asNumber(z.centerLng);
+      const rKm = _asNumber(z.radiusKm);
+      if (!cLat || !cLng || rKm <= 0) continue;
+      if (!deliveryLat || !deliveryLng) continue;
+      const dist = _distanceMeters(
+        { lat: cLat, lng: cLng },
+        { lat: deliveryLat, lng: deliveryLng },
+      );
+      if (dist <= rKm * 1000) {
+        matchedZone = z;
+        matchedDoc = doc;
+        break;
+      }
+    } else if (z.boundaryType === 'fixed') {
+      continue; // fixed zones match by locality, skip for lat/lng
+    }
+  }
+
+  if (!matchedZone || !matchedDoc) return { atCapacity: false };
+  const maxRiders = matchedZone.maxRiders;
+  if (maxRiders == null || maxRiders === undefined) {
+    return { atCapacity: false };
+  }
+
+  const assignedIds = matchedZone.assignedDriverIds || [];
+  const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const fiveMinAgoTs = admin.firestore.Timestamp.fromDate(fiveMinAgo);
+
+  const driversSnap = await db
+    .collection('users')
+    .where('role', '==', 'driver')
+    .get();
+
+  let activeCount = 0;
+  for (const dDoc of driversSnap.docs) {
+    if (!assignedIds.includes(dDoc.id)) continue;
+    const d = dDoc.data();
+    if (d.checkedOutToday === true) continue;
+    const locTs = d.locationUpdatedAt;
+    if (locTs && locTs.toDate() > fiveMinAgo) {
+      activeCount++;
+    }
+  }
+
+  return {
+    atCapacity: activeCount >= maxRiders,
+    currentCount: activeCount,
+    maxRiders: maxRiders,
+    zoneId: matchedDoc.id,
+    zoneName: matchedZone.name || matchedDoc.id,
+  };
 }
 
 async function _pickBestDriverForOrder({
@@ -906,15 +1347,18 @@ async function _pickBestDriverForOrder({
 }) {
   const db = getDb();
   const exclude = new Set(excludeDriverIds || []);
+  const weights = await _loadDispatchWeights();
 
   const restaurantLocation = _extractRestaurantLocation(orderData);
   const deliveryLocation = _extractDeliveryLocation(orderData);
+  const prepMinutes = _asNumber(
+    orderData?.estimatedTimeToPrepare || orderData?.preparationTime || 0
+  );
 
   const driversSnapshot = await db
     .collection('users')
     .where('role', '==', 'driver')
-    .where('isOnline', '==', true)
-    .where('checkedInToday', '==', true)
+    .where('riderAvailability', '==', 'available')
     .get();
 
   const drivers = [];
@@ -927,12 +1371,26 @@ async function _pickBestDriverForOrder({
     if (!driverLocation.lat || !driverLocation.lng) continue;
 
     const activeOrders = _activeOrdersCount(d);
-    if (activeOrders >= MAX_ACTIVE_ORDERS_PER_RIDER) continue;
+    const effectiveCap = _calculateDynamicCapacity(d, weights);
+    if (activeOrders >= effectiveCap) continue;
 
     const distanceToRestaurantMeters = _distanceMeters(
       driverLocation,
       restaurantLocation
     );
+    const eta = calculateETA(driverLocation, restaurantLocation);
+    const headingMatch = _calculateDriverHeading(d, driverLocation, restaurantLocation);
+    const fairnessScore = await calculateFairnessScore(d.id);
+
+    const unifiedScore = calculateCompositeScore({
+      eta,
+      mlAcceptanceProbability: 0.5,
+      fairnessScore,
+      headingMatch,
+      currentOrders: activeOrders,
+      restaurantPrepMinutes: prepMinutes,
+      effectiveCapacity: effectiveCap,
+    });
 
     drivers.push({
       driverId: d.id,
@@ -942,17 +1400,40 @@ async function _pickBestDriverForOrder({
       multipleOrders: d.multipleOrders === true,
       distanceToRestaurantMeters,
       deliveryLocation,
+      unifiedScore,
     });
   }
 
-  // Tier 1: nearest rider with active_orders == 0
+  // Tier 1: free riders sorted by unified score
   const free = drivers
     .filter((x) => x.activeOrders === 0)
-    .sort((a, b) => a.distanceToRestaurantMeters - b.distanceToRestaurantMeters);
+    .sort((a, b) => a.unifiedScore - b.unifiedScore);
   if (free.length > 0) {
+    const topFree = free.slice(0, 8);
+    try {
+      const routeResults = await Promise.all(
+        topFree.map(d => _getRouteDataSingle(d.driverLocation, restaurantLocation))
+      );
+      for (let i = 0; i < topFree.length; i++) {
+        const r = routeResults[i];
+        topFree[i].routingSource = r.isFallback ? 'haversine' : 'google_distance_matrix';
+        topFree[i].unifiedScore = calculateCompositeScore({
+          eta: r.durationMinutes,
+          mlAcceptanceProbability: 0.5,
+          fairnessScore: topFree[i].unifiedScore,
+          headingMatch: 0.5,
+          currentOrders: 0,
+          restaurantPrepMinutes: prepMinutes,
+        });
+        topFree[i].distanceToRestaurantMeters = r.roadDistanceKm * 1000;
+      }
+      topFree.sort((a, b) => a.unifiedScore - b.unifiedScore);
+    } catch (e) {
+      console.warn('[_pickBest] Road routing failed for free tier:', e.message || e);
+    }
     return {
-      selected: free[0],
-      candidates: free.slice(0, 10),
+      selected: topFree[0],
+      candidates: topFree.slice(0, 10),
       stackDecision: { usedStacking: false },
     };
   }
@@ -960,7 +1441,7 @@ async function _pickBestDriverForOrder({
   // Tier 2: consider stacking (active_orders == 1) only if multipleOrders==true
   const maybeStack = drivers
     .filter((x) => x.activeOrders === 1 && x.multipleOrders)
-    .sort((a, b) => a.distanceToRestaurantMeters - b.distanceToRestaurantMeters)
+    .sort((a, b) => a.unifiedScore - b.unifiedScore)
     .slice(0, 15);
 
   for (const candidate of maybeStack) {
@@ -1132,143 +1613,117 @@ async function _tryDispatchOrFail({ orderRef, orderId, orderData, attempt }) {
 exports.riderFirstDispatchOnCreate = functions.firestore
   .document('restaurant_orders/{orderId}')
   .onCreate(async (snap, context) => {
-    const orderId = context.params.orderId;
-    const orderData = snap.data() || {};
-
-    try {
-      // Only handle normal customer orders (status starts as "Order Placed").
-      if (String(orderData.status || '') !== 'Order Placed') {
-        return null;
-      }
-
-      // Skip future scheduled orders (dispatch at order-time, not creation-time).
-      if (orderData.scheduleTime && orderData.scheduleTime.toDate) {
-        const when = orderData.scheduleTime.toDate();
-        if (when && when.getTime() > Date.now()) {
-          return null;
-        }
-      }
-
-      // Mark rider-first flow and hide from restaurant until rider accepts.
-      await snap.ref.update({
-        status: 'Awaiting Rider',
-        dispatchFlow: RIDER_FIRST_FLOW,
-        'dispatch.flow': RIDER_FIRST_FLOW,
-        'dispatch.stage': 'created',
-        'dispatch.attempt': 0,
-        'dispatch.triedDriverIds': [],
-        'dispatch.timestamps.createdAt':
-          admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      const fresh = await snap.ref.get();
-      const freshData = fresh.data() || {};
-
-      await _tryDispatchOrFail({
-        orderRef: snap.ref,
-        orderId,
-        orderData: freshData,
-        attempt: 1,
-      });
-      return null;
-    } catch (e) {
-      console.error(`[RiderFirst] onCreate error for ${orderId}:`, e);
-      return null;
-    }
+    // DEPRECATED: This function previously implemented rider-first dispatch.
+    // Now using restaurant-first model. Orders stay as 'Order Placed' and
+    // are visible to restaurants immediately. Rider assignment happens via
+    // autoDispatcher after restaurant accepts (status -> 'Order Accepted').
+    return null;
   });
 
 exports.riderFirstDispatchOnUpdate = functions.firestore
   .document('restaurant_orders/{orderId}')
   .onUpdate(async (change, context) => {
+    // DEPRECATED: Rider-first update handler removed. Restaurant-first model
+    // uses autoDispatcher for rider assignment after restaurant acceptance.
+    // Retained: Restaurant rejection releases any assigned driver.
     const orderId = context.params.orderId;
     const beforeData = change.before.data() || {};
     const afterData = change.after.data() || {};
-
-    const flow =
-      afterData?.dispatchFlow ||
-      afterData?.dispatch?.flow ||
-      '';
-    if (flow !== RIDER_FIRST_FLOW) return null;
-
     const beforeStatus = String(beforeData.status || '');
     const afterStatus = String(afterData.status || '');
 
-    // Rider accepted: make order visible to restaurant and start 5m timer.
-    if (beforeStatus !== 'Driver Accepted' && afterStatus === 'Driver Accepted') {
-      const driverId = String(afterData.driverID || '');
-      const now = _nowTimestamp();
-      const deadline = _addSeconds(now, RESTAURANT_CONFIRM_TIMEOUT_SECONDS);
-
-      await _removeOrderRequestFromDriver(driverId, orderId);
-      await _recomputeDriverIsActive(driverId);
-
-      await change.after.ref.update({
-        status: 'Order Placed',
-        'dispatch.stage': 'rider_accepted',
-        'dispatch.restaurantConfirmDeadline': deadline,
-        'dispatch.timestamps.riderAcceptedAt':
-          admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      await _sendRestaurantNotificationBestEffort(afterData, orderId);
-      await _logDispatchEvent({
-        type: 'rider_accepted',
-        orderId,
-        payload: { driverId },
-      });
-      return null;
-    }
-
-    // Rider rejected: try next candidate (up to 3).
-    if (beforeStatus !== 'Driver Rejected' && afterStatus === 'Driver Rejected') {
-      const attempt = Number(afterData?.dispatch?.attempt || 1) + 1;
-      const driverId = String(afterData.driverID || '');
-
-      await _removeOrderRequestFromDriver(driverId, orderId);
-
-      if (attempt > MAX_DISPATCH_ATTEMPTS) {
-        await _cancelOrderWithReason({
-          orderRef: change.after.ref,
-          orderId,
-          orderData: afterData,
-          reason: 'max_attempts',
-        });
-        return null;
-      }
-
-      await change.after.ref.update({
-        status: 'Awaiting Rider',
-        'dispatch.stage': 'retrying',
-        'dispatch.attempt': attempt - 1,
-      });
-
-      const fresh = await change.after.ref.get();
-      await _tryDispatchOrFail({
-        orderRef: change.after.ref,
-        orderId,
-        orderData: fresh.data() || {},
-        attempt,
-      });
-      return null;
-    }
-
-    // Restaurant rejected: release rider and notify.
     if (beforeStatus !== 'Order Rejected' && afterStatus === 'Order Rejected') {
       const driverId = String(afterData.driverID || '');
-      await _releaseDriverFromOrder(driverId, orderId);
+      if (driverId) {
+        await _releaseDriverFromOrder(driverId, orderId);
+      }
       await _logDispatchEvent({
-        type: 'restaurant_timeout_or_reject',
+        type: 'restaurant_rejected',
         orderId,
         payload: { reason: 'rejected' },
       });
       await _sendCustomerNotificationBestEffort(
         afterData,
         'Restaurant unavailable',
-        'The restaurant could not confirm your order. Your rider was released.'
+        'The restaurant could not confirm your order.'
       );
+    }
+    return null;
+  });
+
+// =============================
+// Handle driver rejection: wait then retrigger autoDispatcher
+// =============================
+exports.handleDriverRejection = functions.firestore
+  .document('restaurant_orders/{orderId}')
+  .onUpdate(async (change, context) => {
+    const orderId = context.params.orderId;
+    const beforeData = change.before.data() || {};
+    const afterData = change.after.data() || {};
+    const beforeStatus = String(beforeData.status || '');
+    const afterStatus = String(afterData.status || '');
+
+    if (beforeStatus === 'Driver Rejected' || afterStatus !== 'Driver Rejected') {
       return null;
     }
 
+    console.log(`[HandleDriverRejection] Driver rejected order ${orderId}`);
+
+    const rejectedDriverId = String(afterData.driverID || '');
+
+    // Release the rejected driver from the order
+    if (rejectedDriverId) {
+      await _releaseDriverFromOrder(rejectedDriverId, orderId);
+    }
+
+    await _logDispatchEvent({
+      type: 'driver_rejected_auto_retry',
+      orderId,
+      payload: { rejectedDriverId },
+    });
+
+    // Read configurable retry delay (default 20s)
+    let retryDelaySeconds = 20;
+    try {
+      const weightsSnap = await getDb()
+        .collection('config')
+        .doc('dispatch_weights')
+        .get();
+      if (weightsSnap.exists) {
+        const w = weightsSnap.data() || {};
+        if (w.retryDelaySeconds && w.retryDelaySeconds > 0) {
+          retryDelaySeconds = w.retryDelaySeconds;
+        }
+      }
+    } catch (e) {
+      console.warn('[HandleDriverRejection] Failed to load config, using default delay:', e.message);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, retryDelaySeconds * 1000));
+
+    // Re-read order to verify it's still in Driver Rejected status
+    const orderSnap = await change.after.ref.get();
+    if (!orderSnap.exists) return null;
+    const currentData = orderSnap.data() || {};
+    const currentStatus = String(currentData.status || '');
+
+    if (currentStatus !== 'Driver Rejected') {
+      console.log(`[HandleDriverRejection] Order ${orderId} status changed to '${currentStatus}' during delay, skipping retrigger`);
+      return null;
+    }
+
+    // Set status back to 'Order Accepted' with excluded driver, triggering autoDispatcher
+    await change.after.ref.update({
+      status: 'Order Accepted',
+      'dispatch.excludedDriverIds': admin.firestore.FieldValue.arrayUnion(rejectedDriverId),
+      'dispatch.retryCount': admin.firestore.FieldValue.increment(1),
+      'dispatch.lastRetriggerAt': admin.firestore.FieldValue.serverTimestamp(),
+      'dispatch.lock': false,
+      driverID: admin.firestore.FieldValue.delete(),
+      assignedDriverName: admin.firestore.FieldValue.delete(),
+    });
+
+    console.log(`[HandleDriverRejection] Retriggered dispatch for order ${orderId}, excluded driver ${rejectedDriverId}`);
     return null;
   });
 
@@ -1278,93 +1733,671 @@ exports.riderFirstDispatchTimeouts = functions.pubsub
   .onRun(async () => {
     const db = getDb();
     const now = _nowTimestamp();
+    const nowDate = new Date();
 
-    // 1) Rider accept timeouts (60s)
-    const riderTimeoutSnap = await db
+    // 0) One-time cleanup: reset any legacy 'Awaiting Rider' orders to 'Order Placed'
+    const awaitingRiderSnap = await db
       .collection('restaurant_orders')
-      .where('dispatch.flow', '==', RIDER_FIRST_FLOW)
-      .where('status', '==', 'Driver Assigned')
+      .where('status', '==', 'Awaiting Rider')
+      .limit(25)
+      .get();
+
+    for (const doc of awaitingRiderSnap.docs) {
+      const orderId = doc.id;
+      console.log(`[DispatchTimeouts] Resetting legacy Awaiting Rider order ${orderId} to Order Placed`);
+      await doc.ref.update({
+        status: 'Order Placed',
+        'dispatch.stage': 'legacy_reset',
+      });
+      await _logDispatchEvent({
+        type: 'legacy_awaiting_rider_reset',
+        orderId,
+        payload: { reason: 'restaurant_first_migration' },
+      });
+    }
+
+    // Read configurable auto-cancel threshold
+    let autoCancelMinutes = 15;
+    try {
+      const cfgSnap = await db.collection('config').doc('dispatch_weights').get();
+      if (cfgSnap.exists) {
+        const cfg = cfgSnap.data() || {};
+        if (cfg.restaurantAutoCancelMinutes > 0) {
+          autoCancelMinutes = cfg.restaurantAutoCancelMinutes;
+        }
+      }
+    } catch (_) {}
+
+    // 1) Restaurant reminder (10 min): orders in 'Order Placed' with no action
+    const tenMinAgo = admin.firestore.Timestamp.fromDate(
+      new Date(nowDate.getTime() - 10 * 60 * 1000)
+    );
+    const fifteenMinAgo = admin.firestore.Timestamp.fromDate(
+      new Date(nowDate.getTime() - autoCancelMinutes * 60 * 1000)
+    );
+
+    const staleOrderSnap = await db
+      .collection('restaurant_orders')
+      .where('status', '==', 'Order Placed')
+      .where('createdAt', '<=', tenMinAgo)
+      .limit(25)
+      .get();
+
+    for (const doc of staleOrderSnap.docs) {
+      const orderId = doc.id;
+      const data = doc.data() || {};
+      const createdAt = data.createdAt;
+      if (!createdAt) continue;
+
+      const createdDate = createdAt.toDate ? createdAt.toDate() : new Date(createdAt);
+      const ageMs = nowDate.getTime() - createdDate.getTime();
+      const ageMin = ageMs / (60 * 1000);
+
+      // Auto-cancel after configured threshold
+      if (ageMin >= autoCancelMinutes) {
+        console.log(`[DispatchTimeouts] Auto-cancelling stale order ${orderId} (${Math.round(ageMin)} min)`);
+        await doc.ref.update({
+          status: 'Order Cancelled',
+          cancelReason: 'restaurant_no_response',
+          cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+          'dispatch.stage': 'restaurant_no_response',
+        });
+        await _logDispatchEvent({
+          type: 'restaurant_no_response_cancel',
+          orderId,
+          payload: { ageMinutes: Math.round(ageMin) },
+        });
+        await _sendCustomerNotificationBestEffort(
+          data,
+          'Order Cancelled',
+          'The restaurant did not respond to your order. It has been cancelled.'
+        );
+        continue;
+      }
+
+      // 10-15 minutes: send reminder to restaurant (only once)
+      if (!data?.dispatch?.restaurantReminderSent) {
+        console.log(`[DispatchTimeouts] Sending restaurant reminder for order ${orderId} (${Math.round(ageMin)} min)`);
+        await _sendRestaurantNotificationBestEffort(data, orderId);
+        await doc.ref.update({
+          'dispatch.restaurantReminderSent': true,
+          'dispatch.restaurantReminderAt': admin.firestore.FieldValue.serverTimestamp(),
+        });
+        await _logDispatchEvent({
+          type: 'restaurant_reminder_sent',
+          orderId,
+          payload: { ageMinutes: Math.round(ageMin) },
+        });
+      }
+    }
+
+    // 2) Rider accept timeouts (Driver Pending > 60s)
+    const adminTimeoutSnap = await db
+      .collection('restaurant_orders')
+      .where('status', '==', 'Driver Pending')
       .where('dispatch.riderAcceptDeadline', '<=', now)
       .limit(25)
       .get();
 
-    for (const doc of riderTimeoutSnap.docs) {
+    for (const doc of adminTimeoutSnap.docs) {
       const orderId = doc.id;
       const data = doc.data() || {};
+
       const driverId = String(data.driverID || '');
-      const attempt = Number(data?.dispatch?.attempt || 1) + 1;
-
-      await _removeOrderRequestFromDriver(driverId, orderId);
-
-      if (attempt > MAX_DISPATCH_ATTEMPTS) {
-        await _cancelOrderWithReason({
-          orderRef: doc.ref,
-          orderId,
-          orderData: data,
-          reason: 'rider_timeout_max_attempts',
-        });
-        continue;
-      }
-
-      await _logDispatchEvent({
-        type: 'rider_offer_timeout',
-        orderId,
-        payload: { driverId, attempt: attempt - 1 },
-      });
-
-      await doc.ref.update({
-        status: 'Awaiting Rider',
-        'dispatch.stage': 'timeout_retrying',
-        'dispatch.attempt': attempt - 1,
-      });
-
-      const fresh = await doc.ref.get();
-      await _tryDispatchOrFail({
-        orderRef: doc.ref,
-        orderId,
-        orderData: fresh.data() || {},
-        attempt,
-      });
-    }
-
-    // 2) Restaurant confirm timeouts (5m)
-    const restaurantTimeoutSnap = await db
-      .collection('restaurant_orders')
-      .where('dispatch.flow', '==', RIDER_FIRST_FLOW)
-      .where('status', '==', 'Order Placed')
-      .where('dispatch.restaurantConfirmDeadline', '<=', now)
-      .limit(25)
-      .get();
-
-    for (const doc of restaurantTimeoutSnap.docs) {
-      const orderId = doc.id;
-      const data = doc.data() || {};
-      const driverId = String(data.driverID || '');
-
       await _releaseDriverFromOrder(driverId, orderId);
 
       await doc.ref.update({
-        status: 'Order Cancelled',
-        cancelReason: 'restaurant_timeout',
-        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
-        'dispatch.stage': 'restaurant_timeout',
+        status: 'Order Accepted',
+        'dispatch.stage': 'admin_timeout_retrigger',
+        'dispatch.lock': false,
+        'dispatch.excludedDriverIds': admin.firestore.FieldValue.arrayUnion(driverId),
+        'dispatch.retryCount': admin.firestore.FieldValue.increment(1),
+        'dispatch.lastRetriggerAt': admin.firestore.FieldValue.serverTimestamp(),
+        driverID: admin.firestore.FieldValue.delete(),
+        assignedDriverName: admin.firestore.FieldValue.delete(),
       });
 
       await _logDispatchEvent({
-        type: 'restaurant_timeout_or_reject',
+        type: 'admin_dispatch_timeout_retrigger',
         orderId,
-        payload: { reason: 'timeout' },
+        payload: { driverId, action: 'set_order_accepted_for_redispatch' },
+      });
+    }
+
+    // 4) Batch timeouts -- if any order in a batch timed out, release the whole batch
+    const batchTimeoutSnap = await db
+      .collection('order_batches')
+      .where('status', '==', 'assigned')
+      .limit(25)
+      .get();
+
+    for (const batchDoc of batchTimeoutSnap.docs) {
+      const batch = batchDoc.data() || {};
+      const orderIds = batch.orderIds || [];
+      const driverId = String(batch.assignedDriverId || '');
+
+      let anyTimedOut = false;
+      for (const oid of orderIds) {
+        const oSnap = await db.collection('restaurant_orders').doc(oid).get();
+        const oData = oSnap.exists ? oSnap.data() : {};
+        const deadline = oData?.dispatch?.riderAcceptDeadline;
+        if (
+          deadline &&
+          deadline.seconds <= now.seconds &&
+          oData.status === 'Driver Assigned'
+        ) {
+          anyTimedOut = true;
+          break;
+        }
+      }
+
+      if (!anyTimedOut) continue;
+
+      for (const oid of orderIds) {
+        await _releaseDriverFromOrder(driverId, oid);
+        await db.collection('restaurant_orders').doc(oid).update({
+          status: 'Order Accepted',
+          driverID: admin.firestore.FieldValue.delete(),
+          'dispatch.stage': 'batch_timeout',
+          'dispatch.lock': false,
+        });
+      }
+
+      await batchDoc.ref.update({
+        status: 'pending',
+        assignedDriverId: null,
+        assignedAt: null,
       });
 
-      await _sendCustomerNotificationBestEffort(
-        data,
-        'Restaurant did not confirm',
-        'The restaurant did not confirm in time. Your order was cancelled.'
-      );
+      await _logDispatchEvent({
+        type: 'batch_timeout',
+        orderId: orderIds[0] || '',
+        payload: { batchId: batchDoc.id, driverId, orderIds },
+      });
     }
 
     return null;
   });
+
+// =============================
+// Monitor stuck orders (safety net)
+// =============================
+exports.monitorStuckOrders = functions.pubsub
+  .schedule('every 2 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = new Date();
+    const sixtySecondsAgo = admin.firestore.Timestamp.fromDate(
+      new Date(now.getTime() - 60 * 1000)
+    );
+    const threeMinutesAgo = admin.firestore.Timestamp.fromDate(
+      new Date(now.getTime() - 3 * 60 * 1000)
+    );
+
+    // 1) Orders stuck in 'Driver Rejected' for >60 seconds
+    const rejectedSnap = await db
+      .collection('restaurant_orders')
+      .where('status', '==', 'Driver Rejected')
+      .where('statusChangedAt', '<=', sixtySecondsAgo)
+      .limit(15)
+      .get();
+
+    for (const doc of rejectedSnap.docs) {
+      const data = doc.data() || {};
+      const driverId = String(data.driverID || '');
+      console.log(`[MonitorStuckOrders] Unsticking rejected order ${doc.id}`);
+
+      if (driverId) {
+        await _releaseDriverFromOrder(driverId, doc.id);
+      }
+
+      await doc.ref.update({
+        status: 'Order Accepted',
+        'dispatch.stage': 'stuck_monitor_retrigger',
+        'dispatch.lock': false,
+        'dispatch.excludedDriverIds': driverId
+          ? admin.firestore.FieldValue.arrayUnion(driverId)
+          : admin.firestore.FieldValue.arrayUnion(),
+        'dispatch.retryCount': admin.firestore.FieldValue.increment(1),
+        driverID: admin.firestore.FieldValue.delete(),
+        assignedDriverName: admin.firestore.FieldValue.delete(),
+      });
+
+      await _logDispatchEvent({
+        type: 'stuck_order_retrigger',
+        orderId: doc.id,
+        payload: { source: 'driver_rejected_stuck', driverId },
+      });
+    }
+
+    // 2) Orders in 'Order Accepted' with dispatch attempts but no driver for >3 min
+    const unassignedSnap = await db
+      .collection('restaurant_orders')
+      .where('status', '==', 'Order Accepted')
+      .where('dispatch.lastRetriggerAt', '<=', threeMinutesAgo)
+      .limit(15)
+      .get();
+
+    for (const doc of unassignedSnap.docs) {
+      const data = doc.data() || {};
+      const attemptCount = data?.dispatch?.attemptCount || 0;
+      if (attemptCount < 1) continue;
+      if (data.driverID) continue;
+
+      console.log(`[MonitorStuckOrders] Re-triggering unassigned order ${doc.id} (${attemptCount} attempts)`);
+
+      await doc.ref.update({
+        'dispatch.stage': 'stuck_monitor_retry',
+        'dispatch.lastRetriggerAt': admin.firestore.FieldValue.serverTimestamp(),
+        'dispatch.retryCount': admin.firestore.FieldValue.increment(1),
+      });
+
+      await _logDispatchEvent({
+        type: 'stuck_order_retry',
+        orderId: doc.id,
+        payload: { source: 'unassigned_retry', attemptCount },
+      });
+    }
+
+    return null;
+  });
+
+// =============================
+// Dispatch health monitor (every 5 min)
+// =============================
+exports.monitorDispatchHealth = functions.pubsub
+  .schedule('every 5 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = new Date();
+    const thirtyMinAgo = admin.firestore.Timestamp.fromDate(
+      new Date(now.getTime() - 30 * 60 * 1000)
+    );
+    const fiveMinAgo = admin.firestore.Timestamp.fromDate(
+      new Date(now.getTime() - 5 * 60 * 1000)
+    );
+
+    try {
+      // 1) Calculate dispatch success rate over last 30 min
+      const eventsSnap = await db
+        .collection('dispatch_events')
+        .where('createdAt', '>=', thirtyMinAgo)
+        .limit(200)
+        .get();
+
+      let totalDispatches = 0;
+      let successfulDispatches = 0;
+      const rejectionsByOrder = {};
+
+      for (const doc of eventsSnap.docs) {
+        const d = doc.data() || {};
+        totalDispatches++;
+        if (d?.outcome?.wasAccepted === true) {
+          successfulDispatches++;
+        }
+        const oid = d.orderId || '';
+        if (oid) {
+          rejectionsByOrder[oid] = (rejectionsByOrder[oid] || 0) + 1;
+        }
+      }
+
+      const successRate = totalDispatches > 0
+        ? (successfulDispatches / totalDispatches) * 100
+        : 100;
+
+      // 2) Check for orders stuck in Driver Rejected >5 min
+      const stuckSnap = await db
+        .collection('restaurant_orders')
+        .where('status', '==', 'Driver Rejected')
+        .where('statusChangedAt', '<=', fiveMinAgo)
+        .limit(10)
+        .get();
+
+      const stuckCount = stuckSnap.size;
+
+      // 3) Check avg rejections per order
+      const rejectionCounts = Object.values(rejectionsByOrder);
+      const avgRejections = rejectionCounts.length > 0
+        ? rejectionCounts.reduce((a, b) => a + b, 0) / rejectionCounts.length
+        : 0;
+
+      const needsAlert =
+        successRate < 50 ||
+        stuckCount > 0 ||
+        avgRejections > 3;
+
+      if (needsAlert) {
+        console.log(
+          `[DispatchHealth] ALERT: successRate=${Math.round(successRate)}% ` +
+          `stuck=${stuckCount} avgRejections=${avgRejections.toFixed(1)}`
+        );
+
+        // Send FCM to all admin users
+        const adminsSnap = await db
+          .collection('users')
+          .where('role', '==', 'admin')
+          .get();
+
+        const tokens = [];
+        for (const doc of adminsSnap.docs) {
+          const t = doc.data()?.fcmToken;
+          if (t) tokens.push(t);
+        }
+
+        if (tokens.length > 0) {
+          const alerts = [];
+          if (successRate < 50) alerts.push(`Success rate: ${Math.round(successRate)}%`);
+          if (stuckCount > 0) alerts.push(`${stuckCount} stuck orders`);
+          if (avgRejections > 3) alerts.push(`Avg ${avgRejections.toFixed(1)} rejections/order`);
+
+          for (const token of tokens) {
+            try {
+              await getMessaging().send({
+                token,
+                notification: {
+                  title: 'Dispatch Health Alert',
+                  body: alerts.join(' | '),
+                },
+                data: {
+                  type: 'dispatch_health_alert',
+                  successRate: String(Math.round(successRate)),
+                  stuckOrders: String(stuckCount),
+                },
+              });
+            } catch (_) {}
+          }
+        }
+      }
+
+      // Log health snapshot
+      await db.collection('dispatch_health_snapshots').add({
+        successRate: Math.round(successRate * 10) / 10,
+        totalDispatches,
+        successfulDispatches,
+        stuckCount,
+        avgRejectionsPerOrder: Math.round(avgRejections * 10) / 10,
+        alertTriggered: needsAlert,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      console.error('[DispatchHealth] Error:', e);
+    }
+
+    return null;
+  });
+
+// =============================
+// Order batching cron (Phase 3)
+// =============================
+
+const BATCH_MAX_DELIVERY_SPREAD_METERS = 3000;
+
+exports.orderBatchingCron = functions.pubsub
+  .schedule('every 1 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+
+    const pendingSnap = await db
+      .collection('restaurant_orders')
+      .where('status', '==', 'Order Accepted')
+      .limit(50)
+      .get();
+
+    if (pendingSnap.empty) return null;
+
+    const weights = await _loadDispatchWeights();
+    const candidates = [];
+    for (const doc of pendingSnap.docs) {
+      const d = doc.data() || {};
+      if (d.driverID) continue;
+      if (d?.batch?.batchId) continue;
+      const rLoc = _extractRestaurantLocation(d);
+      const dLoc = _extractDeliveryLocation(d);
+      if (!rLoc.lat || !rLoc.lng) continue;
+      candidates.push({
+        id: doc.id,
+        ref: doc.ref,
+        data: d,
+        restaurantLocation: rLoc,
+        deliveryLocation: dLoc,
+      });
+    }
+
+    if (candidates.length < 2) return null;
+
+    const used = new Set();
+    const batches = [];
+
+    for (let i = 0; i < candidates.length; i++) {
+      if (used.has(i)) continue;
+      const anchor = candidates[i];
+      const group = [anchor];
+      used.add(i);
+
+      for (let j = i + 1; j < candidates.length; j++) {
+        if (used.has(j)) continue;
+        const maxBatchSize = weights.baseCapacity || MAX_ACTIVE_ORDERS_PER_RIDER;
+        if (group.length >= maxBatchSize) break;
+
+        const other = candidates[j];
+        const restaurantDist = _distanceMeters(
+          anchor.restaurantLocation,
+          other.restaurantLocation,
+        );
+        if (restaurantDist > STACK_RADIUS_METERS) continue;
+
+        const deliveryDist = _distanceMeters(
+          anchor.deliveryLocation,
+          other.deliveryLocation,
+        );
+        if (deliveryDist > BATCH_MAX_DELIVERY_SPREAD_METERS) continue;
+
+        group.push(other);
+        used.add(j);
+      }
+
+      if (group.length >= 2) {
+        batches.push(group);
+      }
+    }
+
+    if (batches.length === 0) return null;
+
+    for (const group of batches) {
+      try {
+        const orderIds = group.map((o) => o.id);
+        const vendorIds = [
+          ...new Set(group.map((o) => String(o.data.vendorID || ''))),
+        ];
+
+        let cLat = 0;
+        let cLng = 0;
+        for (const o of group) {
+          cLat += o.restaurantLocation.lat;
+          cLng += o.restaurantLocation.lng;
+        }
+        cLat /= group.length;
+        cLng /= group.length;
+
+        const stops = [];
+        let seq = 1;
+        for (const o of group) {
+          stops.push({
+            orderId: o.id,
+            lat: o.restaurantLocation.lat,
+            lng: o.restaurantLocation.lng,
+            type: 'pickup',
+            sequence: seq++,
+          });
+        }
+        for (const o of group) {
+          stops.push({
+            orderId: o.id,
+            lat: o.deliveryLocation.lat,
+            lng: o.deliveryLocation.lng,
+            type: 'delivery',
+            sequence: seq++,
+          });
+        }
+
+        let totalDist = 0;
+        for (let k = 1; k < stops.length; k++) {
+          totalDist += _distanceMeters(
+            { lat: stops[k - 1].lat, lng: stops[k - 1].lng },
+            { lat: stops[k].lat, lng: stops[k].lng },
+          );
+        }
+
+        const batchRef = await db.collection('order_batches').add({
+          orderIds,
+          status: 'pending',
+          restaurantCluster: { centerLat: cLat, centerLng: cLng, vendorIds },
+          deliveryRoute: {
+            stops,
+            totalDistanceKm: Math.round(totalDist) / 1000,
+          },
+          assignedDriverId: null,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          assignedAt: null,
+        });
+
+        const batchId = batchRef.id;
+
+        for (let idx = 0; idx < group.length; idx++) {
+          await group[idx].ref.update({
+            'batch.batchId': batchId,
+            'batch.sequence': idx + 1,
+            'batch.totalInBatch': group.length,
+          });
+        }
+
+        const { selected, candidates: driverCandidates, stackDecision } =
+          await _pickBestDriverForOrder({
+            orderId: group[0].id,
+            orderData: group[0].data,
+            excludeDriverIds: [],
+          });
+
+        if (selected) {
+          await _offerBatchToDriver({
+            batchId,
+            batchRef,
+            group,
+            driverId: selected.driverId,
+            driverData: selected.driverData,
+            candidates: driverCandidates,
+            stackDecision,
+          });
+        }
+
+        console.log(
+          `[Batching] Created batch ${batchId} with ${orderIds.length} orders` +
+          (selected ? `, assigned to ${selected.driverId}` : ', no driver available'),
+        );
+      } catch (e) {
+        console.error('[Batching] Error creating batch:', e);
+      }
+    }
+
+    return null;
+  });
+
+async function _offerBatchToDriver({
+  batchId,
+  batchRef,
+  group,
+  driverId,
+  driverData,
+  candidates,
+  stackDecision,
+}) {
+  const now = _nowTimestamp();
+  const deadline = _addSeconds(now, RIDER_ACCEPT_TIMEOUT_SECONDS);
+
+  for (let idx = 0; idx < group.length; idx++) {
+    await group[idx].ref.update({
+      status: 'Driver Assigned',
+      driverID: driverId,
+      assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+      'dispatch.riderAcceptDeadline': deadline,
+      'dispatch.lock': false,
+      'batch.batchId': batchId,
+      'batch.sequence': idx + 1,
+      'batch.totalInBatch': group.length,
+    });
+  }
+
+  await batchRef.update({
+    status: 'assigned',
+    assignedDriverId: driverId,
+    assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await getDb()
+    .collection('users')
+    .doc(driverId)
+    .set(
+      {
+        orderRequestData: admin.firestore.FieldValue.arrayUnion(
+          ...group.map((o) => o.id),
+        ),
+      },
+      { merge: true },
+    );
+
+  const fcmToken = driverData?.fcmToken;
+  if (fcmToken) {
+    try {
+      await getMessaging().send({
+        token: fcmToken,
+        notification: {
+          title: `Batch Order (${group.length} stops)`,
+          body: `You have been assigned ${group.length} orders for pickup and delivery.`,
+        },
+        data: {
+          type: 'batch_order_assignment',
+          batchId,
+          orderCount: String(group.length),
+        },
+      });
+    } catch (fcmErr) {
+      console.error(`[Batching] FCM error for ${driverId}:`, fcmErr);
+    }
+  }
+
+  const batchWeights = await _loadDispatchWeights();
+  await _logDispatchEvent({
+    type: 'batch_assigned',
+    orderId: group[0].id,
+    riderId: driverId,
+    batchId,
+    factors: {
+      orderCount: group.length,
+      riderCurrentOrders: 0,
+    },
+    alternativeRiders: (candidates || []).slice(0, 5).map((c) => ({
+      riderId: c.driverId,
+      score: c.compositeScore || 0,
+      distance: c.distance || 0,
+    })),
+    activeWeights: {
+      weightETA: batchWeights.weightETA,
+      weightWorkload: batchWeights.weightWorkload,
+      weightDirection: batchWeights.weightDirection,
+      weightAcceptanceProb: batchWeights.weightAcceptanceProb,
+      weightFairness: batchWeights.weightFairness,
+    },
+    payload: {
+      batchId,
+      orderIds: group.map((o) => o.id),
+      driverId,
+      orderCount: group.length,
+    },
+  });
+}
 
 /**
  * Calculate ETA based on distance between two locations
@@ -1396,32 +2429,116 @@ function toRad(degrees) {
 }
 
 /**
- * Get ML acceptance probability from Vertex AI
- * STUBBED FOR NOW - Returns random probability
- * 
- * TODO: Integrate with Vertex AI model to predict driver acceptance
- * @param {Object} driver - Driver data
+ * Calculate acceptance probability using historical assignment data.
+ * Replaces the previous stub with real weighted scoring.
+ * @param {Object} driver - Driver data (must have .id)
  * @param {Object} order - Order data
- * @param {number} eta - Calculated ETA
+ * @param {number} eta - Calculated ETA in minutes
  * @returns {Promise<number>} Acceptance probability (0-1)
  */
 async function getMLAcceptanceProbability(driver, order, eta) {
-  // STUB: Return a simulated probability
-  // In production, this would call Vertex AI with features like:
-  // - Driver's historical acceptance rate
-  // - Time of day
-  // - Distance/ETA
-  // - Driver's current location
-  // - Order value
-  // - Weather conditions
-  // etc.
-  
-  // Simulate higher probability for shorter distances
-  const baseProb = 0.7;
-  const etaPenalty = Math.min(eta / 60, 0.3); // Max 30% penalty for long ETA
-  const simulatedProb = baseProb - etaPenalty + (Math.random() * 0.2 - 0.1);
-  
-  return Math.max(0.1, Math.min(0.95, simulatedProb));
+  const cachedW = _dispatchWeightsCache || {};
+  let baseRate = cachedW.baseAcceptanceRate || 0.7;
+
+  try {
+    const logs = await getDb()
+      .collection('assignments_log')
+      .where('driverId', '==', driver.id)
+      .orderBy('createdAt', 'desc')
+      .limit(20)
+      .get();
+
+    if (!logs.empty) {
+      let accepted = 0;
+      let recentRejects = 0;
+      let countingStreak = true;
+
+      for (const doc of logs.docs) {
+        const s = String(doc.data().status || '');
+        if (s === 'accepted') {
+          accepted++;
+          countingStreak = false;
+        } else if (s === 'rejected' || s === 'timeout') {
+          if (countingStreak) recentRejects++;
+        } else {
+          countingStreak = false;
+        }
+      }
+
+      baseRate = accepted / logs.docs.length;
+      if (recentRejects >= 2) baseRate *= 0.7;
+    }
+  } catch (_) {
+    // Fall back to default base rate
+  }
+
+  const distancePenalty = Math.min(eta / 60, 0.3);
+  const activeOrders = _activeOrdersCount(driver);
+  const workloadPenalty = activeOrders * 0.15;
+
+  const hour = new Date().getHours();
+  const timeBonus = (hour >= 10 && hour <= 21) ? 0.05 : 0;
+
+  return Math.max(0.05, Math.min(0.95,
+    baseRate - distancePenalty - workloadPenalty + timeBonus
+  ));
+}
+
+/**
+ * Batch acceptance probability for multiple drivers.
+ * Uses chunked 'in' queries instead of N individual queries.
+ */
+async function getMLAcceptanceProbabilityBatch(driverIds) {
+  const cachedW = _dispatchWeightsCache || {};
+  const cfgBaseRate = cachedW.baseAcceptanceRate || 0.7;
+  const baseRates = {};
+  for (const id of driverIds) baseRates[id] = cfgBaseRate;
+
+  try {
+    for (let i = 0; i < driverIds.length; i += 30) {
+      const chunk = driverIds.slice(i, i + 30);
+      const logs = await getDb()
+        .collection('assignments_log')
+        .where('driverId', 'in', chunk)
+        .orderBy('createdAt', 'desc')
+        .limit(20 * chunk.length)
+        .get();
+
+      const grouped = {};
+      for (const doc of logs.docs) {
+        const d = doc.data();
+        const did = String(d.driverId || '');
+        if (!grouped[did]) grouped[did] = [];
+        if (grouped[did].length < 20) grouped[did].push(String(d.status || ''));
+      }
+
+      for (const [did, statuses] of Object.entries(grouped)) {
+        let accepted = 0, recentRejects = 0, countingStreak = true;
+        for (const s of statuses) {
+          if (s === 'accepted') { accepted++; countingStreak = false; }
+          else if (s === 'rejected' || s === 'timeout') { if (countingStreak) recentRejects++; }
+          else { countingStreak = false; }
+        }
+        let rate = accepted / statuses.length;
+        if (recentRejects >= 2) rate *= 0.7;
+        baseRates[did] = rate;
+      }
+    }
+  } catch (_) {}
+
+  return baseRates;
+}
+
+/**
+ * Batch fairness scores using pre-aggregated completedToday field.
+ */
+function calculateFairnessScoreBatch(drivers) {
+  const scores = {};
+  for (const d of drivers) {
+    const completed = d.completedToday || 0;
+    scores[d.id] = Math.min(completed * 5, 100);
+  }
+  return scores;
 }
 
 /**
@@ -1457,31 +2574,191 @@ async function calculateFairnessScore(driverId) {
   }
 }
 
+// --- Dispatch weights cache (60s TTL) ---
+let _dispatchWeightsCache = null;
+let _dispatchWeightsCacheTime = 0;
+const WEIGHTS_CACHE_TTL_MS = 60000;
+
+const DEFAULT_DISPATCH_WEIGHTS = {
+  weightETA: 0.35,
+  weightWorkload: 0.20,
+  weightDirection: 0.15,
+  weightAcceptanceProb: 0.20,
+  weightFairness: 0.10,
+  prepAlignmentPenaltyBase: 0.05,
+  prepAlignmentPenaltyPeak: 0.10,
+  peakHourStart: 11,
+  peakHourEnd: 14,
+  peakHourStart2: 17,
+  peakHourEnd2: 21,
+  maxActiveOrdersPerRider: 2,
+  riderTimeoutSeconds: 60,
+  dynamicCapacityEnabled: true,
+  baseCapacity: 2,
+  peakCapacityReduction: 1,
+  complexityThresholdItems: 5,
+  complexityThresholdHeavy: 8,
+  longDistanceThresholdKm: 5.0,
+  performanceBoostThreshold: 90.0,
+  performancePenaltyThreshold: 65.0,
+  weatherCondition: 'normal',
+};
+
+async function _loadDispatchWeights() {
+  const now = Date.now();
+  if (_dispatchWeightsCache && (now - _dispatchWeightsCacheTime) < WEIGHTS_CACHE_TTL_MS) {
+    return _dispatchWeightsCache;
+  }
+  try {
+    const doc = await getDb().collection('config').doc('dispatch_weights').get();
+    if (doc.exists) {
+      _dispatchWeightsCache = { ...DEFAULT_DISPATCH_WEIGHTS, ...doc.data() };
+    } else {
+      _dispatchWeightsCache = { ...DEFAULT_DISPATCH_WEIGHTS };
+    }
+  } catch (_) {
+    _dispatchWeightsCache = _dispatchWeightsCache || { ...DEFAULT_DISPATCH_WEIGHTS };
+  }
+  _dispatchWeightsCacheTime = now;
+  return _dispatchWeightsCache;
+}
+
+function _isPeakHour(w) {
+  const hour = new Date().getHours();
+  return (hour >= w.peakHourStart && hour < w.peakHourEnd) ||
+         (hour >= w.peakHourStart2 && hour < w.peakHourEnd2);
+}
+
+// --- Dynamic capacity helpers ---
+
+function _calculateDynamicCapacity(driverData, w) {
+  const multipleOrders = driverData?.multipleOrders === true;
+  if (!multipleOrders) return 1;
+  if (!w.dynamicCapacityEnabled) return w.maxActiveOrdersPerRider || 2;
+
+  let cap = w.baseCapacity || 2;
+
+  if (_isPeakHour(w)) cap -= (w.peakCapacityReduction || 1);
+
+  const perf = _asNumber(driverData?.driver_performance) || 0;
+  if (perf >= (w.performanceBoostThreshold || 90)) cap += 1;
+  else if (perf < (w.performancePenaltyThreshold || 65)) cap -= 1;
+
+  const weather = w.weatherCondition || 'normal';
+  if (weather === 'rain') cap -= 1;
+  else if (weather === 'storm') cap -= 2;
+
+  return Math.max(1, Math.min(4, cap));
+}
+
+function _orderComplexityWeight(orderData, w) {
+  const products = orderData?.products;
+  let itemCount = 1;
+  if (Array.isArray(products)) itemCount = products.length;
+  else if (orderData?.orderItemCount) itemCount = Number(orderData.orderItemCount) || 1;
+
+  const heavy = w.complexityThresholdHeavy || 8;
+  const complex = w.complexityThresholdItems || 5;
+  if (itemCount >= heavy) return 2.0;
+  if (itemCount >= complex) return 1.5;
+  return 1.0;
+}
+
+function _distanceWeight(distanceKm, w) {
+  const threshold = w.longDistanceThresholdKm || 5.0;
+  return distanceKm > threshold ? 1.5 : 1.0;
+}
+
+// --- Unified rider status computation ---
+
+function _computeRiderStatus(driverData, weights) {
+  const w = weights || _dispatchWeightsCache || DEFAULT_DISPATCH_WEIGHTS;
+
+  if (driverData.suspended === true ||
+      String(driverData.attendanceStatus || '').toLowerCase() === 'suspended') {
+    return { riderAvailability: 'suspended', riderDisplayStatus: '🔴 Suspended' };
+  }
+
+  const isCheckedOut = driverData.checkedOutToday === true ||
+    (driverData.todayCheckOutTime != null &&
+     String(driverData.todayCheckOutTime || '').trim() !== '');
+  if (isCheckedOut) {
+    return { riderAvailability: 'checked_out', riderDisplayStatus: '⚫ Checked Out' };
+  }
+
+  if (driverData.riderAvailability === 'on_break') {
+    return { riderAvailability: 'on_break', riderDisplayStatus: '⏸ On Break' };
+  }
+
+  if (driverData.checkedInToday !== true || driverData.isOnline !== true) {
+    return { riderAvailability: 'offline', riderDisplayStatus: '⚪ Offline' };
+  }
+
+  const activeOrders = _activeOrdersCount(driverData);
+  if (activeOrders > 0) {
+    const cap = _calculateDynamicCapacity(driverData, w);
+    if (activeOrders >= cap) {
+      return { riderAvailability: 'on_delivery', riderDisplayStatus: '🟡 On Delivery' };
+    }
+    return { riderAvailability: 'available', riderDisplayStatus: '🟡 On Delivery' };
+  }
+  return { riderAvailability: 'available', riderDisplayStatus: '🟢 Available' };
+}
+
 /**
- * Calculate composite score from multiple metrics
- * Lower score is better
- * @param {Object} metrics
- * @returns {number} Composite score
+ * Compute heading match using cosine similarity of movement vs target vectors.
+ * Returns 0.5 (neutral) when previous location is unavailable.
  */
-function calculateCompositeScore({ eta, mlAcceptanceProbability, fairnessScore }) {
-  // Normalize metrics to 0-100 scale
-  const normalizedETA = Math.min(eta / 60 * 100, 100); // Normalize to 0-100 (60 min = 100)
-  const normalizedML = (1 - mlAcceptanceProbability) * 100; // Invert so lower is better
-  const normalizedFairness = fairnessScore; // Already 0-100
-  
-  // Weighted sum (weights should total 1.0)
-  const weights = {
-    eta: 0.5,          // 50% weight on proximity/speed
-    ml: 0.3,           // 30% weight on acceptance probability
-    fairness: 0.2      // 20% weight on fairness
-  };
-  
-  const compositeScore = 
-    (normalizedETA * weights.eta) +
-    (normalizedML * weights.ml) +
-    (normalizedFairness * weights.fairness);
-  
-  return compositeScore;
+function _calculateDriverHeading(driverData, driverLocation, restaurantLocation) {
+  const prev = driverData?.previousLocation || driverData?.lastLocation;
+  if (!prev) return 0.5;
+
+  const prevLat = _asNumber(prev.latitude || prev.lat);
+  const prevLng = _asNumber(prev.longitude || prev.lng);
+  if (!prevLat && !prevLng) return 0.5;
+
+  const moveDx = driverLocation.lng - prevLng;
+  const moveDy = driverLocation.lat - prevLat;
+  const targetDx = restaurantLocation.lng - driverLocation.lng;
+  const targetDy = restaurantLocation.lat - driverLocation.lat;
+
+  const dot = moveDx * targetDx + moveDy * targetDy;
+  const magMove = Math.sqrt(moveDx * moveDx + moveDy * moveDy);
+  const magTarget = Math.sqrt(targetDx * targetDx + targetDy * targetDy);
+
+  if (magMove === 0 || magTarget === 0) return 0.5;
+
+  const cosine = Math.max(-1, Math.min(1, dot / (magMove * magTarget)));
+  return (cosine + 1) / 2;
+}
+
+/**
+ * Unified composite score (lower is better). Mirrors DispatchScoringService.
+ */
+function calculateCompositeScore({ eta, mlAcceptanceProbability, fairnessScore, headingMatch, currentOrders, restaurantPrepMinutes, effectiveCapacity }) {
+  const w = _dispatchWeightsCache || DEFAULT_DISPATCH_WEIGHTS;
+  const maxOrders = effectiveCapacity || w.maxActiveOrdersPerRider || 2;
+
+  const etaFactor = Math.min(eta / 30, 2.0);
+  const workloadFactor = (currentOrders || 0) / maxOrders;
+  const directionFactor = 1.0 - Math.max(0, Math.min(1, headingMatch || 0.5));
+  const acceptanceFactor = 1.0 - Math.max(0, Math.min(1, mlAcceptanceProbability));
+  const fairnessFactor = Math.min(fairnessScore / 100, 1.0);
+
+  let prepPenalty = 0;
+  const prepMin = restaurantPrepMinutes || 0;
+  if (prepMin > 0 && eta < prepMin) {
+    prepPenalty = Math.min((prepMin - eta) / 15, 1.0);
+  }
+  const isPeak = _isPeakHour(w);
+  const prepWeight = isPeak ? w.prepAlignmentPenaltyPeak : w.prepAlignmentPenaltyBase;
+
+  return (etaFactor * w.weightETA) +
+         (workloadFactor * w.weightWorkload) +
+         (directionFactor * w.weightDirection) +
+         (acceptanceFactor * w.weightAcceptanceProb) +
+         (fairnessFactor * w.weightFairness) +
+         (prepPenalty * prepWeight);
 }
 
 /**
@@ -2656,5 +3933,1047 @@ exports.awardReferralCreditsOnOrderCompletion = functions.firestore
     }
 
     return null;
+  });
+
+// ============================================================
+// Phase 4D: Enrich dispatch_events when an order is completed
+// ============================================================
+
+exports.orderCompletionEnrichment = functions.firestore
+  .document('restaurant_orders/{orderId}')
+  .onUpdate(async (change) => {
+    const beforeData = change.before.data() || {};
+    const afterData = change.after.data() || {};
+
+    // Track restaurant prep time: Order Accepted -> Order Shipped
+    if (
+      beforeData.status !== 'Order Shipped' &&
+      afterData.status === 'Order Shipped'
+    ) {
+      try {
+        const vendorId = afterData.vendorID || afterData.vendor?.id || '';
+        const acceptedAt = afterData.acceptedAt;
+        if (vendorId && acceptedAt) {
+          const toMs = (ts) => {
+            if (!ts) return null;
+            if (ts._seconds != null) return ts._seconds * 1000;
+            if (ts.seconds != null) return ts.seconds * 1000;
+            if (ts.toMillis) return ts.toMillis();
+            return null;
+          };
+          const acceptedMs = toMs(acceptedAt);
+          const shippedMs = Date.now();
+          if (acceptedMs) {
+            const actualPrepMinutes = Math.round(
+              (shippedMs - acceptedMs) / 60000
+            );
+            if (actualPrepMinutes > 0 && actualPrepMinutes < 180) {
+              const statsRef = getDb()
+                .collection('vendors')
+                .doc(vendorId)
+                .collection('restaurant_stats')
+                .doc('prep_times');
+              const statsSnap = await statsRef.get();
+              const stats = statsSnap.exists ? statsSnap.data() : {};
+              const recent = Array.isArray(stats.recentPrepTimes)
+                ? stats.recentPrepTimes
+                : [];
+              recent.push(actualPrepMinutes);
+              const trimmed = recent.slice(-50);
+              const avg =
+                trimmed.reduce((a, b) => a + b, 0) / trimmed.length;
+              await statsRef.set(
+                {
+                  averagePrepTimeMinutes: Math.round(avg * 10) / 10,
+                  totalOrdersTracked:
+                    admin.firestore.FieldValue.increment(1),
+                  lastUpdatedAt:
+                    admin.firestore.FieldValue.serverTimestamp(),
+                  recentPrepTimes: trimmed,
+                },
+                { merge: true }
+              );
+              console.log(
+                `[PrepTimeTracking] Vendor ${vendorId}: prep=${actualPrepMinutes}m avg=${Math.round(avg)}m`
+              );
+            }
+          }
+        }
+      } catch (prepErr) {
+        console.error('[PrepTimeTracking] Error:', prepErr);
+      }
+    }
+
+    if (beforeData.status === 'Order Completed') return null;
+    if (afterData.status !== 'Order Completed') return null;
+
+    const orderId = change.after.id;
+    const db = getDb();
+
+    try {
+      const assignedAt = afterData.assignedAt;
+      const pickedUpAt = afterData.pickedUpAt;
+      const deliveredAt = afterData.deliveredAt;
+
+      const toMs = (ts) => {
+        if (!ts) return null;
+        if (ts._seconds != null) return ts._seconds * 1000;
+        if (ts.seconds != null) return ts.seconds * 1000;
+        if (ts.toMillis) return ts.toMillis();
+        return null;
+      };
+
+      const assignedMs = toMs(assignedAt);
+      const pickedMs = toMs(pickedUpAt);
+      const deliveredMs = toMs(deliveredAt);
+
+      let pickupWaitMin = null;
+      if (assignedMs && pickedMs) {
+        pickupWaitMin = Math.round((pickedMs - assignedMs) / 60000);
+      }
+
+      let deliveryMin = null;
+      if (pickedMs && deliveredMs) {
+        deliveryMin = Math.round((deliveredMs - pickedMs) / 60000);
+      }
+
+      let totalMin = null;
+      if (assignedMs && deliveredMs) {
+        totalMin = Math.round((deliveredMs - assignedMs) / 60000);
+      }
+
+      const ON_TIME_THRESHOLD_MINUTES = 45;
+      const wasOnTime =
+        totalMin != null ? totalMin <= ON_TIME_THRESHOLD_MINUTES : null;
+
+      const driverEarnings = _asNumber(afterData.driverEarnings || 0);
+
+      let customerRating = null;
+      try {
+        const reviewSnap = await db
+          .collection('reviews')
+          .where('orderId', '==', orderId)
+          .limit(1)
+          .get();
+        if (!reviewSnap.empty) {
+          customerRating = _asNumber(
+            reviewSnap.docs[0].data().rating || 0,
+          );
+        }
+      } catch (_) {}
+
+      const eventsSnap = await db
+        .collection('dispatch_events')
+        .where('orderId', '==', orderId)
+        .limit(10)
+        .get();
+
+      if (eventsSnap.empty) return null;
+
+      const enrichData = {
+        'outcome.actualPickupWaitMinutes': pickupWaitMin,
+        'outcome.actualDeliveryMinutes': deliveryMin,
+        'outcome.wasOnTime': wasOnTime,
+        'outcome.customerRating': customerRating,
+        'outcome.riderEarnings': driverEarnings,
+        'outcome.completedAt':
+          admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      for (const doc of eventsSnap.docs) {
+        const eventData = doc.data() || {};
+        const predictedEta = eventData?.factors?.etaMinutes;
+        const routingSrc = eventData?.factors?.routingSource || 'haversine';
+        const etaAccuracy = {};
+        if (predictedEta != null && pickupWaitMin != null) {
+          etaAccuracy.predictedEtaMinutes = predictedEta;
+          etaAccuracy.actualTravelMinutes = pickupWaitMin;
+          etaAccuracy.errorMinutes = Math.abs(predictedEta - pickupWaitMin);
+          etaAccuracy.wasRoutingUsed = routingSrc === 'google_distance_matrix';
+        }
+        const update = { ...enrichData };
+        if (Object.keys(etaAccuracy).length > 0) {
+          update.etaAccuracy = etaAccuracy;
+        }
+        await doc.ref.update(update);
+      }
+
+      console.log(
+        `[CompletionEnrichment] Enriched ${eventsSnap.size} events for ${orderId}` +
+          ` (pickup=${pickupWaitMin}m delivery=${deliveryMin}m onTime=${wasOnTime})`,
+      );
+
+      const riderId = String(afterData.driverID || '');
+      if (riderId) {
+        await getDb().collection('users').doc(riderId).update({
+          completedToday: admin.firestore.FieldValue.increment(1),
+        });
+        await _recalculateRiderPerformance(riderId);
+      }
+    } catch (e) {
+      console.error(
+        `[CompletionEnrichment] Error for order ${orderId}:`,
+        e,
+      );
+    }
+
+    return null;
+  });
+
+// ============================================================
+// Phase 4E/F: Daily dispatch analytics + weight auto-tuning
+// ============================================================
+
+const WEIGHT_KEYS = [
+  'weightETA',
+  'weightWorkload',
+  'weightDirection',
+  'weightAcceptanceProb',
+  'weightFairness',
+];
+const FACTOR_TO_WEIGHT = {
+  etaMinutes: 'weightETA',
+  riderCurrentOrders: 'weightWorkload',
+  riderHeadingMatch: 'weightDirection',
+  predictedAcceptanceProb: 'weightAcceptanceProb',
+};
+const MAX_DAILY_ADJUSTMENT = 0.10;
+const MIN_SAMPLE_SIZE = 10;
+
+exports.dailyDispatchAnalytics = functions.pubsub
+  .schedule('0 3 * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = new Date();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+    const endOfYesterday = new Date(yesterday);
+    endOfYesterday.setHours(23, 59, 59, 999);
+
+    // Reset completedToday for all drivers at start of day
+    try {
+      const driversSnap = await db
+        .collection('users')
+        .where('role', '==', 'driver')
+        .get();
+      const batch = db.batch();
+      let batchCount = 0;
+      for (const doc of driversSnap.docs) {
+        batch.update(doc.ref, { completedToday: 0 });
+        batchCount++;
+        if (batchCount >= 500) break;
+      }
+      if (batchCount > 0) await batch.commit();
+      console.log(`[DailyAnalytics] Reset completedToday for ${batchCount} drivers`);
+    } catch (resetErr) {
+      console.error('[DailyAnalytics] Failed to reset completedToday:', resetErr);
+    }
+
+    const dateStr =
+      yesterday.toISOString().slice(0, 10);
+
+    try {
+      const eventsSnap = await db
+        .collection('dispatch_events')
+        .where(
+          'createdAt',
+          '>=',
+          admin.firestore.Timestamp.fromDate(yesterday),
+        )
+        .where(
+          'createdAt',
+          '<=',
+          admin.firestore.Timestamp.fromDate(endOfYesterday),
+        )
+        .limit(500)
+        .get();
+
+      if (eventsSnap.empty) {
+        console.log('[DailyAnalytics] No events for', dateStr);
+        return null;
+      }
+
+      const events = eventsSnap.docs.map((d) => ({
+        id: d.id,
+        ref: d.ref,
+        ...d.data(),
+      }));
+
+      // --- Aggregate stats ---
+      let totalDispatches = events.length;
+      let accepted = 0;
+      let totalResponseTime = 0;
+      let responseCount = 0;
+      let totalDeliveryTime = 0;
+      let deliveryCount = 0;
+      let onTimeCount = 0;
+      let onTimeTotal = 0;
+      let batchCount = 0;
+
+      for (const e of events) {
+        if (e.batchId) batchCount++;
+        const out = e.outcome || {};
+        if (out.wasAccepted === true) accepted++;
+        if (typeof out.responseTimeSeconds === 'number') {
+          totalResponseTime += out.responseTimeSeconds;
+          responseCount++;
+        }
+        if (typeof out.actualDeliveryMinutes === 'number') {
+          totalDeliveryTime += out.actualDeliveryMinutes;
+          deliveryCount++;
+        }
+        if (out.wasOnTime != null) {
+          onTimeTotal++;
+          if (out.wasOnTime === true) onTimeCount++;
+        }
+      }
+
+      // --- Bayesian weight adjustment ---
+      const currentWeights = await _loadDispatchWeights();
+      const weightsBefore = {};
+      for (const k of WEIGHT_KEYS) {
+        weightsBefore[k] = currentWeights[k] || 0;
+      }
+
+      const eventsWithOutcome = events.filter(
+        (e) => e.outcome && e.outcome.wasAccepted != null,
+      );
+      const sampleSize = eventsWithOutcome.length;
+
+      let weightsAfter = { ...weightsBefore };
+      let adjusted = false;
+
+      if (sampleSize >= MIN_SAMPLE_SIZE) {
+        const successful = eventsWithOutcome.filter(
+          (e) =>
+            e.outcome.wasAccepted === true &&
+            e.outcome.wasOnTime !== false,
+        );
+        const unsuccessful = eventsWithOutcome.filter(
+          (e) =>
+            e.outcome.wasAccepted === false ||
+            e.outcome.wasOnTime === false,
+        );
+
+        if (successful.length > 0 && unsuccessful.length > 0) {
+          const avgFactor = (arr, key) => {
+            let sum = 0;
+            let cnt = 0;
+            for (const e of arr) {
+              const v = e.factors?.[key];
+              if (typeof v === 'number') {
+                sum += v;
+                cnt++;
+              }
+            }
+            return cnt > 0 ? sum / cnt : null;
+          };
+
+          for (const [factorKey, weightKey] of Object.entries(
+            FACTOR_TO_WEIGHT,
+          )) {
+            const avgSuccess = avgFactor(successful, factorKey);
+            const avgFail = avgFactor(unsuccessful, factorKey);
+            if (avgSuccess == null || avgFail == null) continue;
+            if (avgFail === 0 && avgSuccess === 0) continue;
+
+            const diff = avgFail - avgSuccess;
+            const magnitude =
+              Math.abs(diff) /
+              Math.max(Math.abs(avgSuccess), Math.abs(avgFail), 1);
+
+            let adjustment = 0;
+            if (diff > 0) {
+              adjustment = Math.min(magnitude * 0.5, MAX_DAILY_ADJUSTMENT);
+            } else if (diff < 0) {
+              adjustment = -Math.min(
+                magnitude * 0.5,
+                MAX_DAILY_ADJUSTMENT,
+              );
+            }
+
+            weightsAfter[weightKey] = Math.max(
+              0.01,
+              weightsBefore[weightKey] * (1 + adjustment),
+            );
+          }
+
+          // Re-normalize so weights sum to 1.0
+          let sum = 0;
+          for (const k of WEIGHT_KEYS) sum += weightsAfter[k];
+          if (sum > 0) {
+            for (const k of WEIGHT_KEYS) {
+              weightsAfter[k] = Math.round(
+                (weightsAfter[k] / sum) * 10000,
+              ) / 10000;
+            }
+          }
+
+          adjusted = true;
+        }
+      }
+
+      // --- 4F: Retrospective alternativeRiders analysis ---
+      for (const e of eventsWithOutcome) {
+        const out = e.outcome || {};
+        const wasUnsuccessful =
+          out.wasAccepted === false || out.wasOnTime === false;
+        if (!wasUnsuccessful) continue;
+        if (!Array.isArray(e.alternativeRiders)) continue;
+        if (e.alternativeRiders.length === 0) continue;
+
+        const selectedScore = e.totalScore;
+        if (selectedScore == null) continue;
+
+        const updates = {};
+        let needsUpdate = false;
+        for (let i = 0; i < e.alternativeRiders.length; i++) {
+          const alt = e.alternativeRiders[i];
+          if (
+            typeof alt.score === 'number' &&
+            alt.score < selectedScore
+          ) {
+            updates[`alternativeRiders.${i}.wouldHaveBeenBetter`] =
+              true;
+            needsUpdate = true;
+          }
+        }
+        if (needsUpdate) {
+          try {
+            await e.ref.update(updates);
+          } catch (_) {}
+        }
+      }
+
+      // --- Save updated weights ---
+      if (adjusted) {
+        await db
+          .collection('config')
+          .doc('dispatch_weights')
+          .set(
+            {
+              ...weightsAfter,
+              updatedAt:
+                admin.firestore.FieldValue.serverTimestamp(),
+              updatedBy: 'daily_analytics',
+            },
+            { merge: true },
+          );
+
+        // Clear cache so next dispatch uses new weights
+        _dispatchWeightsCache = null;
+        _dispatchWeightsCacheTime = 0;
+      }
+
+      // --- Log weight history ---
+      await db.collection('config_weights_history').add({
+        date: dateStr,
+        timestamp:
+          admin.firestore.FieldValue.serverTimestamp(),
+        weightsBefore,
+        weightsAfter,
+        adjusted,
+        sampleSize,
+        successfulCount: eventsWithOutcome.filter(
+          (e) =>
+            e.outcome?.wasAccepted === true &&
+            e.outcome?.wasOnTime !== false,
+        ).length,
+        unsuccessfulCount: eventsWithOutcome.filter(
+          (e) =>
+            e.outcome?.wasAccepted === false ||
+            e.outcome?.wasOnTime === false,
+        ).length,
+      });
+
+      // --- Write daily aggregates ---
+      await db
+        .collection('dispatch_analytics_daily')
+        .doc(dateStr)
+        .set({
+          date: dateStr,
+          totalDispatches,
+          successRate:
+            totalDispatches > 0
+              ? Math.round((accepted / totalDispatches) * 10000) /
+                100
+              : 0,
+          avgResponseTime:
+            responseCount > 0
+              ? Math.round(totalResponseTime / responseCount)
+              : 0,
+          avgDeliveryTime:
+            deliveryCount > 0
+              ? Math.round(
+                  (totalDeliveryTime / deliveryCount) * 10,
+                ) / 10
+              : 0,
+          onTimeRate:
+            onTimeTotal > 0
+              ? Math.round(
+                  (onTimeCount / onTimeTotal) * 10000,
+                ) / 100
+              : 0,
+          batchRate:
+            totalDispatches > 0
+              ? Math.round(
+                  (batchCount / totalDispatches) * 10000,
+                ) / 100
+              : 0,
+          weightsBefore,
+          weightsAfter,
+          sampleSize,
+          avgCustomerWaitMinutes:
+            deliveryCount > 0
+              ? Math.round(
+                  (totalDeliveryTime / deliveryCount + (totalResponseTime / Math.max(responseCount, 1)) / 60) * 10,
+                ) / 10
+              : 0,
+          avgRejectionsPerOrder:
+            totalDispatches > 0
+              ? Math.round(
+                  ((totalDispatches - accepted) / Math.max(accepted, 1)) * 10,
+                ) / 10
+              : 0,
+          avgDispatchLatencySeconds:
+            responseCount > 0
+              ? Math.round(totalResponseTime / responseCount)
+              : 0,
+          createdAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+      console.log(
+        `[DailyAnalytics] ${dateStr}: ${totalDispatches} dispatches, ` +
+          `${Math.round((accepted / Math.max(totalDispatches, 1)) * 100)}% accepted, ` +
+          `adjusted=${adjusted} (sample=${sampleSize})`,
+      );
+    } catch (e) {
+      console.error('[DailyAnalytics] Error:', e);
+    }
+
+    // --- Rider status consistency check ---
+    try {
+      await _ensureWeightsLoaded();
+      const allDriversSnap = await db.collection('users')
+        .where('role', '==', 'driver')
+        .get();
+      let fixed = 0;
+      let staleLocationWarnings = 0;
+      const auditBatch = db.batch();
+      const thirtyMinAgo = Date.now() - 30 * 60 * 1000;
+
+      for (const doc of allDriversSnap.docs) {
+        const data = doc.data() || {};
+        const expected = _computeRiderStatus(data);
+        const currentAvail = data.riderAvailability || '';
+
+        if (currentAvail !== expected.riderAvailability) {
+          auditBatch.set(
+            db.collection('status_audit').doc(),
+            {
+              driverId: doc.id,
+              before: {
+                riderAvailability: currentAvail,
+                riderDisplayStatus: data.riderDisplayStatus || '',
+              },
+              after: expected,
+              fixedAt: admin.firestore.FieldValue.serverTimestamp(),
+              reason: 'daily_consistency_check',
+            },
+          );
+          auditBatch.update(doc.ref, {
+            riderAvailability: expected.riderAvailability,
+            riderDisplayStatus: expected.riderDisplayStatus,
+          });
+          fixed++;
+        }
+
+        if (expected.riderAvailability === 'available') {
+          const locTs = data.locationUpdatedAt;
+          if (locTs && locTs.toMillis && locTs.toMillis() < thirtyMinAgo) {
+            staleLocationWarnings++;
+          }
+        }
+      }
+
+      if (fixed > 0) await auditBatch.commit();
+      console.log(
+        `[DailyAnalytics] Status consistency: checked=${allDriversSnap.size} `
+        + `fixed=${fixed} staleLocationWarnings=${staleLocationWarnings}`,
+      );
+    } catch (statusErr) {
+      console.warn('[DailyAnalytics] Status consistency check error:', statusErr.message || statusErr);
+    }
+
+    // Cleanup expired routes_cache entries
+    try {
+      const expiredSnap = await db
+        .collection('routes_cache')
+        .where('expiresAt', '<', admin.firestore.Timestamp.now())
+        .limit(500)
+        .get();
+      if (!expiredSnap.empty) {
+        const deleteBatch = db.batch();
+        expiredSnap.docs.forEach((d) => deleteBatch.delete(d.ref));
+        await deleteBatch.commit();
+        console.log(`[DailyAnalytics] Cleaned ${expiredSnap.size} expired route cache entries`);
+      }
+    } catch (cacheErr) {
+      console.warn('[DailyAnalytics] Route cache cleanup error:', cacheErr.message || cacheErr);
+    }
+
+    return null;
+  });
+
+// --- One-time migration: backfill riderAvailability + riderDisplayStatus ---
+exports.migrateRiderStatus = functions.https.onRequest(async (req, res) => {
+  try {
+    const db = getDb();
+    await _ensureWeightsLoaded();
+    const driversSnap = await db.collection('users')
+      .where('role', '==', 'driver')
+      .get();
+
+    let updated = 0;
+    const batchSize = 400;
+    let writeBatch = db.batch();
+    let inBatch = 0;
+
+    for (const doc of driversSnap.docs) {
+      const data = doc.data() || {};
+      const { riderAvailability, riderDisplayStatus } = _computeRiderStatus(data);
+      writeBatch.update(doc.ref, { riderAvailability, riderDisplayStatus });
+      updated++;
+      inBatch++;
+
+      if (inBatch >= batchSize) {
+        await writeBatch.commit();
+        console.log(`[Migration] Committed ${updated} riders so far`);
+        writeBatch = db.batch();
+        inBatch = 0;
+      }
+    }
+
+    if (inBatch > 0) await writeBatch.commit();
+    res.json({ success: true, driversUpdated: updated });
+  } catch (err) {
+    console.error('[Migration] Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// Rider Performance Recalculation (server-side weighted formula)
+// ============================================================
+
+async function _loadPerformanceTierConfig() {
+  const db = getDb();
+  try {
+    const doc = await db.collection('config').doc('performance_tiers').get();
+    if (doc.exists) {
+      const d = doc.data() || {};
+      return {
+        goldThreshold: _asNumber(d.gold_threshold) || 90,
+        silverThreshold: _asNumber(d.silver_threshold) || 75,
+        bronzeThreshold: _asNumber(d.bronze_threshold) || 60,
+      };
+    }
+  } catch (_) {}
+  return { goldThreshold: 90, silverThreshold: 75, bronzeThreshold: 60 };
+}
+
+function _getTierName(score, config) {
+  if (score >= config.goldThreshold) return 'Gold';
+  if (score >= config.silverThreshold) return 'Silver';
+  if (score >= config.bronzeThreshold) return 'Bronze';
+  return 'Needs Improvement';
+}
+
+async function _recalculateRiderPerformance(riderId) {
+  const db = getDb();
+
+  // 1) Acceptance rate from last 50 assignments_log entries
+  let acceptanceRate = 70.0;
+  try {
+    const logsSnap = await db
+      .collection('assignments_log')
+      .where('driverId', '==', riderId)
+      .orderBy('timestamp', 'desc')
+      .limit(50)
+      .get();
+    if (!logsSnap.empty) {
+      let accepted = 0;
+      let total = 0;
+      for (const doc of logsSnap.docs) {
+        const s = doc.data().status;
+        if (s === 'accepted' || s === 'rejected' || s === 'timeout') {
+          total++;
+          if (s === 'accepted') accepted++;
+        }
+      }
+      if (total > 0) {
+        acceptanceRate = (accepted / total) * 100;
+      }
+    }
+  } catch (e) {
+    console.error(`[PerfRecalc] assignments_log error for ${riderId}:`, e);
+  }
+
+  // 2) Average customer rating from last 50 reviews
+  let averageRating = 0;
+  let hasRatings = false;
+  try {
+    const reviewsSnap = await db
+      .collection('reviews')
+      .where('driverId', '==', riderId)
+      .orderBy('createdAt', 'desc')
+      .limit(50)
+      .get();
+    if (!reviewsSnap.empty) {
+      let sum = 0;
+      let count = 0;
+      for (const doc of reviewsSnap.docs) {
+        const r = _asNumber(doc.data().rating);
+        if (r > 0) {
+          sum += r;
+          count++;
+        }
+      }
+      if (count > 0) {
+        averageRating = sum / count;
+        hasRatings = true;
+      }
+    }
+  } catch (e) {
+    console.error(`[PerfRecalc] reviews error for ${riderId}:`, e);
+  }
+
+  // 3) Attendance score (existing driver_performance as attendance input)
+  let attendanceScore = 75.0;
+  try {
+    const userDoc = await db.collection('users').doc(riderId).get();
+    if (userDoc.exists) {
+      const ud = userDoc.data() || {};
+      attendanceScore = _asNumber(ud.attendance_score);
+      if (attendanceScore <= 0) {
+        attendanceScore = _asNumber(ud.driver_performance) || 75.0;
+      }
+    }
+  } catch (e) {
+    console.error(`[PerfRecalc] user read error for ${riderId}:`, e);
+  }
+
+  // 4) Weighted formula: 40% acceptance + 30% rating + 30% attendance
+  //    Rating normalized to 0-100 (rating / 5 * 100)
+  const normalizedRating = hasRatings ? (averageRating / 5) * 100 : 75.0;
+  const driverPerformance = Math.min(
+    100,
+    Math.max(
+      50,
+      0.4 * acceptanceRate +
+        0.3 * normalizedRating +
+        0.3 * attendanceScore,
+    ),
+  );
+
+  // 5) Determine tier
+  const tierConfig = await _loadPerformanceTierConfig();
+  const performanceTier = _getTierName(driverPerformance, tierConfig);
+
+  // 6) Write back to user document
+  await db
+    .collection('users')
+    .doc(riderId)
+    .update({
+      driver_performance: Math.round(driverPerformance * 10) / 10,
+      acceptance_rate: Math.round(acceptanceRate * 10) / 10,
+      average_rating: Math.round(averageRating * 100) / 100,
+      attendance_score: Math.round(attendanceScore * 10) / 10,
+      performance_tier: performanceTier,
+      performance_breakdown: {
+        acceptanceRate: Math.round(acceptanceRate * 10) / 10,
+        averageRating: Math.round(averageRating * 100) / 100,
+        attendanceScore: Math.round(attendanceScore * 10) / 10,
+        lastCalculated:
+          admin.firestore.FieldValue.serverTimestamp(),
+      },
+    });
+
+  console.log(
+    `[PerfRecalc] ${riderId}: acceptance=${acceptanceRate.toFixed(1)}%` +
+      ` rating=${averageRating.toFixed(2)} attendance=${attendanceScore.toFixed(1)}` +
+      ` => ${driverPerformance.toFixed(1)}% (${performanceTier})`,
+  );
+}
+
+// Trigger: recalculate when a customer review is created
+exports.onReviewCreated = functions.firestore
+  .document('reviews/{reviewId}')
+  .onCreate(async (snap) => {
+    const data = snap.data() || {};
+    const riderId = String(data.driverId || '');
+    if (!riderId) return null;
+    try {
+      await _recalculateRiderPerformance(riderId);
+    } catch (e) {
+      console.error('[onReviewCreated] Error:', e);
+    }
+    return null;
+  });
+
+// Trigger: recalculate when an attendance record is written
+exports.onAttendanceRecorded = functions.firestore
+  .document('users/{riderId}/attendance_history/{date}')
+  .onCreate(async (snap, context) => {
+    const riderId = context.params.riderId;
+    if (!riderId) return null;
+    try {
+      await _recalculateRiderPerformance(riderId);
+    } catch (e) {
+      console.error('[onAttendanceRecorded] Error:', e);
+    }
+    return null;
+  });
+
+// ============================================================
+// Weekly Performance Normalization (regression toward baseline)
+// ============================================================
+
+exports.weeklyPerformanceNormalization = functions.pubsub
+  .schedule('0 4 * * 0')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const REGRESSION_RATE = 0.1;
+    const BASELINE = 85.0;
+
+    try {
+      const ridersSnap = await db
+        .collection('users')
+        .where('role', '==', 'driver')
+        .get();
+
+      if (ridersSnap.empty) {
+        console.log('[WeeklyNorm] No riders found');
+        return null;
+      }
+
+      const tierConfig = await _loadPerformanceTierConfig();
+      let updated = 0;
+      const batchSize = 400;
+      let batch = db.batch();
+      let inBatch = 0;
+
+      for (const doc of ridersSnap.docs) {
+        const data = doc.data() || {};
+        const current =
+          _asNumber(data.driver_performance) || 75;
+
+        const normalized =
+          current + (BASELINE - current) * REGRESSION_RATE;
+        const clamped = Math.min(100, Math.max(50, normalized));
+        const rounded = Math.round(clamped * 10) / 10;
+
+        if (Math.abs(rounded - current) >= 0.1) {
+          batch.update(doc.ref, {
+            driver_performance: rounded,
+            performance_tier: _getTierName(rounded, tierConfig),
+          });
+          updated++;
+          inBatch++;
+
+          if (inBatch >= batchSize) {
+            await batch.commit();
+            batch = db.batch();
+            inBatch = 0;
+          }
+        }
+      }
+
+      if (inBatch > 0) await batch.commit();
+
+      console.log(
+        `[WeeklyNorm] Normalized ${updated} riders toward ${BASELINE}`,
+      );
+    } catch (e) {
+      console.error('[WeeklyNorm] Error:', e);
+    }
+
+    return null;
+  });
+
+// ============================================================
+// One-time Migration: seed performance fields for all riders
+// ============================================================
+
+exports.migratePerformanceFields = functions
+  .runWith({ timeoutSeconds: 540, memory: '256MB' })
+  .https.onRequest(async (req, res) => {
+    const db = getDb();
+    try {
+      const ridersSnap = await db
+        .collection('users')
+        .where('role', '==', 'driver')
+        .get();
+
+      if (ridersSnap.empty) {
+        return res.json({ success: true, migrated: 0 });
+      }
+
+      const tierConfig = await _loadPerformanceTierConfig();
+      let migrated = 0;
+
+      for (const doc of ridersSnap.docs) {
+        const data = doc.data() || {};
+        const riderId = doc.id;
+        const currentPerf =
+          _asNumber(data.driver_performance) || 75;
+
+        let acceptanceRate = 70;
+        try {
+          const logsSnap = await db
+            .collection('assignments_log')
+            .where('driverId', '==', riderId)
+            .orderBy('timestamp', 'desc')
+            .limit(50)
+            .get();
+          if (!logsSnap.empty) {
+            let accepted = 0;
+            let total = 0;
+            for (const ld of logsSnap.docs) {
+              const s = ld.data().status;
+              if (
+                s === 'accepted' ||
+                s === 'rejected' ||
+                s === 'timeout'
+              ) {
+                total++;
+                if (s === 'accepted') accepted++;
+              }
+            }
+            if (total > 0) {
+              acceptanceRate = (accepted / total) * 100;
+            }
+          }
+        } catch (_) {}
+
+        let averageRating = 0;
+        let hasRatings = false;
+        try {
+          const reviewsSnap = await db
+            .collection('reviews')
+            .where('driverId', '==', riderId)
+            .orderBy('createdAt', 'desc')
+            .limit(50)
+            .get();
+          if (!reviewsSnap.empty) {
+            let sum = 0;
+            let count = 0;
+            for (const rd of reviewsSnap.docs) {
+              const r = _asNumber(rd.data().rating);
+              if (r > 0) {
+                sum += r;
+                count++;
+              }
+            }
+            if (count > 0) {
+              averageRating = sum / count;
+              hasRatings = true;
+            }
+          }
+        } catch (_) {}
+
+        const attendanceScore = currentPerf;
+        const normalizedRating = hasRatings
+          ? (averageRating / 5) * 100
+          : 75;
+        const newPerf = Math.min(
+          100,
+          Math.max(
+            50,
+            0.4 * acceptanceRate +
+              0.3 * normalizedRating +
+              0.3 * attendanceScore,
+          ),
+        );
+        const rounded = Math.round(newPerf * 10) / 10;
+
+        await doc.ref.update({
+          driver_performance: rounded,
+          acceptance_rate:
+            Math.round(acceptanceRate * 10) / 10,
+          average_rating:
+            Math.round(averageRating * 100) / 100,
+          attendance_score:
+            Math.round(attendanceScore * 10) / 10,
+          performance_tier:
+            _getTierName(rounded, tierConfig),
+          performance_breakdown: {
+            acceptanceRate:
+              Math.round(acceptanceRate * 10) / 10,
+            averageRating:
+              Math.round(averageRating * 100) / 100,
+            attendanceScore:
+              Math.round(attendanceScore * 10) / 10,
+            lastCalculated:
+              admin.firestore.FieldValue.serverTimestamp(),
+          },
+        });
+
+        migrated++;
+      }
+
+      const tierDoc = await db
+        .collection('config')
+        .doc('performance_tiers')
+        .get();
+      if (!tierDoc.exists) {
+        await db
+          .collection('config')
+          .doc('performance_tiers')
+          .set({
+            gold_threshold: 90,
+            silver_threshold: 75,
+            bronze_threshold: 60,
+            createdAt:
+              admin.firestore.FieldValue.serverTimestamp(),
+          });
+      }
+
+      const settingsDoc = await db
+        .collection('settings')
+        .doc('driver_performance')
+        .get();
+      if (settingsDoc.exists) {
+        const sd = settingsDoc.data() || {};
+        const updates = {};
+        if (sd.Platinum != null && sd.Bronze == null) {
+          updates.Bronze = sd.Platinum;
+        }
+        if (sd.incentive_platinum != null &&
+            sd.incentive_bronze == null) {
+          updates.incentive_bronze = sd.incentive_platinum;
+        }
+        if (sd.silver != null && sd.Silver == null) {
+          updates.Silver = sd.silver;
+        }
+        if (Object.keys(updates).length > 0) {
+          updates.migratedAt =
+            admin.firestore.FieldValue.serverTimestamp();
+          await settingsDoc.ref.update(updates);
+        }
+      }
+
+      console.log(
+        `[Migration] Migrated ${migrated} riders`,
+      );
+      res.json({ success: true, migrated });
+    } catch (err) {
+      console.error('[Migration] Error:', err);
+      res.status(500).json({ error: err.message });
+    }
   });
 

@@ -9,6 +9,7 @@ import 'package:foodie_driver/main.dart';
 import 'package:foodie_driver/ui/group_chat/GroupChatScreen.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
+import 'package:foodie_driver/services/performance_tier_helper.dart';
 import 'package:foodie_driver/userPrefrence.dart';
 import 'package:intl/intl.dart';
 import 'package:foodie_driver/ui/chat_screen/admin_driver_inbox_screen.dart';
@@ -25,6 +26,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:foodie_driver/services/order_service.dart';
 
 class OrdersBlankScreen extends StatefulWidget {
   const OrdersBlankScreen({Key? key}) : super(key: key);
@@ -349,6 +351,7 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       }
 
       await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
+      await OrderService.updateRiderStatus();
       UserPreference.setLastCheckInDate(date: todayString);
 
       if (mounted) {
@@ -1013,19 +1016,11 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                       ? '${perfValue.toStringAsFixed(0)}%'
                       : 'N/A';
 
-                  // Map performance to tier label:
-                  // < 75  -> Silver
-                  // < 85  -> Platinum
-                  // >= 85 -> Gold
                   String tierLabel = '';
                   if (perfValue != null) {
-                    if (perfValue < 75) {
-                      tierLabel = 'Silver';
-                    } else if (perfValue < 85) {
-                      tierLabel = 'Platinum';
-                    } else {
-                      tierLabel = 'Gold';
-                    }
+                    tierLabel = PerformanceTierHelper.getTier(
+                      perfValue,
+                    ).name;
                   }
 
                   final tierSuffix =
@@ -1039,6 +1034,14 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                     ),
                   );
                 },
+              ),
+              const SizedBox(width: 12),
+              Text(
+                MyAppState.currentUser?.riderDisplayStatus ?? '⚪ Offline',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(width: 12),
               StreamBuilder<QuerySnapshot>(
@@ -1254,13 +1257,11 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                       final rawCheckedOut =
                           (MyAppState.currentUser as dynamic)?.checkedOutToday;
                       final rawOnline = MyAppState.currentUser?.isOnline;
-                      // Only show offline card when we have explicit evidence
-                      // user cannot receive; null (unloaded) = show list/loading
-                      final cannotReceiveOrders =
-                          (rawCheckedIn == false) ||
-                              (rawCheckedOut == true) ||
-                              (rawOnline == false);
-                      final canReceiveOrders = !cannotReceiveOrders;
+                      final canReceiveOrders =
+                          MyAppState.currentUser?.riderAvailability ==
+                              'available' ||
+                          MyAppState.currentUser?.riderAvailability ==
+                              'on_delivery';
                       final isCheckedInToday = rawCheckedIn == true;
                       final isCheckedOutToday = rawCheckedOut == true;
                       final branch = remittanceService.isBlockedByRemittance

@@ -820,3 +820,79 @@ exports.processDriverLocationLifecycle = functions
       return null;
     }
   });
+
+/**
+ * HTTPS Callable: Check zone capacity for a rider before check-in.
+ * Accepts { zoneId: string }
+ * Returns { allowed, currentCount, maxRiders, utilizationPercentage }
+ */
+exports.checkZoneCapacity = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const zoneId = data.zoneId;
+    if (!zoneId || typeof zoneId !== 'string') {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'zoneId is required and must be a string',
+      );
+    }
+
+    const db = admin.firestore();
+    const zoneDoc = await db
+      .collection('service_areas')
+      .doc(zoneId)
+      .get();
+
+    if (!zoneDoc.exists) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        `Zone ${zoneId} not found`,
+      );
+    }
+
+    const zoneData = zoneDoc.data();
+    const maxRiders = zoneData.maxRiders;
+    const assignedDriverIds = zoneData.assignedDriverIds || [];
+
+    if (
+      maxRiders === null ||
+      maxRiders === undefined ||
+      assignedDriverIds.length === 0
+    ) {
+      return {
+        allowed: true,
+        currentCount: 0,
+        maxRiders: maxRiders || null,
+        utilizationPercentage: 0,
+      };
+    }
+
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const driversSnap = await db
+      .collection('users')
+      .where('role', '==', 'driver')
+      .get();
+
+    let activeCount = 0;
+    for (const dDoc of driversSnap.docs) {
+      if (!assignedDriverIds.includes(dDoc.id)) continue;
+      const d = dDoc.data();
+      if (d.checkedOutToday === true) continue;
+      const locTs = d.locationUpdatedAt;
+      if (locTs && locTs.toDate() > fiveMinAgo) {
+        activeCount++;
+      }
+    }
+
+    const utilizationPercentage =
+      maxRiders > 0
+        ? Math.min((activeCount / maxRiders) * 100, 100)
+        : 0;
+
+    return {
+      allowed: activeCount < maxRiders,
+      currentCount: activeCount,
+      maxRiders: maxRiders,
+      utilizationPercentage: utilizationPercentage,
+    };
+  });

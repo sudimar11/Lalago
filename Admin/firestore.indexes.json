@@ -19,6 +19,48 @@
       ]
     },
     {
+      "collectionGroup": "restaurant_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "dispatch.riderAcceptDeadline", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "dispatch_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "riderId", "order": "ASCENDING"},
+        {"fieldPath": "timestamp", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "dispatch_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "orderId", "order": "ASCENDING"},
+        {"fieldPath": "riderId", "order": "ASCENDING"},
+        {"fieldPath": "timestamp", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "assignments_log",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "driverId", "order": "ASCENDING"},
+        {"fieldPath": "createdAt", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "assignments_log",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "driverId", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "createdAt", "order": "DESCENDING"}
+      ]
+    },
+    {
       "collectionGroup": "users",
       "queryScope": "COLLECTION",
       "fields": [
@@ -33,6 +75,67 @@
       "fields": [
         {"fieldPath": "role", "order": "ASCENDING"},
         {"fieldPath": "firstName", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "restaurant_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "driverID", "order": "ASCENDING"},
+        {"fieldPath": "createdAt", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "order_batches",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "createdAt", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "dispatch_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "createdAt", "order": "ASCENDING"},
+        {"fieldPath": "outcome.wasAccepted", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "dispatch_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "createdAt", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "config_weights_history",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "timestamp", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "dispatch_analytics_daily",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "date", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "routes_cache",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "expiresAt", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "role", "order": "ASCENDING"},
+        {"fieldPath": "riderAvailability", "order": "ASCENDING"}
       ]
     }
   ],

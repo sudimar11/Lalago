@@ -7,7 +7,7 @@ import 'package:brgy/services/order_acceptance_service.dart';
 import 'package:brgy/services/order_rejection_service.dart';
 import 'package:brgy/services/manual_dispatch_service.dart';
 import 'package:brgy/services/driver_change_service.dart';
-import 'package:brgy/services/auto_redispatch_service.dart';
+
 import 'package:brgy/services/driver_assignment_service.dart';
 import 'package:brgy/services/delivery_zone_service.dart';
 import 'package:brgy/services/driver_response_tracking_service.dart';
@@ -93,30 +93,16 @@ class _RecentOrdersList extends StatefulWidget {
 
 class _RecentOrdersListState extends State<_RecentOrdersList> {
   final Set<String> _dispatching = {};
-  final Set<String> _sendingSMS = {}; // Track orders currently sending SMS
-  final Map<String, StreamSubscription<QuerySnapshot>> _driverListeners = {};
+  final Set<String> _sendingSMS = {};
   final Map<String, StreamSubscription<DocumentSnapshot>>
       _orderStatusListeners = {};
-  final Set<String> _trackedOrders =
-      {}; // Track which orders we've already logged
+  final Set<String> _trackedOrders = {};
 
-  // Order acceptance service
   final OrderAcceptanceService _orderAcceptanceService =
       OrderAcceptanceService();
-
-  // Order rejection service
   final OrderRejectionService _orderRejectionService = OrderRejectionService();
-
-  // Manual dispatch service
   final ManualDispatchService _manualDispatchService = ManualDispatchService();
-
-  // Driver change service
   final DriverChangeService _driverChangeService = DriverChangeService();
-
-  // Auto re-dispatch service
-  final AutoRedispatchService _autoRedispatchService = AutoRedispatchService();
-
-  // Driver assignment service
   final DriverAssignmentService _driverAssignmentService =
       DriverAssignmentService();
 
@@ -180,17 +166,10 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
 
   @override
   void dispose() {
-    // Cancel all active listeners when widget is disposed
-    for (var listener in _driverListeners.values) {
-      listener.cancel();
-    }
-    _driverListeners.clear();
-
     for (var listener in _orderStatusListeners.values) {
       listener.cancel();
     }
     _orderStatusListeners.clear();
-
     super.dispose();
   }
 
@@ -277,12 +256,56 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
           _refreshDriverCacheIfNeeded();
         });
 
-        return ListView.separated(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(12),
-          itemCount: filteredDocs.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, i) {
+        // Compute health KPIs from the visible orders
+        final stalledCount = filteredDocs.where((d) {
+          final s = _statusToText(d.data()['status']);
+          return s == 'Driver Rejected';
+        }).length;
+        final availableRiders = _cachedDrivers?.length ?? 0;
+        final activeOrderCount = filteredDocs.length;
+
+        return Column(
+          children: [
+            // Dispatch Health Strip
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: SizedBox(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    _HealthChip(
+                      icon: Icons.people_outline,
+                      label: '$availableRiders riders',
+                      color: availableRiders > 0
+                          ? Colors.green
+                          : Colors.red,
+                    ),
+                    const SizedBox(width: 8),
+                    _HealthChip(
+                      icon: Icons.shopping_bag_outlined,
+                      label: '$activeOrderCount orders',
+                      color: Colors.blue,
+                    ),
+                    const SizedBox(width: 8),
+                    if (stalledCount > 0)
+                      _HealthChip(
+                        icon: Icons.warning_amber_rounded,
+                        label: '$stalledCount stalled',
+                        color: Colors.red,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            Expanded(
+              child: ListView.separated(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(12),
+                itemCount: filteredDocs.length,
+                separatorBuilder: (_, __) =>
+                    const SizedBox(height: 8),
+                itemBuilder: (context, i) {
             final data = filteredDocs[i].data();
             final id = filteredDocs[i].id;
 
@@ -327,39 +350,11 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
             final isOrderTooOld = createdAt != null &&
                 DateTime.now().difference(createdAt.toDate()).inHours > 24;
 
-            // AI Auto-dispatch ONLY when status is "Order Accepted" or "Driver Rejected"
-            // Never assign riders if status is not one of these two specific statuses
-            // Guard: Skip dispatch for completed or in transit orders
-            if (!isDispatching &&
-                !isOrderTooOld &&
-                !isOrderCompleted &&
-                !isInTransit) {
-              // Auto-dispatch if driver rejected (NOT if order/restaurant rejected)
-              // ONLY if there was a driver who rejected (driverId exists)
-              // Additional guard: verify order is not in terminal/active delivery state
-              if (isDriverRejected &&
-                  !isOrderRejected &&
-                  driverId.isNotEmpty &&
-                  !isOrderCompleted &&
-                  !isInTransit) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _autoDispatchAfterRejection(context, id, data);
-                });
-              }
-              // Auto-dispatch if order accepted (but not if rejected)
-              // ONLY if no driver is assigned yet (prevents re-dispatching)
-              // Additional guard: verify order is not in terminal/active delivery state
-              else if (isOrderAccepted &&
-                  !isOrderRejected &&
-                  driverId.isEmpty &&
-                  !isOrderCompleted &&
-                  !isInTransit) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _manualDispatch(context, id, data);
-                });
-              }
-              // For any other status (including "Order Placed"), do NOT auto-dispatch
-            }
+            // Dispatch is handled server-side by Cloud Functions:
+            // - autoDispatcher: triggers on status -> 'Order Accepted'
+            // - handleDriverRejection: triggers on status -> 'Driver Rejected'
+            // - riderFirstDispatchTimeouts: handles rider accept timeouts
+            // Admin UI only offers manual "Dispatch Now" button as fallback.
 
             // Show driver name for orders with drivers assigned (not "Order Accepted" or "Order Placed" or "Order Rejected")
             final shouldShowDriverName = !isOrderAccepted &&
@@ -376,7 +371,7 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                 i < _recommendationOrderLimit &&
                 _cachedDrivers != null &&
                 hasValidVendor) {
-              recommended = _driverAssignmentService.getRecommendedDriverFromList(
+              recommended = _driverAssignmentService.getRecommendedDriverFromListSync(
                 _cachedDrivers!,
                 location['latitude']!,
                 location['longitude']!,
@@ -395,10 +390,38 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                   'lng=${location['longitude']}');
             }
 
+            final dispatch =
+                data['dispatch'] as Map<String, dynamic>? ?? {};
+            final retryCount =
+                (dispatch['retryCount'] as num?)?.toInt() ?? 0;
+            final attemptCount =
+                (dispatch['attemptCount'] as num?)?.toInt() ?? 0;
+
+            Color borderColor = Colors.grey.shade300;
+            if (isDriverRejected && retryCount > 3) {
+              borderColor = Colors.red;
+            } else if (isDriverRejected) {
+              borderColor = Colors.orange;
+            } else if (isInTransit ||
+                status == 'Driver Accepted') {
+              borderColor = Colors.green;
+            } else if (isDriverPending) {
+              borderColor = Colors.amber;
+            } else if (isOrderAccepted && attemptCount > 0) {
+              borderColor = Colors.blue;
+            }
+
             return Card(
               clipBehavior: Clip.antiAlias,
               elevation: 3,
               margin: const EdgeInsets.symmetric(vertical: 4),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(
+                  color: borderColor,
+                  width: 2,
+                ),
+              ),
               child: Column(
                 children: [
                   // Order header with status and actions
@@ -545,7 +568,8 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                                   icon: Icons.person_pin,
                                   label:
                                       'Recommended: ${recommended['driverName']} · '
-                                      '${(recommended['distance'] as double).toStringAsFixed(1)} km from restaurant',
+                                      '${(recommended['distance'] as double).toStringAsFixed(1)} km '
+                                      '${recommended['riderDisplayStatus'] ?? ''}',
                                   color: Colors.teal,
                                 )
                               else if (_cachedDrivers != null &&
@@ -662,8 +686,8 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                         ],
                       ),
                     ),
-                  // Manual Dispatch Button - Only show for "Order Accepted" status
-                  if (isOrderAccepted)
+                  // Dispatch Now Button - Show for "Order Accepted" or "Driver Rejected"
+                  if (isOrderAccepted || isDriverRejected)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: SizedBox(
@@ -685,7 +709,7 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                               : const Icon(Icons.bolt),
                           label: Text(isDispatching
                               ? 'Dispatching...'
-                              : 'Manual Dispatch (AI)'),
+                              : 'Dispatch Now'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.orange,
                             foregroundColor: Colors.white,
@@ -796,10 +820,44 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                         ],
                       ),
                     ),
+                  // Rejection history panel for Driver Rejected
+                  if (isDriverRejected)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        16, 0, 16, 12,
+                      ),
+                      child: _RejectionHistoryPanel(
+                        orderId: id,
+                      ),
+                    ),
+                  // Dispatch timeline for orders with attempts
+                  if (attemptCount > 0 && !isOrderRejected)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        16, 0, 16, 12,
+                      ),
+                      child: _DispatchTimelinePanel(
+                        orderId: id,
+                      ),
+                    ),
+                  // Batch order visualizer
+                  if (data['batch'] != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        16, 0, 16, 12,
+                      ),
+                      child: _BatchOrderPanel(
+                        batchData: data['batch']
+                            as Map<String, dynamic>,
+                      ),
+                    ),
                 ],
               ),
             );
           },
+              ),
+            ),
+          ],
         );
       },
     );
@@ -1060,7 +1118,8 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
         final drivers = await _driverAssignmentService
             .fetchActiveDriversInZone(zoneDriverIds);
         final recommended =
-            _driverAssignmentService.getRecommendedDriverFromList(
+            await _driverAssignmentService
+                .getRecommendedDriverFromList(
           drivers,
           vendorLat,
           vendorLng,
@@ -1170,88 +1229,6 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
     }
   }
 
-  Future<void> _autoDispatchAfterRejection(
-      BuildContext context, String orderId, Map<String, dynamic> data) async {
-    // Check if already dispatching to avoid duplicate attempts
-    if (_dispatching.contains(orderId)) {
-      return;
-    }
-
-    // Check if order is already completed or in transit
-    final statusRaw = data['status'];
-    final status = _statusToText(statusRaw);
-    if (status == 'Order Completed' || status == 'In Transit') {
-      print(
-          '[Auto Re-Dispatch] Order $orderId is already $status. Skipping dispatch.');
-      return;
-    }
-
-    setState(() => _dispatching.add(orderId));
-
-    try {
-      // Try to dispatch after rejection
-      final result = await _autoRedispatchService.dispatchAfterRejection(
-        orderId: orderId,
-        orderData: data,
-        findAndAssignDriver: _findAndAssignDriver,
-      );
-
-      if (result['success']) {
-        // Successfully assigned to a new driver
-        _autoRedispatchService.showSuccessMessage(
-          context,
-          result['driverName'] as String,
-          result['distance'] as double,
-        );
-      } else if (result['needsRetry'] == true) {
-        // No active drivers - show retry message and wait
-        _autoRedispatchService.showRetryMessage(context);
-
-        final retryResult =
-            await _autoRedispatchService.retryDispatchAfterRejection(
-          orderId: orderId,
-          vendorLat: result['vendorLat'] as double,
-          vendorLng: result['vendorLng'] as double,
-          rejectedDriverId: result['rejectedDriverId'] as String?,
-          deliveryLat: result['deliveryLat'] as double?,
-          deliveryLng: result['deliveryLng'] as double?,
-          deliveryLocality: result['deliveryLocality'] as String?,
-          findAndAssignDriver: _findAndAssignDriver,
-        );
-
-        if (retryResult['success']) {
-          // Successfully assigned after retry
-          _autoRedispatchService.showRetrySuccessMessage(
-            context,
-            retryResult['driverName'] as String,
-            retryResult['distance'] as double,
-          );
-        } else if (retryResult['needsListener'] == true) {
-          // Still no drivers - set up listener
-          _autoRedispatchService.showWaitingForDriversMessage(context);
-
-          _setupDriverOnlineListener(
-            context: context,
-            orderId: orderId,
-            vendorLat: retryResult['vendorLat'] as double,
-            vendorLng: retryResult['vendorLng'] as double,
-            excludeDriverId: retryResult['rejectedDriverId'] as String?,
-            deliveryLat: retryResult['deliveryLat'] as double?,
-            deliveryLng: retryResult['deliveryLng'] as double?,
-            deliveryLocality: retryResult['deliveryLocality'] as String?,
-          );
-        }
-      }
-    } catch (e, stackTrace) {
-      print('[Auto Re-Dispatch] Error: $e\n$stackTrace');
-      _autoRedispatchService.showErrorMessage(context, e.toString());
-    } finally {
-      if (mounted) {
-        setState(() => _dispatching.remove(orderId));
-      }
-    }
-  }
-
   Future<Map<String, dynamic>> _findAndAssignDriver({
     required String orderId,
     required double vendorLat,
@@ -1301,6 +1278,23 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
       dLoc ??= addr['locality'] as String?;
     }
 
+    double? prepMin;
+    if (orderData != null) {
+      final raw = orderData['estimatedTimeToPrepare'] ??
+          orderData['preparationTime'];
+      if (raw != null) {
+        if (raw is num) {
+          prepMin = raw.toDouble();
+        } else {
+          final m = RegExp(r'(\d+)')
+              .firstMatch(raw.toString());
+          if (m != null) {
+            prepMin = double.tryParse(m.group(1)!);
+          }
+        }
+      }
+    }
+
     return await _driverAssignmentService.findAndAssignDriver(
       orderId: orderId,
       vendorLat: vendorLat,
@@ -1309,41 +1303,9 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
       deliveryLat: dLat,
       deliveryLng: dLng,
       deliveryLocality: dLoc,
+      restaurantPrepMinutes: prepMin,
       setupDriverResponseListener: _setupDriverResponseListener,
     );
-  }
-
-  void _setupDriverOnlineListener({
-    required BuildContext context,
-    required String orderId,
-    required double vendorLat,
-    required double vendorLng,
-    String? excludeDriverId,
-    double? deliveryLat,
-    double? deliveryLng,
-    String? deliveryLocality,
-  }) {
-    _driverListeners[orderId]?.cancel();
-
-    final listener = _autoRedispatchService.setupDriverOnlineListener(
-      context: context,
-      orderId: orderId,
-      vendorLat: vendorLat,
-      vendorLng: vendorLng,
-      excludeDriverId: excludeDriverId,
-      deliveryLat: deliveryLat,
-      deliveryLng: deliveryLng,
-      deliveryLocality: deliveryLocality,
-      findAndAssignDriver: _findAndAssignDriver,
-      onListenerCancel: (orderId) {
-        // Cancel and remove the listener when assignment succeeds
-        _driverListeners[orderId]?.cancel();
-        _driverListeners.remove(orderId);
-      },
-    );
-
-    // Store the listener so we can cancel it later
-    _driverListeners[orderId] = listener;
   }
 
   void _setupDriverResponseListener({
@@ -1396,6 +1358,325 @@ class _InfoChip extends StatelessWidget {
       visualDensity: VisualDensity.compact,
       backgroundColor: color.withOpacity(0.1),
       side: BorderSide(color: color.withOpacity(0.3)),
+    );
+  }
+}
+
+// =================== HEALTH CHIP ===================
+
+class _HealthChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _HealthChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 10,
+        vertical: 4,
+      ),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =================== REJECTION HISTORY PANEL ===================
+
+class _RejectionHistoryPanel extends StatelessWidget {
+  final String orderId;
+
+  const _RejectionHistoryPanel({required this.orderId});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<QuerySnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('assignments_log')
+          .where('orderId', isEqualTo: orderId)
+          .orderBy('createdAt', descending: true)
+          .limit(10)
+          .get(),
+      builder: (context, snap) {
+        if (!snap.hasData || snap.data!.docs.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        final logs = snap.data!.docs;
+        return Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Dispatch History (${logs.length} attempts)',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange.shade900,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...logs.map((doc) {
+                final d = doc.data() as Map<String, dynamic>;
+                final status =
+                    d['status']?.toString() ?? 'unknown';
+                final ts = d['createdAt'] as Timestamp?;
+                final time = ts != null
+                    ? '${ts.toDate().hour}:${ts.toDate().minute.toString().padLeft(2, '0')}'
+                    : '--';
+                final dist = (d['distance'] as num?)
+                        ?.toStringAsFixed(1) ??
+                    '--';
+                final responseTime =
+                    (d['responseTimeSeconds'] as num?)
+                            ?.toInt()
+                            .toString() ??
+                        '--';
+                final icon = status == 'accepted'
+                    ? Icons.check_circle
+                    : status == 'timeout'
+                        ? Icons.timer_off
+                        : Icons.cancel;
+                final color = status == 'accepted'
+                    ? Colors.green
+                    : Colors.red;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    children: [
+                      Icon(icon, size: 14, color: color),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$time — $status',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: color,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${dist}km • ${responseTime}s',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// =================== DISPATCH TIMELINE PANEL ===================
+
+class _DispatchTimelinePanel extends StatelessWidget {
+  final String orderId;
+
+  const _DispatchTimelinePanel({required this.orderId});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<QuerySnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('dispatch_events')
+          .where('orderId', isEqualTo: orderId)
+          .orderBy('createdAt', descending: false)
+          .limit(20)
+          .get(),
+      builder: (context, snap) {
+        if (!snap.hasData || snap.data!.docs.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        final events = snap.data!.docs;
+        return Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Dispatch Timeline',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade900,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...events.map((doc) {
+                final d = doc.data() as Map<String, dynamic>;
+                final type =
+                    d['type']?.toString() ?? 'unknown';
+                final ts = d['createdAt'] as Timestamp?;
+                final time = ts != null
+                    ? '${ts.toDate().hour}:${ts.toDate().minute.toString().padLeft(2, '0')}:${ts.toDate().second.toString().padLeft(2, '0')}'
+                    : '--';
+                final riderId =
+                    d['riderId']?.toString() ?? '';
+                final score = (d['totalScore'] as num?)
+                    ?.toStringAsFixed(3);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        margin: const EdgeInsets.only(top: 4),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.blue.shade400,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              type.replaceAll('_', ' '),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              '$time${riderId.isNotEmpty ? ' • Rider: ${riderId.substring(0, riderId.length > 6 ? 6 : riderId.length)}...' : ''}${score != null ? ' • Score: $score' : ''}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// =================== BATCH ORDER PANEL ===================
+
+class _BatchOrderPanel extends StatelessWidget {
+  final Map<String, dynamic> batchData;
+
+  const _BatchOrderPanel({required this.batchData});
+
+  @override
+  Widget build(BuildContext context) {
+    final batchId = batchData['batchId']?.toString() ?? '';
+    if (batchId.isEmpty) return const SizedBox.shrink();
+
+    return FutureBuilder<DocumentSnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('order_batches')
+          .doc(batchId)
+          .get(),
+      builder: (context, snap) {
+        if (!snap.hasData || !snap.data!.exists) {
+          return const SizedBox.shrink();
+        }
+        final batch =
+            snap.data!.data() as Map<String, dynamic>? ?? {};
+        final orderIds =
+            (batch['orderIds'] as List?)?.cast<String>() ?? [];
+        final totalDistance =
+            (batch['totalDistanceKm'] as num?)
+                ?.toStringAsFixed(1) ??
+            '--';
+
+        return Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.purple.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Colors.purple.shade200,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.layers,
+                    size: 16,
+                    color: Colors.purple.shade700,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Batch: ${orderIds.length} orders • ${totalDistance}km',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.purple.shade900,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              ...orderIds.map((oid) => Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(
+                      '• #${oid.substring(0, oid.length > 8 ? 8 : oid.length)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.purple.shade700,
+                      ),
+                    ),
+                  )),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -2273,7 +2554,7 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                 _cachedDrivers != null &&
                 hasValidVendor) {
               recommended =
-                  _driverAssignmentService.getRecommendedDriverFromList(
+                  _driverAssignmentService.getRecommendedDriverFromListSync(
                 _cachedDrivers!,
                 location['latitude']!,
                 location['longitude']!,
@@ -2435,7 +2716,8 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                                   icon: Icons.person_pin,
                                   label:
                                       'Recommended: ${recommended['driverName']} · '
-                                      '${(recommended['distance'] as double).toStringAsFixed(1)} km from restaurant',
+                                      '${(recommended['distance'] as double).toStringAsFixed(1)} km '
+                                      '${recommended['riderDisplayStatus'] ?? ''}',
                                   color: Colors.teal,
                                 )
                               else if (_cachedDrivers != null &&

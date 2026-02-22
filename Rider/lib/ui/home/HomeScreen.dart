@@ -18,6 +18,7 @@ import 'package:foodie_driver/services/order_location_service.dart';
 import 'package:foodie_driver/services/order_chat_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/utils/dialog_utils.dart';
 import 'package:foodie_driver/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_driver/ui/home/pick_order.dart';
@@ -1529,6 +1530,7 @@ class HomeScreenState extends State<HomeScreen> {
 
     _driverModel!.inProgressOrderID!.remove(currentOrder!.id);
     await FireStoreUtils.updateCurrentUser(_driverModel!);
+    await OrderService.updateRiderStatus();
     hideProgress();
     _markers.clear();
     polyLines.clear();

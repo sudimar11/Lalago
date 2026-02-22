@@ -16,6 +16,9 @@ import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/notification_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:foodie_driver/services/order_service.dart';
+import 'package:foodie_driver/services/user_listener_service.dart';
+import 'package:foodie_driver/services/health_telemetry_service.dart';
 import 'package:foodie_driver/ui/profile/ProfileScreen.dart';
 //import 'package:foodie_driver/ui/wallet/sample.dart';
 //import 'package:foodie_driver/ui/wallet/wallet.dart';
@@ -94,11 +97,15 @@ class _ContainerScreen extends State<ContainerScreen> {
         _detectMissingAbsences();
       });
       _checkAttendanceStatus();
-      // Start remittance enforcement listener
+      // Start shared user document listener, health telemetry, then
+      // remittance enforcement
       final userId = MyAppState.currentUser?.userID;
       if (userId != null && userId.isNotEmpty) {
+        UserListenerService.instance.start(userId);
+        HealthTelemetryService.instance.start(userId);
         final remittanceService =
-            Provider.of<RemittanceEnforcementService>(context, listen: false);
+            Provider.of<RemittanceEnforcementService>(
+                context, listen: false);
         remittanceService.startListening(userId);
       }
     });
@@ -194,9 +201,12 @@ class _ContainerScreen extends State<ContainerScreen> {
     // Stop remittance enforcement listener
     try {
       final remittanceService =
-          Provider.of<RemittanceEnforcementService>(context, listen: false);
+          Provider.of<RemittanceEnforcementService>(
+              context, listen: false);
       remittanceService.stopListening();
     } catch (_) {}
+    HealthTelemetryService.instance.stop();
+    UserListenerService.instance.stop();
     super.dispose();
   }
 
@@ -697,6 +707,47 @@ class _ContainerScreen extends State<ContainerScreen> {
     final timeString = DateFormat('h:mm a').format(now);
 
     if (user.checkedInToday != true) {
+      // Check zone capacity before allowing check-in
+      final presetId = user.selectedPresetLocationId;
+      if (presetId != null && presetId.trim().isNotEmpty) {
+        try {
+          final capResult =
+              await RiderPresetLocationService.checkCapacity(
+            presetId,
+          );
+          if (!capResult.allowed && mounted) {
+            final proceed = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Zone at Capacity'),
+                content: Text(
+                  'This zone has '
+                  '${capResult.currentCount}/'
+                  '${capResult.maxRiders} riders active. '
+                  'You may not receive orders. '
+                  'Continue check-in anyway?',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () =>
+                        Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () =>
+                        Navigator.pop(ctx, true),
+                    child: const Text('Check In Anyway'),
+                  ),
+                ],
+              ),
+            );
+            if (proceed != true) return;
+          }
+        } catch (e) {
+          log('Capacity check failed (proceeding): $e');
+        }
+      }
+
       user.checkedInToday = true;
       user.isOnline = true;
       user.isActive = true;
@@ -713,6 +764,21 @@ class _ContainerScreen extends State<ContainerScreen> {
     }
 
     await FireStoreUtils.updateCurrentUser(user);
+    await OrderService.updateRiderStatus();
+    if (mounted) setState(() {});
+  }
+
+  void _toggleBreak() async {
+    final user = MyAppState.currentUser;
+    if (user == null) return;
+    final isOnBreak = user.riderAvailability == 'on_break';
+    if (isOnBreak) {
+      await OrderService.updateRiderStatus();
+    } else {
+      await OrderService.updateRiderStatus(
+        overrideAvailability: 'on_break',
+      );
+    }
     if (mounted) setState(() {});
   }
 
@@ -811,6 +877,13 @@ class _ContainerScreen extends State<ContainerScreen> {
                       children: [
                         Column(
                           children: [
+                            _RiderStatusBar(
+                              displayStatus:
+                                  user.riderDisplayStatus ?? '⚪ Offline',
+                              availability:
+                                  user.riderAvailability ?? 'offline',
+                              onToggleBreak: _toggleBreak,
+                            ),
                             Expanded(child: _currentWidget),
                           ],
                         ),
@@ -920,5 +993,77 @@ class _RemittanceBlockingOverlay extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _RiderStatusBar extends StatelessWidget {
+  final String displayStatus;
+  final String availability;
+  final VoidCallback onToggleBreak;
+
+  const _RiderStatusBar({
+    required this.displayStatus,
+    required this.availability,
+    required this.onToggleBreak,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isOnBreak = availability == 'on_break';
+    final showBreakButton =
+        availability == 'available' ||
+        availability == 'on_delivery' ||
+        isOnBreak;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: 6,
+      ),
+      color: _statusColor.withOpacity(0.15),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              displayStatus,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          if (showBreakButton)
+            TextButton.icon(
+              onPressed: onToggleBreak,
+              icon: Icon(
+                isOnBreak ? Icons.play_arrow : Icons.pause,
+                size: 18,
+              ),
+              label: Text(
+                isOnBreak ? 'Resume Working' : 'Take Break',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Color get _statusColor {
+    switch (availability) {
+      case 'available':
+        return Colors.green;
+      case 'on_delivery':
+        return Colors.amber;
+      case 'on_break':
+        return Colors.blue;
+      case 'checked_out':
+        return Colors.black54;
+      case 'suspended':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
   }
 }

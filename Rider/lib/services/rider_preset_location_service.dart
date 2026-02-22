@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import 'package:foodie_driver/model/User.dart';
 
@@ -13,6 +14,7 @@ class RiderPresetLocationData {
   final double longitude;
   /// Radius in km; null for fixed boundary type
   final double? radiusKm;
+  final int? maxRiders;
 
   RiderPresetLocationData({
     required this.id,
@@ -20,10 +22,26 @@ class RiderPresetLocationData {
     required this.latitude,
     required this.longitude,
     this.radiusKm,
+    this.maxRiders,
   });
 
   /// Whether this preset has a valid radius for geofencing
   bool get hasRadius => radiusKm != null && radiusKm! > 0;
+}
+
+/// Result of calling the checkZoneCapacity Cloud Function.
+class ZoneCapacityCheckResult {
+  final bool allowed;
+  final int currentCount;
+  final int? maxRiders;
+  final double utilizationPercentage;
+
+  const ZoneCapacityCheckResult({
+    required this.allowed,
+    required this.currentCount,
+    this.maxRiders,
+    required this.utilizationPercentage,
+  });
 }
 
 class RiderPresetLocationService {
@@ -38,12 +56,14 @@ class RiderPresetLocationService {
       final lng = _toDouble(d['centerLng']);
       if (lat == null || lng == null) continue;
       final radiusKm = _toDouble(d['radiusKm']);
+      final maxRiders = _toInt(d['maxRiders']);
       list.add(RiderPresetLocationData(
         id: doc.id,
         name: (d['name'] ?? '').toString(),
         latitude: lat,
         longitude: lng,
         radiusKm: radiusKm,
+        maxRiders: maxRiders,
       ));
     }
     list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -62,12 +82,14 @@ class RiderPresetLocationService {
     final lng = _toDouble(d['centerLng']);
     if (lat == null || lng == null) return null;
     final radiusKm = _toDouble(d['radiusKm']);
+    final maxRiders = _toInt(d['maxRiders']);
     return RiderPresetLocationData(
       id: doc.id,
       name: (d['name'] ?? '').toString(),
       latitude: lat,
       longitude: lng,
       radiusKm: radiusKm,
+      maxRiders: maxRiders,
     );
   }
 
@@ -105,10 +127,39 @@ class RiderPresetLocationService {
     return distKm <= preset.radiusKm!;
   }
 
+  /// Call the checkZoneCapacity Cloud Function to verify
+  /// whether a zone has room for another rider.
+  static Future<ZoneCapacityCheckResult> checkCapacity(
+    String zoneId,
+  ) async {
+    final callable = FirebaseFunctions.instanceFor(
+      region: 'us-central1',
+    ).httpsCallable('checkZoneCapacity');
+
+    final result = await callable.call({'zoneId': zoneId});
+    final data = result.data as Map<String, dynamic>;
+
+    return ZoneCapacityCheckResult(
+      allowed: data['allowed'] == true,
+      currentCount: (data['currentCount'] as num?)?.toInt() ?? 0,
+      maxRiders: (data['maxRiders'] as num?)?.toInt(),
+      utilizationPercentage:
+          (data['utilizationPercentage'] as num?)?.toDouble() ??
+              0.0,
+    );
+  }
+
   static double? _toDouble(dynamic v) {
     if (v == null) return null;
     if (v is num) return v.toDouble();
     if (v is String) return double.tryParse(v);
+    return null;
+  }
+
+  static int? _toInt(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v);
     return null;
   }
 }

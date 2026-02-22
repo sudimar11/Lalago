@@ -45,6 +45,8 @@ import 'package:brgy/pages/new_user_promo_settings_page.dart';
 import 'package:brgy/pages/referral_settings_page.dart';
 import 'package:brgy/pages/delivery_zone_settings_page.dart';
 import 'package:brgy/pages/rider_overview_page.dart';
+import 'package:brgy/pages/dispatch_analytics_page.dart';
+import 'package:brgy/pages/dispatch_config_page.dart';
 import 'package:brgy/driver_wallet_page.dart';
 import 'package:brgy/driver_collection_page.dart';
 import 'package:brgy/pages/customer_suggestions_page.dart';
@@ -671,6 +673,11 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             icon: Icons.analytics_outlined,
             label: 'Analytics (week)',
             onTap: () => push(const AnalyticsWeeklyPage()),
+          ),
+          _DashboardNavItem(
+            icon: Icons.local_shipping,
+            label: 'Dispatch Analytics',
+            onTap: () => push(const DispatchAnalyticsPage()),
           ),
         ];
 
@@ -2954,7 +2961,7 @@ class SettingsPage extends StatelessWidget {
       ),
       body: ListView.separated(
         padding: EdgeInsets.all(12),
-        itemCount: _docIds.length + 11,
+        itemCount: _docIds.length + 12,
         separatorBuilder: (_, __) => SizedBox(height: 8),
         itemBuilder: (context, index) {
           if (index == 0) {
@@ -2990,7 +2997,10 @@ class SettingsPage extends StatelessWidget {
           if (index == 10) {
             return _DeliveryZoneSettingsTile();
           }
-          final String docId = _docIds[index - 11];
+          if (index == 11) {
+            return const _DispatchConfigTile();
+          }
+          final String docId = _docIds[index - 12];
           return _SettingsDocTile(collection: 'settings', docId: docId);
         },
       ),
@@ -3387,6 +3397,33 @@ class _DeliveryZoneSettingsTile extends StatelessWidget {
             context,
             MaterialPageRoute(
               builder: (context) => const DeliveryZoneSettingsPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DispatchConfigTile extends StatelessWidget {
+  const _DispatchConfigTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(
+            Icons.tune, color: Colors.deepPurple),
+        title: const Text('Dispatch Configuration'),
+        subtitle: const Text(
+            'Scoring weights, peak hours, batching'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  const DispatchConfigPage(),
             ),
           );
         },

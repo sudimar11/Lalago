@@ -18,6 +18,7 @@ import 'package:foodie_driver/ui/chat_screen/admin_driver_chat_screen.dart';
 import 'package:foodie_driver/services/order_chat_service.dart';
 import 'package:foodie_driver/services/chat_read_service.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
+import 'package:foodie_driver/services/performance_tier_helper.dart';
 import 'package:foodie_driver/utils/order_ready_time_helper.dart';
 import 'package:intl/intl.dart';
 
@@ -68,6 +69,21 @@ class _OrderCardData {
   final String estimatedTimeToPrepare;
   final DateTime? orderTime;
   final DateTime? acceptedAt;
+}
+
+/// Grouped data for a batch of orders.
+class _OrderBatchData {
+  final String batchId;
+  final List<_OrderCardData> orders;
+  final int totalStops;
+  final double totalEarnings;
+
+  const _OrderBatchData({
+    required this.batchId,
+    required this.orders,
+    required this.totalStops,
+    required this.totalEarnings,
+  });
 }
 
 /// A reusable widget that displays a refreshable list of orders
@@ -321,33 +337,26 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
           .get();
       final settingsData = settingsDoc.data() ?? <String, dynamic>{};
 
-      // Determine tier and corresponding percent
-      num? percent;
-      if (perfValue < 75) {
-        percent = settingsData['silver'] as num?;
-      } else if (perfValue < 85) {
-        percent = settingsData['Platinum'] as num?;
-      } else {
-        percent = settingsData['Gold'] as num?;
-      }
+      final tier = PerformanceTierHelper.getTier(perfValue);
+      final commKey = PerformanceTierHelper.commissionKey(tier);
+      num? percent = settingsData[commKey] as num?;
 
       if (percent == null) {
         return;
       }
 
-      // Load incentive values from Firestore
       final incentiveGold =
           (settingsData['incentive_gold'] as num?)?.toDouble();
-      final incentivePlatinum =
-          (settingsData['incentive_platinum'] as num?)?.toDouble();
       final incentiveSilver =
           (settingsData['incentive_silver'] as num?)?.toDouble();
+      final incentiveBronze =
+          (settingsData['incentive_bronze'] as num?)?.toDouble();
 
       setState(() {
         _platformCommissionPercent = percent!.toDouble();
         _driverPerformance = perfValue;
         _incentiveGold = incentiveGold;
-        _incentivePlatinum = incentivePlatinum;
+        _incentivePlatinum = incentiveBronze;
         _incentiveSilver = incentiveSilver;
       });
     } catch (_) {
@@ -380,15 +389,15 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     }
   }
 
-  /// Get incentive amount per order based on driver performance tier
   double _getIncentivePerOrder() {
     if (_driverPerformance == null) return 0.0;
-    if (_driverPerformance! >= 85) {
-      return _incentiveGold ?? 0.0; // Gold
-    } else if (_driverPerformance! >= 75) {
-      return _incentivePlatinum ?? 0.0; // Platinum
+    final tier = PerformanceTierHelper.getTier(_driverPerformance!);
+    if (tier.name == 'Gold') {
+      return _incentiveGold ?? 0.0;
+    } else if (tier.name == 'Silver') {
+      return _incentiveSilver ?? 0.0;
     } else {
-      return _incentiveSilver ?? 0.0; // Silver
+      return _incentivePlatinum ?? 0.0;
     }
   }
 
@@ -896,6 +905,45 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
   Widget build(BuildContext context) {
     final currentTime = _now ?? DateTime.now();
     final docs = _sortDocsByLeaveByPriority(widget.docs, currentTime);
+
+    // Group docs: batched orders share a card, others stay individual.
+    final List<dynamic> items = []; // _OrderCardData | _OrderBatchData
+    final Map<String, List<_OrderCardData>> batchMap = {};
+    final List<_OrderCardData> singles = [];
+
+    for (int i = 0; i < docs.length; i++) {
+      final parsed = _parseOrderDoc(i, docs[i]);
+      final batchId =
+          parsed.data['batch']?['batchId'] as String?;
+      if (batchId != null && batchId.isNotEmpty) {
+        batchMap.putIfAbsent(batchId, () => []).add(parsed);
+      } else {
+        singles.add(parsed);
+      }
+    }
+
+    for (final entry in batchMap.entries) {
+      final orders = entry.value;
+      orders.sort((a, b) {
+        final sa = a.data['batch']?['sequence'] ?? 0;
+        final sb = b.data['batch']?['sequence'] ?? 0;
+        return (sa as int).compareTo(sb as int);
+      });
+      double earnings = 0;
+      for (final o in orders) {
+        earnings += o.totalPayment;
+      }
+      items.add(_OrderBatchData(
+        batchId: entry.key,
+        orders: orders,
+        totalStops: orders.length * 2,
+        totalEarnings: earnings,
+      ));
+    }
+    for (final s in singles) {
+      items.add(s);
+    }
+
     return RefreshIndicator(
       onRefresh: () async {
         widget.onRefresh();
@@ -903,10 +951,21 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
       },
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: docs.length,
+        itemCount: items.length,
         itemBuilder: (context, index) {
-          final doc = docs[index];
-          final parsed = _parseOrderDoc(index, doc);
+          final item = items[index];
+          if (item is _OrderBatchData) {
+            return _buildBatchCard(
+              context,
+              currentTime,
+              item,
+              () {
+                widget.onRefresh();
+                setState(() {});
+              },
+            );
+          }
+          final parsed = item as _OrderCardData;
           return _buildOrderCard(
             context,
             currentTime,
@@ -917,6 +976,244 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
             },
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildBatchCard(
+    BuildContext context,
+    DateTime currentTime,
+    _OrderBatchData batch,
+    VoidCallback afterUpdate,
+  ) {
+    final firstStatus = batch.orders.first.status;
+    final showActions = firstStatus == 'Driver Assigned' ||
+        firstStatus == 'Order Accepted';
+
+    return Card(
+      margin: const EdgeInsets.symmetric(
+          horizontal: 12, vertical: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+            color: Colors.deepPurple.shade200, width: 2),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.deepPurple.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.layers,
+                      color: Colors.deepPurple, size: 24),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Batch Order • ${batch.orders.length} orders'
+                      ' • ${batch.totalStops} stops',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.deepPurple.shade800,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '₱${batch.totalEarnings.toStringAsFixed(0)}',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.deepPurple.shade800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Pickups
+            Text('Pickup Stops',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: Colors.grey.shade700)),
+            const SizedBox(height: 4),
+            for (int i = 0;
+                i < batch.orders.length;
+                i++) ...[
+              _buildBatchStop(
+                index: i + 1,
+                icon: Icons.store,
+                color: Colors.orange,
+                title: batch.orders[i].vendor['title']
+                        ?.toString() ??
+                    'Restaurant',
+                subtitle: '',
+              ),
+            ],
+            const Divider(),
+
+            // Deliveries
+            Text('Delivery Stops',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: Colors.grey.shade700)),
+            const SizedBox(height: 4),
+            for (int i = 0;
+                i < batch.orders.length;
+                i++) ...[
+              _buildBatchStop(
+                index: i + 1,
+                icon: Icons.location_on,
+                color: Colors.green,
+                title:
+                    '${batch.orders[i].author['firstName'] ?? ''} '
+                    '${batch.orders[i].author['lastName'] ?? ''}',
+                subtitle: batch.orders[i].fullAddress,
+              ),
+            ],
+
+            // Expandable order details
+            const Divider(),
+            Theme(
+              data: Theme.of(context).copyWith(
+                  dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: const Text('Order Details',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600)),
+                children: [
+                  for (final o in batch.orders) ...[
+                    ListTile(
+                      dense: true,
+                      title: Text(
+                        '${o.vendor['title'] ?? 'Order'}'
+                        ' • ${o.totalItemCount} item(s)',
+                      ),
+                      subtitle: o.notes.isNotEmpty
+                          ? Text(o.notes,
+                              maxLines: 2,
+                              overflow:
+                                  TextOverflow.ellipsis)
+                          : null,
+                      trailing: Text(
+                        '₱${o.totalPayment.toStringAsFixed(0)}',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+
+            // Accept/Reject
+            if (showActions) ...[
+              const Divider(),
+              Row(
+                mainAxisAlignment:
+                    MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final orders = batch.orders
+                          .map((o) => o.data)
+                          .toList();
+                      final ids = batch.orders
+                          .map((o) => o.doc.id)
+                          .toList();
+                      await OrderService.acceptBatch(
+                          orders, ids, context);
+                      afterUpdate();
+                    },
+                    icon: const Icon(Icons.check),
+                    label: Text(
+                        'Accept All (${batch.orders.length})'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final orders = batch.orders
+                          .map((o) => o.data)
+                          .toList();
+                      final ids = batch.orders
+                          .map((o) => o.doc.id)
+                          .toList();
+                      await OrderService.rejectBatch(
+                          orders, ids, context);
+                      afterUpdate();
+                    },
+                    icon: const Icon(Icons.close),
+                    label: Text(
+                        'Reject All (${batch.orders.length})'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBatchStop({
+    required int index,
+    required IconData icon,
+    required Color color,
+    required String title,
+    required String subtitle,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 14,
+            backgroundColor: color.withOpacity(0.15),
+            child: Text('$index',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: color)),
+          ),
+          const SizedBox(width: 8),
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13)),
+                if (subtitle.isNotEmpty)
+                  Text(subtitle,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1567,8 +1864,47 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                                   }
                                 }
 
-                                // Hide incentive display but keep functionality
-                                return const SizedBox.shrink();
+                                if (_driverPerformance == null) {
+                                  return const SizedBox.shrink();
+                                }
+                                final tier =
+                                    PerformanceTierHelper.getTier(
+                                  _driverPerformance!,
+                                );
+                                String bonusLabel = '';
+                                if (tier.name == 'Gold') {
+                                  bonusLabel = 'Gold +20%';
+                                } else if (tier.name == 'Silver') {
+                                  bonusLabel = 'Silver +10%';
+                                }
+                                if (bonusLabel.isEmpty) {
+                                  return const SizedBox.shrink();
+                                }
+                                return Padding(
+                                  padding:
+                                      const EdgeInsets.only(top: 4),
+                                  child: Container(
+                                    padding:
+                                        const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 3,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: tier.color
+                                          .withValues(alpha: 0.15),
+                                      borderRadius:
+                                          BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      bonusLabel,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: tier.color,
+                                      ),
+                                    ),
+                                  ),
+                                );
                               },
                             ),
                           ],

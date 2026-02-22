@@ -2,15 +2,21 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:brgy/services/order_notification_service.dart';
 import 'package:brgy/services/delivery_zone_service.dart';
+import 'package:brgy/services/zone_capacity_service.dart';
+import 'package:brgy/services/dispatch_scoring_service.dart';
+import 'package:brgy/services/acceptance_probability_service.dart';
+import 'package:brgy/services/routing_service.dart';
+import 'package:brgy/services/dynamic_capacity_service.dart';
 
-/// Service responsible for finding and assigning drivers to orders
-/// Uses AI-powered algorithms to select optimal drivers
+/// Service responsible for finding and assigning drivers to orders.
+/// Uses multi-factor scoring algorithm for optimal driver selection.
 class DriverAssignmentService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final OrderNotificationService _notificationService =
       OrderNotificationService();
+  final ZoneCapacityService _capacityService =
+      ZoneCapacityService();
 
-  /// Max active orders per rider; only riders with fewer are recommended/assigned
   static const int maxActiveOrdersPerRider = 2;
 
   static int _activeOrderCount(Map<String, dynamic> driverData) {
@@ -31,6 +37,7 @@ class DriverAssignmentService {
     double? deliveryLat,
     double? deliveryLng,
     String? deliveryLocality,
+    double? restaurantPrepMinutes,
     required void Function({
       required String orderId,
       required String driverId,
@@ -38,18 +45,84 @@ class DriverAssignmentService {
     }) setupDriverResponseListener,
   }) async {
     try {
+      // Phase 1A: Acquire dispatch lock
+      final orderRef =
+          _firestore.collection('restaurant_orders').doc(orderId);
+      final lockAcquired =
+          await _firestore.runTransaction<bool>((tx) async {
+        final snap = await tx.get(orderRef);
+        final data = snap.data() ?? {};
+        final dispatch =
+            data['dispatch'] as Map<String, dynamic>? ?? {};
+        final lock = dispatch['lock'] as bool? ?? false;
+        final lockExpires =
+            dispatch['lockExpiresAt'] as Timestamp?;
+        final now = Timestamp.now();
+        if (lock &&
+            lockExpires != null &&
+            lockExpires.seconds > now.seconds) {
+          return false;
+        }
+        tx.update(orderRef, {
+          'dispatch.lock': true,
+          'dispatch.lockHolder': 'admin_ui',
+          'dispatch.lockAcquiredAt':
+              FieldValue.serverTimestamp(),
+          'dispatch.lockExpiresAt':
+              Timestamp(now.seconds + 60, 0),
+        });
+        return true;
+      });
+
+      if (!lockAcquired) {
+        return {
+          'success': false,
+          'reason':
+              'Dispatch already in progress from another path',
+        };
+      }
+
       List<QueryDocumentSnapshot<Map<String, dynamic>>> driverDocs;
       List<String>? zoneDriverIds;
+      DeliveryZoneMatch? zoneMatch;
 
       if (deliveryLat != null ||
           deliveryLng != null ||
           (deliveryLocality?.trim().isNotEmpty == true)) {
-        zoneDriverIds = await DeliveryZoneService()
-            .getAssignedDriverIdsForDelivery(
+        zoneMatch = await DeliveryZoneService()
+            .getZoneMatchForDelivery(
           lat: deliveryLat,
           lng: deliveryLng,
           locality: deliveryLocality,
         );
+        zoneDriverIds = zoneMatch?.driverIds;
+      }
+
+      // Capacity check: if the matched zone has a rider cap, verify
+      if (zoneMatch != null) {
+        final hasRoom = await _capacityService
+            .hasCapacityForNewRider(zoneMatch.zone.id);
+        if (!hasRoom) {
+          final zc = await _capacityService
+              .getZoneCapacity(zoneMatch.zone.id);
+          final current = zc?.currentActiveRiders ?? 0;
+          final max = zc?.maxRiders ?? 0;
+          await _firestore.collection('assignments_log').add({
+            'order_id': orderId,
+            'status': 'zone_at_capacity',
+            'zoneId': zoneMatch.zone.id,
+            'zoneName': zoneMatch.zone.name,
+            'currentRiders': current,
+            'maxRiders': max,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+          return {
+            'success': false,
+            'reason': 'Zone at capacity. '
+                '$current/$max riders active in '
+                '${zoneMatch.zone.name}.',
+          };
+        }
       }
 
       final driversQuery = await _firestore
@@ -64,7 +137,8 @@ class DriverAssignmentService {
         if (driverDocs.isEmpty) {
           return {
             'success': false,
-            'reason': 'No active drivers in this delivery zone',
+            'reason':
+                'No active drivers in this delivery zone',
           };
         }
       } else {
@@ -75,22 +149,28 @@ class DriverAssignmentService {
         return {'success': false, 'reason': 'No drivers'};
       }
 
-      final drivers = _buildDriversList(
+      final weights =
+          await DispatchScoringService.loadWeights();
+
+      final drivers = await _buildDriversListScored(
         driverDocs,
         vendorLat,
         vendorLng,
         excludeDriverId,
+        restaurantPrepMinutes ?? 0,
+        weights,
       );
 
       if (drivers.isEmpty) {
+        await orderRef.update({'dispatch.lock': false});
         return {
           'success': false,
           'reason': 'No active drivers with valid location',
         };
       }
 
-      // Sort drivers by optimal score
-      _sortDriversByScore(drivers);
+      drivers.sort((a, b) =>
+          (a['score'] as double).compareTo(b['score'] as double));
 
       // Select the best driver
       final selectedDriver = drivers.first;
@@ -105,15 +185,59 @@ class DriverAssignmentService {
       print(
           '[Driver Assignment] Found driver: $driverName ($driverId) at ${distance.toStringAsFixed(2)} km');
 
-      // Assign driver to order
+      // Assign driver to order + update driver (atomic transaction)
       await _assignDriverToOrder(orderId, driverId, distance);
 
-      // Update driver status
-      await _updateDriverStatus(driverId, orderId);
+      final driverDataMap =
+          selectedDriver['data'] as Map<String, dynamic>?;
+      final riderOrders = driverDataMap != null
+          ? _activeOrderCount(driverDataMap)
+          : 0;
 
-      // Log assignment
-      final assignmentLogRef =
-          await _logAssignment(orderId, driverId, distance);
+      // Read batch fields from the order if present
+      final orderSnap = await _firestore
+          .collection('restaurant_orders')
+          .doc(orderId)
+          .get();
+      final orderData = orderSnap.data() ?? {};
+      final orderBatchId =
+          orderData['batch']?['batchId'] as String?;
+      final orderZoneId = (orderData['zoneId'] ??
+              orderData['vendorID'] ??
+              '')
+          .toString();
+
+      final assignmentLogRef = await _logAssignment(
+        orderId,
+        driverId,
+        distance,
+        scoreComponents:
+            selectedDriver['scoreComponents']
+                as Map<String, double>?,
+        totalScore: selectedDriver['score'] as double?,
+        acceptanceProb:
+            selectedDriver['acceptanceProb'] as double?,
+        alternativeDrivers: drivers.length > 1
+            ? drivers.skip(1).take(5).map((d) {
+                return {
+                  'riderId': d['id'],
+                  'score': d['score'],
+                  'distance': d['distance'],
+                };
+              }).toList()
+            : null,
+        riderCurrentOrders: riderOrders,
+        riderHeadingMatch:
+            selectedDriver['headingMatch'] as double?,
+        restaurantPrepMinutes: restaurantPrepMinutes,
+        batchId: orderBatchId,
+        zoneId: orderZoneId,
+        activeWeights: weights,
+        routingSource:
+            selectedDriver['routingSource'] as String?,
+        durationMinutes:
+            selectedDriver['durationMinutes'] as double?,
+      );
 
       print(
           '[Driver Assignment] Assignment logged with ID: ${assignmentLogRef.id}');
@@ -180,23 +304,18 @@ class DriverAssignmentService {
     return all.where((e) => driverIds.contains(e['id'] as String)).toList();
   }
 
-  /// Fetch drivers who are signed-in/active (same as Active Riders Live Map)
-  /// with valid location. Order of checks: (1) active (checkedOutToday != true),
-  /// (2) valid location. Max 2 orders is applied later when selecting the
-  /// recommended rider.
+  /// Fetch drivers who are available for dispatch with valid location.
   /// Returns list of { 'id': doc.id, 'data': doc.data() }.
   Future<List<Map<String, dynamic>>> fetchActiveDriversWithLocations() async {
     final driversQuery = await _firestore
         .collection('users')
         .where('role', isEqualTo: 'driver')
+        .where('riderAvailability', isEqualTo: 'available')
         .get();
 
     final List<Map<String, dynamic>> result = [];
     for (final doc in driversQuery.docs) {
       final driverData = doc.data();
-      // (1) Active = not checked out today, same as Active Riders Live Map
-      if (driverData['checkedOutToday'] == true) continue;
-      // (2) Valid location; max 2 orders applied in getRecommendedDriverFromList
       final location = driverData['location'];
       if (location != null && location is Map) {
         final driverLat = _asDouble(location['latitude']) ?? 0.0;
@@ -210,10 +329,9 @@ class DriverAssignmentService {
     return result;
   }
 
-  /// Get best recommended driver from pre-fetched list (no Firestore).
-  /// Returns { 'driverId': String, 'driverName': String, 'distance': double }
-  /// or null.
-  Map<String, dynamic>? getRecommendedDriverFromList(
+  /// Synchronous recommendation for UI display using simple
+  /// distance+penalty scoring. Use the async variant for dispatch.
+  Map<String, dynamic>? getRecommendedDriverFromListSync(
     List<Map<String, dynamic>> drivers,
     double vendorLat,
     double vendorLng,
@@ -221,146 +339,496 @@ class DriverAssignmentService {
     if (drivers.isEmpty || vendorLat == 0.0 || vendorLng == 0.0) {
       return null;
     }
-    final withDistance = _buildDriversListFromMaps(
+    final w = DispatchScoringService.cachedWeights ??
+        const DispatchWeights();
+    final isPeak = DispatchScoringService.isPeakHourNow(w);
+    final List<Map<String, dynamic>> scored = [];
+    for (final entry in drivers) {
+      final id = entry['id'] as String?;
+      final d = entry['data'] as Map<String, dynamic>?;
+      if (id == null || d == null) continue;
+      final effCap = DynamicCapacityService.calculateEffectiveCapacity(
+        w: w,
+        isPeakHour: isPeak,
+        driverPerformance:
+            (d['driver_performance'] as num?)?.toDouble() ?? 0,
+        multipleOrders: d['multipleOrders'] == true,
+      );
+      if (_activeOrderCount(d) >= effCap) continue;
+      final loc = d['location'];
+      if (loc is Map) {
+        final lat = _asDouble(loc['latitude']) ?? 0.0;
+        final lng = _asDouble(loc['longitude']) ?? 0.0;
+        if (lat != 0.0 && lng != 0.0) {
+          final dist = _calculateDistance(
+              vendorLat, vendorLng, lat, lng);
+          final orders = _activeOrderCount(d);
+          scored.add({
+            'id': id,
+            'data': d,
+            'distance': dist,
+            'simpleScore': dist + (orders * 3.0),
+          });
+        }
+      }
+    }
+    if (scored.isEmpty) return null;
+    scored.sort((a, b) => (a['simpleScore'] as double)
+        .compareTo(b['simpleScore'] as double));
+    final best = scored.first;
+    final bd = best['data'] as Map<String, dynamic>;
+    final name =
+        '${bd['firstName'] ?? ''} ${bd['lastName'] ?? ''}'.trim();
+    final status =
+        bd['riderDisplayStatus'] as String? ?? '';
+    return {
+      'driverId': best['id'] as String,
+      'driverName': name.isEmpty ? 'Driver' : name,
+      'distance': best['distance'] as double,
+      'riderDisplayStatus': status,
+    };
+  }
+
+  /// Async recommendation with full multi-factor scoring.
+  /// Returns { 'driverId', 'driverName', 'distance' } or null.
+  Future<Map<String, dynamic>?> getRecommendedDriverFromList(
+    List<Map<String, dynamic>> drivers,
+    double vendorLat,
+    double vendorLng,
+  ) async {
+    if (drivers.isEmpty || vendorLat == 0.0 || vendorLng == 0.0) {
+      return null;
+    }
+    final weights =
+        await DispatchScoringService.loadWeights();
+    final withScore = await _buildDriversListFromMapsScored(
       drivers,
       vendorLat,
       vendorLng,
+      0,
+      weights,
     );
-    if (withDistance.isEmpty) return null;
-    _sortDriversByScore(withDistance);
-    final best = withDistance.first;
-    final driverId = best['id'] as String;
-    final driverData = best['data'] as Map<String, dynamic>;
-    final distance = best['distance'] as double;
+    if (withScore.isEmpty) return null;
+    withScore.sort((a, b) =>
+        (a['score'] as double).compareTo(b['score'] as double));
+    final best = withScore.first;
+    final driverData =
+        best['data'] as Map<String, dynamic>;
     final driverName =
         '${driverData['firstName'] ?? ''} ${driverData['lastName'] ?? ''}'
             .trim();
     return {
-      'driverId': driverId,
-      'driverName': driverName.isEmpty ? 'Driver' : driverName,
-      'distance': distance,
+      'driverId': best['id'] as String,
+      'driverName':
+          driverName.isEmpty ? 'Driver' : driverName,
+      'distance': best['distance'] as double,
     };
   }
 
-  /// Build list with distances from list of { 'id', 'data' } (no Firestore).
-  List<Map<String, dynamic>> _buildDriversListFromMaps(
+  /// Build list with distances and unified scores from pre-fetched maps.
+  Future<List<Map<String, dynamic>>> _buildDriversListFromMapsScored(
     List<Map<String, dynamic>> driverMaps,
     double vendorLat,
     double vendorLng,
-  ) {
+    double prepMinutes,
+    DispatchWeights weights,
+  ) async {
     final List<Map<String, dynamic>> list = [];
+    final todayCompleted = await _getAvgCompletedToday();
+
+    final isPeak = DispatchScoringService.isPeakHourNow(weights);
     for (final entry in driverMaps) {
       final id = entry['id'] as String?;
       final driverData = entry['data'] as Map<String, dynamic>?;
       if (id == null || driverData == null) continue;
-      if (_activeOrderCount(driverData) >= maxActiveOrdersPerRider) continue;
+      final currentOrders = _activeOrderCount(driverData);
+      final effCap = DynamicCapacityService.calculateEffectiveCapacity(
+        w: weights,
+        isPeakHour: isPeak,
+        driverPerformance:
+            (driverData['driver_performance'] as num?)?.toDouble() ?? 0,
+        multipleOrders: driverData['multipleOrders'] == true,
+      );
+      if (currentOrders >= effCap) continue;
+
       final location = driverData['location'];
       if (location != null && location is Map) {
-        final driverLat = _asDouble(location['latitude']) ?? 0.0;
-        final driverLng = _asDouble(location['longitude']) ?? 0.0;
+        final driverLat =
+            _asDouble(location['latitude']) ?? 0.0;
+        final driverLng =
+            _asDouble(location['longitude']) ?? 0.0;
         if (driverLat != 0.0 && driverLng != 0.0) {
-          final distance =
-              _calculateDistance(vendorLat, vendorLng, driverLat, driverLng);
-          list.add({'id': id, 'data': driverData, 'distance': distance});
+          final distance = _calculateDistance(
+            vendorLat, vendorLng, driverLat, driverLng,
+          );
+          final prevLoc =
+              driverData['previousLocation'] as Map?;
+          final headingMatch =
+              DispatchScoringService.calculateHeadingMatch(
+            riderLat: driverLat,
+            riderLng: driverLng,
+            prevLat: _asDouble(prevLoc?['latitude']),
+            prevLng: _asDouble(prevLoc?['longitude']),
+            restaurantLat: vendorLat,
+            restaurantLng: vendorLng,
+          );
+          final acceptProb =
+              await AcceptanceProbabilityService.calculate(
+            riderId: id,
+            distanceKm: distance,
+            currentOrders: currentOrders,
+          );
+          final completed =
+              (driverData['completedToday'] as num?)?.toInt() ?? 0;
+
+          final result = DispatchScoringService.calculateScore(
+            distanceKm: distance,
+            currentOrders: currentOrders,
+            headingMatch: headingMatch,
+            predictedAcceptanceProb: acceptProb,
+            completedToday: completed,
+            avgCompletedToday: todayCompleted,
+            restaurantPrepMinutes: prepMinutes,
+            w: weights,
+            effectiveCapacity: effCap,
+          );
+
+          list.add({
+            'id': id,
+            'data': driverData,
+            'distance': distance,
+            'score': result.total,
+            'scoreComponents': result.components,
+            'acceptanceProb': acceptProb,
+            'headingMatch': headingMatch,
+          });
         }
       }
     }
     return list;
   }
 
-  /// Build list of available drivers with distances
-  List<Map<String, dynamic>> _buildDriversList(
+  /// Build list of available drivers with unified scores.
+  /// Uses batched queries to avoid N+1 Firestore reads.
+  Future<List<Map<String, dynamic>>> _buildDriversListScored(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
     double vendorLat,
     double vendorLng,
     String? excludeDriverId,
-  ) {
-    List<Map<String, dynamic>> drivers = [];
+    double prepMinutes,
+    DispatchWeights weights,
+  ) async {
+    final List<Map<String, dynamic>> drivers = [];
+    final isPeak = DispatchScoringService.isPeakHourNow(weights);
+
+    // Pass 1: collect eligible drivers with distances and order counts
+    final List<String> eligibleIds = [];
+    final Map<String, double> distanceMap = {};
+    final Map<String, int> orderCountMap = {};
+    final Map<String, Map<String, dynamic>> candidateMap = {};
 
     for (final doc in docs) {
-      // Skip the driver who rejected the order
       if (excludeDriverId != null && doc.id == excludeDriverId) {
-        print('[Driver Assignment] Skipping excluded driver: ${doc.id}');
         continue;
       }
-
       final driverData = doc.data();
-      // Same filter as Active Riders Live Map: active = not checked out today
       if (driverData['checkedOutToday'] == true) continue;
-      if (_activeOrderCount(driverData) >= maxActiveOrdersPerRider) continue;
+      final currentOrders = _activeOrderCount(driverData);
+      final effCap = DynamicCapacityService.calculateEffectiveCapacity(
+        w: weights,
+        isPeakHour: isPeak,
+        driverPerformance:
+            (driverData['driver_performance'] as num?)
+                    ?.toDouble() ??
+                0,
+        multipleOrders: driverData['multipleOrders'] == true,
+      );
+      if (currentOrders >= effCap) continue;
+
       final location = driverData['location'];
+      if (location == null || location is! Map) continue;
+      final driverLat =
+          _asDouble(location['latitude']) ?? 0.0;
+      final driverLng =
+          _asDouble(location['longitude']) ?? 0.0;
+      if (driverLat == 0.0 && driverLng == 0.0) continue;
 
-      if (location != null && location is Map) {
-        final driverLat = _asDouble(location['latitude']) ?? 0.0;
-        final driverLng = _asDouble(location['longitude']) ?? 0.0;
+      final distance = _calculateDistance(
+        vendorLat, vendorLng, driverLat, driverLng,
+      );
 
-        if (driverLat != 0.0 && driverLng != 0.0) {
-          final distance =
-              _calculateDistance(vendorLat, vendorLng, driverLat, driverLng);
+      eligibleIds.add(doc.id);
+      distanceMap[doc.id] = distance;
+      orderCountMap[doc.id] = currentOrders;
+      candidateMap[doc.id] = {
+        'data': driverData,
+        'driverLat': driverLat,
+        'driverLng': driverLng,
+        'distance': distance,
+        'currentOrders': currentOrders,
+        'effectiveCapacity': effCap,
+      };
+    }
 
-          drivers.add({
-            'id': doc.id,
-            'data': driverData,
-            'distance': distance,
-          });
+    if (eligibleIds.isEmpty) return drivers;
+
+    // Pass 2: batch query acceptance probabilities
+    final acceptProbs =
+        await AcceptanceProbabilityService.calculateBatch(
+      riderIds: eligibleIds,
+      distances: distanceMap,
+      orderCounts: orderCountMap,
+    );
+
+    // Compute average completed today from driver docs
+    int totalCompleted = 0;
+    int driverCount = 0;
+    for (final id in eligibleIds) {
+      final d = candidateMap[id]!['data'] as Map<String, dynamic>;
+      totalCompleted +=
+          (d['completedToday'] as num?)?.toInt() ?? 0;
+      driverCount++;
+    }
+    final avgCompleted =
+        driverCount > 0 ? (totalCompleted / driverCount).round() : 5;
+
+    // Pass 3: score each eligible driver
+    for (final id in eligibleIds) {
+      final c = candidateMap[id]!;
+      final driverData = c['data'] as Map<String, dynamic>;
+      final distance = c['distance'] as double;
+      final driverLat = c['driverLat'] as double;
+      final driverLng = c['driverLng'] as double;
+      final currentOrders = c['currentOrders'] as int;
+      final effCap = c['effectiveCapacity'] as int;
+
+      final prevLoc =
+          driverData['previousLocation'] as Map?;
+      final headingMatch =
+          DispatchScoringService.calculateHeadingMatch(
+        riderLat: driverLat,
+        riderLng: driverLng,
+        prevLat: _asDouble(prevLoc?['latitude']),
+        prevLng: _asDouble(prevLoc?['longitude']),
+        restaurantLat: vendorLat,
+        restaurantLng: vendorLng,
+      );
+      final acceptProb = acceptProbs[id] ?? 0.7;
+      final completed =
+          (driverData['completedToday'] as num?)
+              ?.toInt() ?? 0;
+
+      final result = DispatchScoringService.calculateScore(
+        distanceKm: distance,
+        currentOrders: currentOrders,
+        headingMatch: headingMatch,
+        predictedAcceptanceProb: acceptProb,
+        completedToday: completed,
+        avgCompletedToday: avgCompleted,
+        restaurantPrepMinutes: prepMinutes,
+        w: weights,
+        effectiveCapacity: effCap,
+      );
+
+      drivers.add({
+        'id': id,
+        'data': driverData,
+        'distance': distance,
+        'driverLat': driverLat,
+        'driverLng': driverLng,
+        'score': result.total,
+        'scoreComponents': result.components,
+        'acceptanceProb': acceptProb,
+        'headingMatch': headingMatch,
+        'currentOrders': currentOrders,
+        'completedToday': completed,
+        'effectiveCapacity': effCap,
+        'routingSource': 'haversine',
+      });
+    }
+
+    // Two-pass: refine top 8 with road-network ETA
+    drivers.sort((a, b) =>
+        (a['score'] as double).compareTo(
+            b['score'] as double));
+    final topN = drivers.take(8).toList();
+    if (topN.isNotEmpty) {
+      try {
+        final destinations = topN
+            .map((d) => RoutingLatLng(
+                  d['driverLat'] as double,
+                  d['driverLng'] as double,
+                ))
+            .toList();
+        final routes =
+            await RoutingService.getRouteDataBatch(
+          vendorLat,
+          vendorLng,
+          destinations,
+        );
+        for (int i = 0; i < topN.length; i++) {
+          final r = routes[i];
+          topN[i]['routingSource'] = r.isFallback
+              ? 'haversine'
+              : 'google_distance_matrix';
+          topN[i]['roadDistanceKm'] =
+              r.roadDistanceKm;
+          topN[i]['durationMinutes'] =
+              r.durationMinutes;
+          final rescore =
+              DispatchScoringService.calculateScore(
+            distanceKm: r.roadDistanceKm,
+            durationMinutes: r.durationMinutes,
+            currentOrders:
+                topN[i]['currentOrders'] as int,
+            headingMatch:
+                topN[i]['headingMatch'] as double,
+            predictedAcceptanceProb:
+                topN[i]['acceptanceProb'] as double,
+            completedToday:
+                topN[i]['completedToday'] as int,
+            avgCompletedToday: avgCompleted,
+            restaurantPrepMinutes: prepMinutes,
+            w: weights,
+            effectiveCapacity:
+                topN[i]['effectiveCapacity'] as int,
+          );
+          topN[i]['score'] = rescore.total;
+          topN[i]['scoreComponents'] =
+              rescore.components;
+          topN[i]['distance'] = r.roadDistanceKm;
         }
+        topN.sort((a, b) =>
+            (a['score'] as double).compareTo(
+                b['score'] as double));
+        final topIds =
+            topN.map((d) => d['id']).toSet();
+        final rest = drivers
+            .where((d) => !topIds.contains(d['id']))
+            .toList();
+        drivers
+          ..clear()
+          ..addAll(topN)
+          ..addAll(rest);
+      } catch (_) {
+        // Routing failed; keep Haversine scores
       }
     }
 
     return drivers;
   }
 
-  /// Sort drivers by combined score (distance + order load)
-  /// Lower score is better
-  void _sortDriversByScore(List<Map<String, dynamic>> drivers) {
-    // Each active order counts as 3 km penalty to balance load
-    const double orderPenaltyKm = 3.0;
-
-    drivers.sort((a, b) {
-      final aData = a['data'] as Map<String, dynamic>;
-      final bData = b['data'] as Map<String, dynamic>;
-
-      final aDistance = a['distance'] as double;
-      final bDistance = b['distance'] as double;
-
-      final aOrders = (aData['inProgressOrderID'] is List)
-          ? (aData['inProgressOrderID'] as List).length
-          : 0;
-      final bOrders = (bData['inProgressOrderID'] is List)
-          ? (bData['inProgressOrderID'] as List).length
-          : 0;
-
-      final aScore = aDistance + (aOrders * orderPenaltyKm);
-      final bScore = bDistance + (bOrders * orderPenaltyKm);
-
-      // Primary sort by score, tie-breaker by raw distance
-      final cmp = aScore.compareTo(bScore);
-      if (cmp != 0) return cmp;
-      return aDistance.compareTo(bDistance);
-    });
+  /// Get average completed orders today across all active riders.
+  Future<int> _getAvgCompletedToday() async {
+    try {
+      final snap = await _firestore
+          .collection('users')
+          .where('role', isEqualTo: 'driver')
+          .get();
+      if (snap.docs.isEmpty) return 5;
+      int total = 0;
+      int count = 0;
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        if (d['checkedOutToday'] == true) continue;
+        total +=
+            (d['completedToday'] as num?)?.toInt() ?? 0;
+        count++;
+      }
+      return count > 0 ? (total / count).round() : 5;
+    } catch (_) {
+      return 5;
+    }
   }
 
-  /// Assign driver to order in Firestore
+  /// Assign driver to order and update driver status atomically
+  /// using a Firestore transaction to prevent race conditions.
   Future<void> _assignDriverToOrder(
     String orderId,
     String driverId,
     double distance,
   ) async {
-    final orderRef = _firestore.collection('restaurant_orders').doc(orderId);
+    final orderRef =
+        _firestore.collection('restaurant_orders').doc(orderId);
+    final driverRef =
+        _firestore.collection('users').doc(driverId);
 
-    await orderRef.update({
-      'status': 'Driver Pending',
-      'driverID': driverId,
-      'driverDistance': distance,
-      'assignedAt': FieldValue.serverTimestamp(),
-      'autoReassigned': true,
+    await _firestore.runTransaction((tx) async {
+      final orderSnap = await tx.get(orderRef);
+      final existingDriverId =
+          orderSnap.data()?['driverID']?.toString() ?? '';
+      if (existingDriverId.isNotEmpty) {
+        throw Exception(
+          'Order already has driver assigned: $existingDriverId',
+        );
+      }
+
+      final driverSnap = await tx.get(driverRef);
+      if (!driverSnap.exists) {
+        throw Exception('Driver $driverId not found');
+      }
+
+      final dData = driverSnap.data() ?? {};
+      final currentOrders = dData['inProgressOrderID'];
+      final count = (currentOrders is List)
+          ? currentOrders.length
+          : 0;
+      final txWeights =
+          DispatchScoringService.cachedWeights ??
+              const DispatchWeights();
+      final txCap =
+          DynamicCapacityService.calculateEffectiveCapacity(
+        w: txWeights,
+        isPeakHour: DispatchScoringService.isPeakHourNow(
+            txWeights),
+        driverPerformance:
+            (dData['driver_performance'] as num?)
+                    ?.toDouble() ??
+                0,
+        multipleOrders: dData['multipleOrders'] == true,
+      );
+      if (count >= txCap) {
+        throw Exception(
+          'Driver already at max orders ($count/$txCap)',
+        );
+      }
+
+      final deadline = Timestamp(
+        Timestamp.now().seconds + 60,
+        0,
+      );
+      tx.update(orderRef, {
+        'status': 'Driver Pending',
+        'driverID': driverId,
+        'driverDistance': distance,
+        'assignedAt': FieldValue.serverTimestamp(),
+        'autoReassigned': true,
+        'dispatch.riderAcceptDeadline': deadline,
+        'dispatch.lock': false,
+        'dispatch.attemptCount': FieldValue.increment(1),
+      });
+
+      final newCount = count + 1;
+      final atCapacity = newCount >= txCap;
+      tx.update(driverRef, {
+        'isActive': false,
+        'inProgressOrderID': FieldValue.arrayUnion([orderId]),
+        'riderAvailability': atCapacity ? 'on_delivery' : 'available',
+        'riderDisplayStatus': '🟡 On Delivery',
+      });
     });
 
-    print('[Driver Assignment] Updated order with driver assignment');
+    print('[Driver Assignment] Assigned order $orderId '
+        'to driver $driverId (transaction)');
   }
 
-  /// Update driver status in Firestore
-  Future<void> _updateDriverStatus(String driverId, String orderId) async {
+  /// Kept for backward compatibility with assignOrderToDriver
+  Future<void> _updateDriverStatus(
+    String driverId,
+    String orderId,
+  ) async {
+    // Now handled inside _assignDriverToOrder transaction,
+    // but this remains for direct assignOrderToDriver calls.
     await _firestore.collection('users').doc(driverId).update({
       'isActive': false,
       'inProgressOrderID': FieldValue.arrayUnion([orderId]),
@@ -369,24 +837,91 @@ class DriverAssignmentService {
     print('[Driver Assignment] Updated driver status');
   }
 
-  /// Log assignment to assignments_log collection
+  /// Log assignment to assignments_log and dispatch_events.
   Future<DocumentReference> _logAssignment(
     String orderId,
     String driverId,
-    double distance,
-  ) async {
-    final assignmentLogRef =
-        await _firestore.collection('assignments_log').add({
+    double distance, {
+    Map<String, double>? scoreComponents,
+    double? totalScore,
+    double? acceptanceProb,
+    List<Map<String, dynamic>>? alternativeDrivers,
+    int? riderCurrentOrders,
+    double? riderHeadingMatch,
+    double? restaurantPrepMinutes,
+    String? batchId,
+    String? zoneId,
+    DispatchWeights? activeWeights,
+    String? routingSource,
+    double? durationMinutes,
+  }) async {
+    final etaMins = durationMinutes ?? (distance / 0.5);
+    final logData = <String, dynamic>{
       'order_id': orderId,
       'driverId': driverId,
-      'status': 'offered', // Initial status is 'offered'
-      'etaMinutes': (distance / 0.5).round(),
+      'status': 'offered',
+      'etaMinutes': etaMins.round(),
       'km': distance,
-      'score': 1.0,
-      'acceptanceProb': 1.0,
+      'score': totalScore ?? 1.0,
+      'acceptanceProb': acceptanceProb ?? 1.0,
       'createdAt': FieldValue.serverTimestamp(),
       'autoReassigned': true,
       'offeredAt': FieldValue.serverTimestamp(),
+    };
+
+    if (scoreComponents != null) {
+      logData['scoringComponents'] = scoreComponents;
+    }
+    if (alternativeDrivers != null) {
+      logData['alternativeRiders'] = alternativeDrivers;
+    }
+
+    final assignmentLogRef =
+        await _firestore.collection('assignments_log').add(logData);
+
+    final now = DateTime.now();
+    final isPeak = activeWeights != null &&
+        ((now.hour >= activeWeights.peakHourStart &&
+                now.hour < activeWeights.peakHourEnd) ||
+            (now.hour >= activeWeights.peakHourStart2 &&
+                now.hour < activeWeights.peakHourEnd2));
+
+    await _firestore.collection('dispatch_events').add({
+      'type': 'admin_dispatch_assigned',
+      'orderId': orderId,
+      'riderId': driverId,
+      'source': 'admin_ui',
+      'timestamp': FieldValue.serverTimestamp(),
+      'decisionTime': FieldValue.serverTimestamp(),
+      if (batchId != null) 'batchId': batchId,
+      'factors': {
+        'distanceKm': distance,
+        'etaMinutes': etaMins.round(),
+        'riderCurrentOrders': riderCurrentOrders ?? 0,
+        'riderHeadingMatch': riderHeadingMatch ?? 0.5,
+        'predictedAcceptanceProb': acceptanceProb ?? 1.0,
+        'restaurantPrepMinutes':
+            restaurantPrepMinutes ?? 0,
+        'timeOfDay': '${now.hour}:00',
+        'dayOfWeek': now.weekday,
+        'isPeakHour': isPeak,
+        'zoneId': zoneId ?? '',
+        'routingSource':
+            routingSource ?? 'haversine',
+      },
+      'scoringComponents': scoreComponents,
+      'totalScore': totalScore,
+      'alternativeRiders': alternativeDrivers,
+      if (activeWeights != null)
+        'activeWeights': {
+          'weightETA': activeWeights.eta,
+          'weightWorkload': activeWeights.workload,
+          'weightDirection': activeWeights.direction,
+          'weightAcceptanceProb':
+              activeWeights.acceptanceProb,
+          'weightFairness': activeWeights.fairness,
+        },
+      'outcome': null,
     });
 
     return assignmentLogRef;

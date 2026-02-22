@@ -6,6 +6,8 @@ import 'package:brgy/constants.dart';
 import 'package:brgy/models/service_area.dart';
 import 'package:brgy/pages/driver_information_page.dart';
 import 'package:brgy/services/delivery_zone_service.dart';
+import 'package:brgy/services/zone_capacity_service.dart';
+import 'package:brgy/widgets/capacity_dashboard_widget.dart';
 
 const _activeStatuses = [
   'Driver Assigned',
@@ -27,11 +29,16 @@ class RiderOverviewPage extends StatefulWidget {
 
 class _RiderOverviewPageState extends State<RiderOverviewPage> {
   late Future<List<ServiceArea>> _zonesFuture;
+  final _capacityService = ZoneCapacityService();
+  late final Stream<List<ZoneCapacity>> _capacityStream;
+  String _capacityFilter = 'all'; // 'all', 'at_capacity', 'near'
 
   @override
   void initState() {
     super.initState();
     _zonesFuture = DeliveryZoneService().getServiceAreas();
+    _capacityStream =
+        _capacityService.streamAllZoneCapacities();
   }
 
   Future<void> _onRefresh() async {
@@ -149,13 +156,67 @@ class _RiderOverviewPageState extends State<RiderOverviewPage> {
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(12),
                       scrollDirection: Axis.vertical,
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: _RiderOverviewTable(
-                          riders: riders,
-                          orderCounts: orderCounts,
-                          areas: areas,
-                        ),
+                      child: Column(
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: [
+                          CapacityDashboardWidget(
+                            capacityStream: _capacityStream,
+                          ),
+                          const SizedBox(height: 8),
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(
+                              horizontal: 8,
+                            ),
+                            child: Wrap(
+                              spacing: 8,
+                              children: [
+                                FilterChip(
+                                  label: const Text('All'),
+                                  selected:
+                                      _capacityFilter == 'all',
+                                  onSelected: (_) => setState(
+                                    () =>
+                                        _capacityFilter = 'all',
+                                  ),
+                                ),
+                                FilterChip(
+                                  label:
+                                      const Text('At Capacity'),
+                                  selected:
+                                      _capacityFilter ==
+                                          'at_capacity',
+                                  onSelected: (_) => setState(
+                                    () => _capacityFilter =
+                                        'at_capacity',
+                                  ),
+                                ),
+                                FilterChip(
+                                  label: const Text(
+                                    'Near Capacity',
+                                  ),
+                                  selected:
+                                      _capacityFilter == 'near',
+                                  onSelected: (_) => setState(
+                                    () =>
+                                        _capacityFilter = 'near',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: _RiderOverviewTable(
+                              riders: riders,
+                              orderCounts: orderCounts,
+                              areas: areas,
+                              capacityFilter: _capacityFilter,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   );
@@ -245,72 +306,177 @@ class _RiderOverviewTable extends StatelessWidget {
   final List<QueryDocumentSnapshot> riders;
   final Map<String, Map<String, int>> orderCounts;
   final List<ServiceArea> areas;
+  final String capacityFilter;
 
   const _RiderOverviewTable({
     required this.riders,
     required this.orderCounts,
     required this.areas,
+    required this.capacityFilter,
   });
+
+  List<QueryDocumentSnapshot> _filteredRiders() {
+    if (capacityFilter == 'all') return riders;
+
+    final atCapZoneIds = <String>{};
+    final nearCapZoneIds = <String>{};
+
+    for (final a in areas) {
+      if (a.maxRiders == null) continue;
+      final assigned = a.assignedDriverIds.length;
+      if (assigned >= a.maxRiders!) {
+        atCapZoneIds.add(a.id);
+      } else if (assigned >= (a.maxRiders! * 0.7)) {
+        nearCapZoneIds.add(a.id);
+      }
+    }
+
+    return riders.where((riderDoc) {
+      final riderId = riderDoc.id;
+      final riderZones = areas
+          .where((a) => a.assignedDriverIds.contains(riderId))
+          .map((a) => a.id)
+          .toSet();
+
+      if (capacityFilter == 'at_capacity') {
+        return riderZones
+            .any((zId) => atCapZoneIds.contains(zId));
+      }
+      if (capacityFilter == 'near') {
+        return riderZones.any(
+          (zId) =>
+              atCapZoneIds.contains(zId) ||
+              nearCapZoneIds.contains(zId),
+        );
+      }
+      return true;
+    }).toList();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final filteredRiders = _filteredRiders();
     return Card(
       child: DataTable(
-        headingRowColor: WidgetStateProperty.all(Colors.grey.shade200),
+        headingRowColor:
+            WidgetStateProperty.all(Colors.grey.shade200),
         columns: const [
           DataColumn(label: Text('Status')),
           DataColumn(label: Text('Name')),
           DataColumn(label: Text('Phone')),
           DataColumn(label: Text('Active'), numeric: true),
           DataColumn(label: Text('Rejected'), numeric: true),
-          DataColumn(label: Text('Completed'), numeric: true),
+          DataColumn(
+            label: Text('Completed'),
+            numeric: true,
+          ),
           DataColumn(label: Text('Location')),
           DataColumn(label: Text('Zones')),
+          DataColumn(label: Text('Capacity')),
           DataColumn(label: Text('Action')),
         ],
-        rows: riders.map((riderDoc) {
-          final riderData = riderDoc.data() as Map<String, dynamic>;
+        rows: filteredRiders.map((riderDoc) {
+          final riderData =
+              riderDoc.data() as Map<String, dynamic>;
           final riderId = riderDoc.id;
-          final counts = orderCounts[riderId] ?? <String, int>{};
-          final zoneNames = areas
-              .where((a) => a.assignedDriverIds.contains(riderId))
-              .map((a) => a.name)
+          final counts =
+              orderCounts[riderId] ?? <String, int>{};
+          final riderZones = areas
+              .where(
+                (a) => a.assignedDriverIds.contains(riderId),
+              )
               .toList();
+          final zoneNames =
+              riderZones.map((a) => a.name).toList();
 
           final firstName = riderData['firstName'] ?? '';
           final lastName = riderData['lastName'] ?? '';
           final phoneNumber = riderData['phoneNumber'] ?? '';
-          final checkedInToday = riderData['checkedInToday'] == true;
+          final displayStatus =
+              riderData['riderDisplayStatus'] as String? ??
+                  '⚪ Offline';
           final riderName = '$firstName $lastName'.trim();
-          final displayName =
-              riderName.isEmpty ? 'Rider ${riderId.substring(0, 8)}...' : riderName;
+          final displayName = riderName.isEmpty
+              ? 'Rider ${riderId.substring(0, 8)}...'
+              : riderName;
 
           final active = counts['active'] ?? 0;
           final rejected = counts['rejected'] ?? 0;
           final completed = counts['completed'] ?? 0;
           final locationStr = _parseLocation(riderData);
-          final zoneStr = zoneNames.isEmpty ? 'No zones' : zoneNames.join(', ');
+          final zoneStr = zoneNames.isEmpty
+              ? 'No zones'
+              : zoneNames.join(', ');
+
+          // Build capacity info from zones this rider belongs to
+          final capWidgets = <Widget>[];
+          for (final z in riderZones) {
+            if (z.maxRiders != null) {
+              final assigned = z.assignedDriverIds.length;
+              final pct =
+                  (assigned / z.maxRiders!).clamp(0.0, 1.0);
+              final color = pct >= 1.0
+                  ? Colors.red
+                  : pct >= 0.9
+                      ? Colors.orange
+                      : pct >= 0.7
+                          ? Colors.amber
+                          : Colors.green;
+              capWidgets.add(
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 40,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
+                        child: LinearProgressIndicator(
+                          value: pct,
+                          backgroundColor: Colors.grey[200],
+                          valueColor:
+                              AlwaysStoppedAnimation(color),
+                          minHeight: 4,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$assigned/${z.maxRiders}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: color,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
 
           return DataRow(
             cells: [
               DataCell(
-                CircleAvatar(
-                  radius: 14,
-                  backgroundColor: checkedInToday ? Colors.green : Colors.grey,
-                  child: const Icon(
-                    Icons.drive_eta,
-                    color: Colors.white,
-                    size: 16,
-                  ),
+                Text(
+                  displayStatus,
+                  style: const TextStyle(fontSize: 13),
                 ),
               ),
               DataCell(
                 Text(
                   displayName,
-                  style: const TextStyle(fontWeight: FontWeight.w500),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
-              DataCell(Text(phoneNumber.isEmpty ? 'No phone' : phoneNumber)),
+              DataCell(
+                Text(
+                  phoneNumber.isEmpty
+                      ? 'No phone'
+                      : phoneNumber,
+                ),
+              ),
               DataCell(Text('$active')),
               DataCell(Text('$rejected')),
               DataCell(Text('$completed')),
@@ -345,12 +511,30 @@ class _RiderOverviewTable extends StatelessWidget {
                 ),
               ),
               DataCell(
+                capWidgets.isEmpty
+                    ? Text(
+                        '—',
+                        style: TextStyle(
+                          color: Colors.grey[400],
+                        ),
+                      )
+                    : Column(
+                        mainAxisAlignment:
+                            MainAxisAlignment.center,
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: capWidgets,
+                      ),
+              ),
+              DataCell(
                 TextButton(
                   onPressed: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) =>
-                            DriverInformationPage(driverId: riderId),
+                            DriverInformationPage(
+                          driverId: riderId,
+                        ),
                       ),
                     );
                   },

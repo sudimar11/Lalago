@@ -193,9 +193,10 @@ class DriverNameChip extends StatelessWidget {
         final driverInfo = snapshot.data!;
         final driverName = driverInfo['name']!;
         final driverPhone = driverInfo['phone'] ?? '';
+        final driverStatus = driverInfo['status'] ?? '';
 
         return Chip(
-          avatar: Icon(Icons.person, size: 16),
+          avatar: const Icon(Icons.person, size: 16),
           label: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -208,6 +209,11 @@ class DriverNameChip extends StatelessWidget {
                     fontSize: 10,
                     color: Colors.grey.shade600,
                   ),
+                ),
+              if (driverStatus.isNotEmpty)
+                Text(
+                  driverStatus,
+                  style: const TextStyle(fontSize: 10),
                 ),
             ],
           ),
@@ -356,10 +362,13 @@ Future<Map<String, String>> fetchDriverInfo(String driverId) async {
     final lastName = driverData['lastName'] ?? '';
     final driverName = '$firstName $lastName'.trim();
     final driverPhone = driverData['phoneNumber'] as String? ?? '';
+    final displayStatus =
+        driverData['riderDisplayStatus'] as String? ?? '';
 
     return {
       'name': driverName.isEmpty ? 'Unknown Driver' : driverName,
       'phone': driverPhone,
+      'status': displayStatus,
     };
   } catch (e) {
     print('Error fetching driver info: $e');

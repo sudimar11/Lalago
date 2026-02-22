@@ -45,6 +45,11 @@ class User with ChangeNotifier {
   num? totalVouchers;
   num? todayVoucherEarned;
   double? driverPerformance;
+  double? acceptanceRate;
+  double? averageRating;
+  double? attendanceScore;
+  String? performanceTier;
+  Map<String, dynamic>? performanceBreakdown;
   int? remainingExcuses;
   List<String>? excusedDays;
   bool? suspended;
@@ -58,6 +63,8 @@ class User with ChangeNotifier {
   String? lastAdminOverrideReason;
   String? lastAdminOverrideAction;
   String? selectedPresetLocationId;
+  String? riderAvailability;
+  String? riderDisplayStatus;
 
   User(
       {this.email = '',
@@ -96,7 +103,12 @@ class User with ChangeNotifier {
       this.isOnline,
       this.totalVouchers = 0.0,
       this.todayVoucherEarned = 0.0,
-      this.driverPerformance = 100.0,
+      this.driverPerformance = 75.0,
+      this.acceptanceRate,
+      this.averageRating,
+      this.attendanceScore,
+      this.performanceTier,
+      this.performanceBreakdown,
       this.remainingExcuses,
       this.excusedDays,
       this.suspended,
@@ -109,7 +121,9 @@ class User with ChangeNotifier {
       this.lastAdminOverrideBy,
       this.lastAdminOverrideReason,
       this.lastAdminOverrideAction,
-      this.selectedPresetLocationId})
+      this.selectedPresetLocationId,
+      this.riderAvailability,
+      this.riderDisplayStatus})
       : this.lastOnlineTimestamp = lastOnlineTimestamp ?? Timestamp.now(),
         this.settings = settings ?? UserSettings(),
         this.appIdentifier =
@@ -260,7 +274,23 @@ class User with ChangeNotifier {
       todayVoucherEarned: parsedJson['todayVoucherEarned'] ?? 0.0,
       driverPerformance: parsedJson['driver_performance'] != null
           ? (parsedJson['driver_performance'] as num).toDouble()
-          : 100.0,
+          : 75.0,
+      acceptanceRate: parsedJson['acceptance_rate'] != null
+          ? (parsedJson['acceptance_rate'] as num).toDouble()
+          : null,
+      averageRating: parsedJson['average_rating'] != null
+          ? (parsedJson['average_rating'] as num).toDouble()
+          : null,
+      attendanceScore: parsedJson['attendance_score'] != null
+          ? (parsedJson['attendance_score'] as num).toDouble()
+          : null,
+      performanceTier: parsedJson['performance_tier'],
+      performanceBreakdown:
+          parsedJson['performance_breakdown'] != null
+              ? Map<String, dynamic>.from(
+                  parsedJson['performance_breakdown'],
+                )
+              : null,
       remainingExcuses: parsedJson['remainingExcuses'] != null
           ? (parsedJson['remainingExcuses'] as num).toInt()
           : null,
@@ -282,6 +312,8 @@ class User with ChangeNotifier {
       lastAdminOverrideReason: parsedJson['lastAdminOverrideReason'],
       lastAdminOverrideAction: parsedJson['lastAdminOverrideAction'],
       selectedPresetLocationId: parsedJson['selectedPresetLocationId'],
+      riderAvailability: parsedJson['riderAvailability'],
+      riderDisplayStatus: parsedJson['riderDisplayStatus'],
     );
   }
 
@@ -319,6 +351,11 @@ class User with ChangeNotifier {
       'totalVouchers': this.totalVouchers,
       'todayVoucherEarned': this.todayVoucherEarned,
       'driver_performance': this.driverPerformance,
+      'acceptance_rate': this.acceptanceRate,
+      'average_rating': this.averageRating,
+      'attendance_score': this.attendanceScore,
+      'performance_tier': this.performanceTier,
+      'performance_breakdown': this.performanceBreakdown,
       'remainingExcuses': this.remainingExcuses,
       'excusedDays': this.excusedDays,
       'suspended': this.suspended,
@@ -332,6 +369,8 @@ class User with ChangeNotifier {
       'lastAdminOverrideReason': this.lastAdminOverrideReason,
       'lastAdminOverrideAction': this.lastAdminOverrideAction,
       'selectedPresetLocationId': this.selectedPresetLocationId,
+      'riderAvailability': this.riderAvailability,
+      'riderDisplayStatus': this.riderDisplayStatus,
     };
     if (this.role == USER_ROLE_DRIVER) {
       json.addAll({

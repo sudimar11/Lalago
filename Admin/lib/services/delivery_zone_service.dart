@@ -2,13 +2,25 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:brgy/models/service_area.dart';
 
+/// Result of matching a delivery location to a service area.
+class DeliveryZoneMatch {
+  final ServiceArea zone;
+  final List<String> driverIds;
+
+  const DeliveryZoneMatch({
+    required this.zone,
+    required this.driverIds,
+  });
+}
+
 class DeliveryZoneService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   static const String _collection = 'service_areas';
 
   Stream<List<ServiceArea>> streamServiceAreas() {
     return _db.collection(_collection).snapshots().map((s) {
-      final list = s.docs.map((d) => ServiceArea.fromDoc(d)).toList();
+      final list =
+          s.docs.map((d) => ServiceArea.fromDoc(d)).toList();
       list.sort((a, b) {
         final o = a.order.compareTo(b.order);
         if (o != 0) return o;
@@ -20,7 +32,8 @@ class DeliveryZoneService {
 
   Future<List<ServiceArea>> getServiceAreas() async {
     final snap = await _db.collection(_collection).get();
-    final list = snap.docs.map((d) => ServiceArea.fromDoc(d)).toList();
+    final list =
+        snap.docs.map((d) => ServiceArea.fromDoc(d)).toList();
     list.sort((a, b) {
       final o = a.order.compareTo(b.order);
       if (o != 0) return o;
@@ -29,8 +42,30 @@ class DeliveryZoneService {
     return list;
   }
 
-  /// Returns assignedDriverIds for the first matching area, or null if none.
+  Future<ServiceArea?> getServiceArea(String id) async {
+    final doc = await _db.collection(_collection).doc(id).get();
+    if (!doc.exists) return null;
+    return ServiceArea.fromDoc(doc);
+  }
+
+  /// Returns assignedDriverIds for the first matching area,
+  /// or null if none.
   Future<List<String>?> getAssignedDriverIdsForDelivery({
+    required double? lat,
+    required double? lng,
+    required String? locality,
+  }) async {
+    final match = await getZoneMatchForDelivery(
+      lat: lat,
+      lng: lng,
+      locality: locality,
+    );
+    return match?.driverIds;
+  }
+
+  /// Returns the matched [DeliveryZoneMatch] (zone + driver IDs)
+  /// for a delivery location, or null if no zone matches.
+  Future<DeliveryZoneMatch?> getZoneMatchForDelivery({
     required double? lat,
     required double? lng,
     required String? locality,
@@ -38,15 +73,18 @@ class DeliveryZoneService {
     final areas = await getServiceAreas();
     if (areas.isEmpty) return null;
 
-    // Sort radius areas by radius ascending (smallest first for overlapping)
     final sorted = List<ServiceArea>.from(areas)
       ..sort((a, b) {
-        if (a.boundaryType == 'radius' && b.boundaryType == 'radius') {
+        if (a.boundaryType == 'radius' &&
+            b.boundaryType == 'radius') {
           final ar = a.radiusKm ?? double.infinity;
           final br = b.radiusKm ?? double.infinity;
           return ar.compareTo(br);
         }
-        if (a.boundaryType == 'fixed' && b.boundaryType == 'fixed') return 0;
+        if (a.boundaryType == 'fixed' &&
+            b.boundaryType == 'fixed') {
+          return 0;
+        }
         return a.boundaryType == 'radius' ? -1 : 1;
       });
 
@@ -58,7 +96,10 @@ class DeliveryZoneService {
           final norm = locality.trim().toLowerCase();
           for (final b in area.barangays) {
             if (b.trim().toLowerCase() == norm) {
-              return area.assignedDriverIds;
+              return DeliveryZoneMatch(
+                zone: area,
+                driverIds: area.assignedDriverIds,
+              );
             }
           }
         }
@@ -69,7 +110,12 @@ class DeliveryZoneService {
         if (clat == null || clng == null || r <= 0) continue;
         if (lat == null || lng == null) continue;
         final dist = _haversineKm(clat, clng, lat, lng);
-        if (dist <= r) return area.assignedDriverIds;
+        if (dist <= r) {
+          return DeliveryZoneMatch(
+            zone: area,
+            driverIds: area.assignedDriverIds,
+          );
+        }
       }
     }
     return null;

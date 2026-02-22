@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:brgy/constants.dart';
 import 'package:brgy/services/rider_performance_service.dart';
+import 'package:brgy/services/performance_tier_helper.dart';
 
 // Match Rider DriverPerformanceService constants
 const double _adjLateCheckin = -1.0;
@@ -84,25 +85,31 @@ class _RiderPerformancePageState extends State<RiderPerformancePage> {
             final ridersSnap = results[0] as QuerySnapshot;
             final ordersSnap = results[1] as QuerySnapshot;
 
-            final Map<String, String> riderNames = {};
-            final Map<String, double?> riderPerformance = {};
-            for (final doc in ridersSnap.docs) {
-              final d = doc.data() as Map<String, dynamic>? ?? {};
-              final name =
-                  '${d['firstName'] ?? ''} ${d['lastName'] ?? ''}'.trim();
-              riderNames[doc.id] =
-                  name.isEmpty ? 'Rider ${doc.id.substring(0, 8)}' : name;
-              final perf = d['driver_performance'];
-              riderPerformance[doc.id] =
-                  perf is num ? perf.toDouble() : null;
-            }
-
             final Map<String, _RiderStats> stats = {};
-            for (final id in riderNames.keys) {
-              stats[id] = _RiderStats(
-                riderId: id,
-                riderName: riderNames[id]!,
-                performancePercent: riderPerformance[id],
+            for (final doc in ridersSnap.docs) {
+              final d = doc.data()
+                  as Map<String, dynamic>? ??
+                  {};
+              final name =
+                  '${d['firstName'] ?? ''} ${d['lastName'] ?? ''}'
+                      .trim();
+              final displayName = name.isEmpty
+                  ? 'Rider ${doc.id.substring(0, 8)}'
+                  : name;
+              final perf = d['driver_performance'];
+              stats[doc.id] = _RiderStats(
+                riderId: doc.id,
+                riderName: displayName,
+                performancePercent:
+                    perf is num ? perf.toDouble() : null,
+                acceptanceRate:
+                    (d['acceptance_rate'] as num?)?.toDouble(),
+                averageRating:
+                    (d['average_rating'] as num?)?.toDouble(),
+                attendanceScore:
+                    (d['attendance_score'] as num?)?.toDouble(),
+                performanceTier:
+                    d['performance_tier'] as String?,
               );
             }
 
@@ -213,84 +220,197 @@ class _RiderPerformancePageState extends State<RiderPerformancePage> {
                                 fontSize: 15,
                               ),
                             ),
-                            subtitle: Wrap(
-                              spacing: 6,
-                              runSpacing: 2,
-                              crossAxisAlignment: WrapCrossAlignment.center,
+                            subtitle: Column(
+                              crossAxisAlignment:
+                                  CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  '7d: ${s.orders7d} • 30d: ${s.orders30d} orders',
-                                  style: const TextStyle(fontSize: 13),
-                                ),
-                                if (s.performancePercent != null) ...[
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: _perfColor(s.performancePercent!)
-                                          .withOpacity(0.15),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(
-                                        color: _perfColor(
-                                            s.performancePercent!),
-                                        width: 1,
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 2,
+                                  crossAxisAlignment:
+                                      WrapCrossAlignment.center,
+                                  children: [
+                                    Text(
+                                      '7d: ${s.orders7d} • 30d: ${s.orders30d} orders',
+                                      style: const TextStyle(
+                                        fontSize: 13,
                                       ),
                                     ),
-                                    child: Text(
-                                      '${s.performancePercent!.toStringAsFixed(0)}%',
+                                    if (s.performancePercent !=
+                                        null) ...[
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding:
+                                            const EdgeInsets
+                                                .symmetric(
+                                          horizontal: 6,
+                                          vertical: 2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: _perfColor(
+                                                  s.performancePercent!)
+                                              .withOpacity(0.15),
+                                          borderRadius:
+                                              BorderRadius
+                                                  .circular(6),
+                                          border: Border.all(
+                                            color: _perfColor(
+                                                s.performancePercent!),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          '${s.performancePercent!.toStringAsFixed(0)}% ${s.performanceTier ?? ''}',
+                                          style: TextStyle(
+                                            fontWeight:
+                                                FontWeight.bold,
+                                            fontSize: 11,
+                                            color: _perfColor(
+                                                s.performancePercent!),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.edit,
+                                        size: 18,
+                                      ),
+                                      padding: EdgeInsets.zero,
+                                      constraints:
+                                          const BoxConstraints(),
+                                      style: IconButton.styleFrom(
+                                        tapTargetSize:
+                                            MaterialTapTargetSize
+                                                .shrinkWrap,
+                                      ),
+                                      onPressed: () async {
+                                        final ok =
+                                            await showDialog<bool>(
+                                          context: context,
+                                          builder: (ctx) =>
+                                              _EditPerformanceDialog(
+                                            riderId: s.riderId,
+                                            riderName: s.riderName,
+                                            currentPerformance:
+                                                s.performancePercent ??
+                                                    75.0,
+                                          ),
+                                        );
+                                        if (ok == true) {
+                                          _onRefresh();
+                                        }
+                                      },
+                                    ),
+                                    Text(
+                                      avgMin != null
+                                          ? '${_formatDuration(avgMin)} avg'
+                                          : '—',
                                       style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 11,
-                                        color: _perfColor(
-                                            s.performancePercent!),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w500,
+                                        color: avgMin != null
+                                            ? (avgMin <= 30
+                                                ? Colors.green
+                                                : avgMin <= 45
+                                                    ? Colors.orange
+                                                    : Colors.red)
+                                            : Colors.grey,
                                       ),
                                     ),
-                                  ),
-                                ],
-                                IconButton(
-                                  icon: const Icon(Icons.edit, size: 18),
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(),
-                                  style: IconButton.styleFrom(
-                                    tapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                  ),
-                                  onPressed: () async {
-                                    final ok = await showDialog<bool>(
-                                      context: context,
-                                      builder: (ctx) =>
-                                          _EditPerformanceDialog(
-                                        riderId: s.riderId,
-                                        riderName: s.riderName,
-                                        currentPerformance:
-                                            s.performancePercent ?? 100.0,
-                                      ),
-                                    );
-                                    if (ok == true) _onRefresh();
-                                  },
+                                  ],
                                 ),
-                                Text(
-                                  avgMin != null
-                                      ? '${_formatDuration(avgMin)} avg'
-                                      : '—',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500,
-                                    color: avgMin != null
-                                        ? (avgMin <= 30
-                                            ? Colors.green
-                                            : avgMin <= 45
-                                                ? Colors.orange
-                                                : Colors.red)
-                                        : Colors.grey,
-                                  ),
+                                const SizedBox(height: 4),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 2,
+                                  children: [
+                                    if (s.acceptanceRate != null)
+                                      Text(
+                                        'Accept: ${s.acceptanceRate!.toStringAsFixed(0)}%',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors
+                                              .blue.shade700,
+                                        ),
+                                      ),
+                                    if (s.averageRating != null)
+                                      Text(
+                                        'Rating: ${s.averageRating!.toStringAsFixed(1)}/5',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors
+                                              .amber.shade800,
+                                        ),
+                                      ),
+                                    if (s.attendanceScore !=
+                                        null)
+                                      Text(
+                                        'Attend: ${s.attendanceScore!.toStringAsFixed(0)}%',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors
+                                              .green.shade700,
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ],
                             ),
                             children: [
+                              if (s.acceptanceRate != null ||
+                                  s.averageRating != null ||
+                                  s.attendanceScore != null)
+                                Padding(
+                                  padding: const EdgeInsets
+                                      .symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment
+                                            .start,
+                                    children: [
+                                      const Text(
+                                        'Performance Breakdown',
+                                        style: TextStyle(
+                                          fontWeight:
+                                              FontWeight.w600,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      if (s.acceptanceRate !=
+                                          null)
+                                        _breakdownRow(
+                                          'Acceptance Rate',
+                                          '${s.acceptanceRate!.toStringAsFixed(1)}%',
+                                          s.acceptanceRate! /
+                                              100,
+                                          Colors.blue,
+                                        ),
+                                      if (s.averageRating !=
+                                          null)
+                                        _breakdownRow(
+                                          'Customer Rating',
+                                          '${s.averageRating!.toStringAsFixed(1)}/5',
+                                          s.averageRating! / 5,
+                                          Colors.amber,
+                                        ),
+                                      if (s.attendanceScore !=
+                                          null)
+                                        _breakdownRow(
+                                          'Attendance',
+                                          '${s.attendanceScore!.toStringAsFixed(1)}%',
+                                          s.attendanceScore! /
+                                              100,
+                                          Colors.green,
+                                        ),
+                                      const Divider(),
+                                    ],
+                                  ),
+                                ),
                               _PerformanceHistorySection(
                                 driverId: s.riderId,
                               ),
@@ -310,9 +430,53 @@ class _RiderPerformancePageState extends State<RiderPerformancePage> {
   }
 
   Color _perfColor(double score) {
-    if (score >= 85) return Colors.green;
-    if (score >= 75) return Colors.orange;
-    return Colors.red;
+    return PerformanceTierHelper.getTier(score).color;
+  }
+
+  Widget _breakdownRow(
+    String label,
+    String valueText,
+    double ratio,
+    Color color,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: ratio.clamp(0.0, 1.0),
+                backgroundColor: Colors.grey.shade200,
+                valueColor:
+                    AlwaysStoppedAnimation<Color>(color),
+                minHeight: 6,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 50,
+            child: Text(
+              valueText,
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -320,6 +484,10 @@ class _RiderStats {
   final String riderId;
   final String riderName;
   final double? performancePercent;
+  final double? acceptanceRate;
+  final double? averageRating;
+  final double? attendanceScore;
+  final String? performanceTier;
   int orders7d = 0;
   int orders30d = 0;
   int totalMinutes = 0;
@@ -329,6 +497,10 @@ class _RiderStats {
     required this.riderId,
     required this.riderName,
     this.performancePercent,
+    this.acceptanceRate,
+    this.averageRating,
+    this.attendanceScore,
+    this.performanceTier,
   });
 }
 
@@ -618,6 +790,36 @@ class _EditPerformanceDialogState extends State<_EditPerformanceDialog> {
                 fontSize: 14,
               ),
             ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Colors.amber.shade300,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    size: 18,
+                    color: Colors.amber.shade800,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This override will be logged in the audit trail with your admin name and reason.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.amber.shade900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 16),
             TextField(
               controller: _valueController,
@@ -625,7 +827,10 @@ class _EditPerformanceDialogState extends State<_EditPerformanceDialog> {
                 labelText: 'Performance (50-100)',
                 border: OutlineInputBorder(),
               ),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType:
+                  const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               textInputAction: TextInputAction.next,
             ),
             const SizedBox(height: 12),

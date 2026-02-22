@@ -222,16 +222,24 @@ class DriverPerformanceService {
     try {
       final currentUserDoc =
           await _firestore.collection('users').doc(driverId).get();
-      if (!currentUserDoc.exists) return 100.0;
+      if (!currentUserDoc.exists) return 75.0;
 
-      final currentPerformance =
-          (currentUserDoc.data()?['driver_performance'] as num?)?.toDouble() ??
-              100.0;
+      final userData = currentUserDoc.data()!;
+      final currentAttendance =
+          (userData['attendance_score'] as num?)?.toDouble() ??
+              (userData['driver_performance'] as num?)?.toDouble() ??
+              75.0;
 
       double adjustment = 0.0;
 
-      final isOnTime = isOnTimeCheckIn(scheduledCheckInTime, actualCheckInTime);
-      final isLate = isLateCheckIn(scheduledCheckInTime, actualCheckInTime);
+      final isOnTime = isOnTimeCheckIn(
+        scheduledCheckInTime,
+        actualCheckInTime,
+      );
+      final isLate = isLateCheckIn(
+        scheduledCheckInTime,
+        actualCheckInTime,
+      );
 
       if (isOnTime) {
         adjustment = ADJUSTMENT_ON_TIME_CHECKIN;
@@ -239,25 +247,24 @@ class DriverPerformanceService {
         adjustment = ADJUSTMENT_LATE_CHECKIN;
       }
 
-      final newPerformance = clampPerformance(currentPerformance + adjustment);
+      final newAttendance =
+          clampPerformance(currentAttendance + adjustment);
 
       await _firestore.collection('users').doc(driverId).update({
-        'driver_performance': newPerformance,
+        'attendance_score': newAttendance,
       });
 
-      // Create partial attendance record at check-in
-      // This prevents the day from being marked as absent if user doesn't check out
       final today = TimeTrackingService.getTodayDateString();
-      final userData = currentUserDoc.data()!;
-      final scheduledCheckOutTime = userData['checkOutTime'] as String?;
+      final scheduledCheckOutTime =
+          userData['checkOutTime'] as String?;
 
       await recordAttendance(driverId,
           date: today,
           scheduledCheckInTime: scheduledCheckInTime,
           actualCheckInTime: actualCheckInTime,
           scheduledCheckOutTime: scheduledCheckOutTime,
-          actualCheckOutTime: null, // Not checked out yet
-          workHours: Duration.zero, // Will be calculated at check-out
+          actualCheckOutTime: null,
+          workHours: Duration.zero,
           scheduledHours: scheduledCheckOutTime != null
               ? calculateScheduledHours(
                   scheduledCheckInTime, scheduledCheckOutTime)
@@ -267,10 +274,10 @@ class DriverPerformanceService {
           isAbsent: false,
           isUndertime: false);
 
-      return newPerformance;
+      return newAttendance;
     } catch (e) {
       print('❌ Error applying check-in adjustment: $e');
-      return 100.0;
+      return 75.0;
     }
   }
 
@@ -285,56 +292,59 @@ class DriverPerformanceService {
     try {
       final currentUserDoc =
           await _firestore.collection('users').doc(driverId).get();
-      if (!currentUserDoc.exists) return 100.0;
+      if (!currentUserDoc.exists) return 75.0;
 
-      final currentPerformance =
-          (currentUserDoc.data()?['driver_performance'] as num?)?.toDouble() ??
-              100.0;
+      final userData = currentUserDoc.data()!;
+      final currentAttendance =
+          (userData['attendance_score'] as num?)?.toDouble() ??
+              (userData['driver_performance'] as num?)?.toDouble() ??
+              75.0;
 
       double adjustment = 0.0;
 
-      // Calculate work hours and scheduled hours
       final workDuration = TimeTrackingService.calculateWorkDuration(
-          actualCheckInTime, actualCheckOutTime);
-      final scheduledDuration = scheduledCheckInTime != null &&
-              scheduledCheckOutTime != null
-          ? calculateScheduledHours(scheduledCheckInTime, scheduledCheckOutTime)
-          : Duration.zero;
+        actualCheckInTime,
+        actualCheckOutTime,
+      );
+      final scheduledDuration =
+          scheduledCheckInTime != null && scheduledCheckOutTime != null
+              ? calculateScheduledHours(
+                  scheduledCheckInTime, scheduledCheckOutTime)
+              : Duration.zero;
 
-      final workHours = workDuration.inHours + (workDuration.inMinutes / 60.0);
-      final scheduledHours =
-          scheduledDuration.inHours + (scheduledDuration.inMinutes / 60.0);
+      final workHours =
+          workDuration.inHours + (workDuration.inMinutes / 60.0);
+      final scheduledHours = scheduledDuration.inHours +
+          (scheduledDuration.inMinutes / 60.0);
 
-      // Check for undertime (work hours < scheduled hours)
-      final isUndertime = scheduledHours > 0 && workHours < scheduledHours;
+      final isUndertime =
+          scheduledHours > 0 && workHours < scheduledHours;
       if (isUndertime) {
         adjustment += ADJUSTMENT_UNDERTIME;
       }
 
-      // Check for 5-hour bonus
       if (workHours >= 5.0) {
         adjustment += ADJUSTMENT_COMPLETE_5_HOURS;
       }
 
-      // Check for perfect attendance streak (7 days)
-      final hasPerfectStreak =
-          await hasPerfectAttendanceStreak(driverId, PERFECT_ATTENDANCE_DAYS);
+      final hasPerfectStreak = await hasPerfectAttendanceStreak(
+        driverId,
+        PERFECT_ATTENDANCE_DAYS,
+      );
       if (hasPerfectStreak) {
         adjustment += ADJUSTMENT_PERFECT_ATTENDANCE_7_DAYS;
       }
 
-      // Update attendance record for today with check-out information
-      // The record should already exist from check-in, and we update it with complete data
       final today = TimeTrackingService.getTodayDateString();
       final isOnTime = scheduledCheckInTime != null
-          ? isOnTimeCheckIn(scheduledCheckInTime, actualCheckInTime)
+          ? isOnTimeCheckIn(
+              scheduledCheckInTime, actualCheckInTime)
           : false;
       final isLate = scheduledCheckInTime != null
-          ? isLateCheckIn(scheduledCheckInTime, actualCheckInTime)
+          ? isLateCheckIn(
+              scheduledCheckInTime, actualCheckInTime)
           : false;
 
-      // Update attendance record with complete check-in and check-out data
-      // This will update the existing record created at check-in
       await recordAttendance(driverId,
           date: today,
           scheduledCheckInTime: scheduledCheckInTime,
@@ -348,66 +358,77 @@ class DriverPerformanceService {
           isAbsent: false,
           isUndertime: isUndertime);
 
-      final newPerformance = clampPerformance(currentPerformance + adjustment);
+      final newAttendance =
+          clampPerformance(currentAttendance + adjustment);
 
       await _firestore.collection('users').doc(driverId).update({
-        'driver_performance': newPerformance,
+        'attendance_score': newAttendance,
       });
 
-      return newPerformance;
+      return newAttendance;
     } catch (e) {
       print('❌ Error applying check-out adjustments: $e');
-      return 100.0;
+      return 75.0;
     }
   }
 
   /// Apply penalty when rider stays outside service area for 30+ minutes
-  static Future<double> applyOutsideServiceAreaPenalty(String driverId) async {
+  static Future<double> applyOutsideServiceAreaPenalty(
+    String driverId,
+  ) async {
     try {
       final currentUserDoc =
           await _firestore.collection('users').doc(driverId).get();
-      if (!currentUserDoc.exists) return 100.0;
+      if (!currentUserDoc.exists) return 75.0;
 
-      final currentPerformance =
-          (currentUserDoc.data()?['driver_performance'] as num?)?.toDouble() ??
-              100.0;
+      final data = currentUserDoc.data()!;
+      final currentAttendance =
+          (data['attendance_score'] as num?)?.toDouble() ??
+              (data['driver_performance'] as num?)?.toDouble() ??
+              75.0;
 
-      final newPerformance =
-          clampPerformance(currentPerformance + ADJUSTMENT_OUTSIDE_SERVICE_AREA);
+      final newAttendance = clampPerformance(
+        currentAttendance + ADJUSTMENT_OUTSIDE_SERVICE_AREA,
+      );
 
       await _firestore.collection('users').doc(driverId).update({
-        'driver_performance': newPerformance,
+        'attendance_score': newAttendance,
       });
 
-      return newPerformance;
+      return newAttendance;
     } catch (e) {
       print('❌ Error applying outside service area penalty: $e');
-      return 100.0;
+      return 75.0;
     }
   }
 
   /// Apply penalty for driver-fault cancellation
-  static Future<double> applyCancellationPenalty(String driverId) async {
+  static Future<double> applyCancellationPenalty(
+    String driverId,
+  ) async {
     try {
       final currentUserDoc =
           await _firestore.collection('users').doc(driverId).get();
-      if (!currentUserDoc.exists) return 100.0;
+      if (!currentUserDoc.exists) return 75.0;
 
-      final currentPerformance =
-          (currentUserDoc.data()?['driver_performance'] as num?)?.toDouble() ??
-              100.0;
+      final data = currentUserDoc.data()!;
+      final currentAttendance =
+          (data['attendance_score'] as num?)?.toDouble() ??
+              (data['driver_performance'] as num?)?.toDouble() ??
+              75.0;
 
-      final newPerformance =
-          clampPerformance(currentPerformance + ADJUSTMENT_CANCELLATION);
+      final newAttendance = clampPerformance(
+        currentAttendance + ADJUSTMENT_CANCELLATION,
+      );
 
       await _firestore.collection('users').doc(driverId).update({
-        'driver_performance': newPerformance,
+        'attendance_score': newAttendance,
       });
 
-      return newPerformance;
+      return newAttendance;
     } catch (e) {
       print('❌ Error applying cancellation penalty: $e');
-      return 100.0;
+      return 75.0;
     }
   }
 
@@ -418,21 +439,21 @@ class DriverPerformanceService {
     try {
       final currentUserDoc =
           await _firestore.collection('users').doc(driverId).get();
-      if (!currentUserDoc.exists) return 100.0;
+      if (!currentUserDoc.exists) return 75.0;
 
-      // Use provided date or default to today
       final targetDate = date ?? TimeTrackingService.getTodayDateString();
       final userData = currentUserDoc.data()!;
-      final excusedDays = List<String>.from(userData['excusedDays'] ?? []);
+      final excusedDays =
+          List<String>.from(userData['excusedDays'] ?? []);
 
-      // Check if date is already excused
       if (excusedDays.contains(targetDate)) {
         print(
             'ℹ️ Driver $driverId is excused for $targetDate, skipping absence marking');
-        // Return current performance without penalty
-        final currentPerformance =
-            (userData['driver_performance'] as num?)?.toDouble() ?? 100.0;
-        return currentPerformance;
+        final currentAttendance =
+            (userData['attendance_score'] as num?)?.toDouble() ??
+                (userData['driver_performance'] as num?)?.toDouble() ??
+                75.0;
+        return currentAttendance;
       }
 
       // Check if attendance record already exists for this date
@@ -453,9 +474,12 @@ class DriverPerformanceService {
         if (isAlreadyAbsent || isAlreadyExcused) {
           print(
               'ℹ️ Driver $driverId already has attendance record for $targetDate, skipping');
-          final currentPerformance =
-              (userData['driver_performance'] as num?)?.toDouble() ?? 100.0;
-          return currentPerformance;
+          final currentAttendance =
+              (userData['attendance_score'] as num?)?.toDouble() ??
+                  (userData['driver_performance'] as num?)
+                      ?.toDouble() ??
+                  75.0;
+          return currentAttendance;
         }
 
         // Safeguard: If user has checked in (actualCheckInTime exists), don't overwrite with absent
@@ -463,19 +487,23 @@ class DriverPerformanceService {
         if (actualCheckInTime != null && actualCheckInTime.isNotEmpty) {
           print(
               'ℹ️ Driver $driverId already checked in for $targetDate (check-in time: $actualCheckInTime), skipping absence marking');
-          final currentPerformance =
-              (userData['driver_performance'] as num?)?.toDouble() ?? 100.0;
-          return currentPerformance;
+          final currentAttendance =
+              (userData['attendance_score'] as num?)?.toDouble() ??
+                  (userData['driver_performance'] as num?)
+                      ?.toDouble() ??
+                  75.0;
+          return currentAttendance;
         }
       }
 
-      final currentPerformance =
-          (userData['driver_performance'] as num?)?.toDouble() ?? 100.0;
+      final currentAttendance =
+          (userData['attendance_score'] as num?)?.toDouble() ??
+              (userData['driver_performance'] as num?)?.toDouble() ??
+              75.0;
 
-      final newPerformance =
-          clampPerformance(currentPerformance + ADJUSTMENT_ABSENT);
+      final newAttendance =
+          clampPerformance(currentAttendance + ADJUSTMENT_ABSENT);
 
-      // Record absent attendance
       await recordAttendance(driverId,
           date: targetDate,
           scheduledCheckInTime: null,
@@ -491,47 +519,49 @@ class DriverPerformanceService {
           isExcused: false);
 
       await _firestore.collection('users').doc(driverId).update({
-        'driver_performance': newPerformance,
+        'attendance_score': newAttendance,
       });
 
       print(
-          '✅ Marked driver $driverId as absent for $targetDate (performance: $currentPerformance -> $newPerformance)');
-      return newPerformance;
+          '✅ Marked driver $driverId as absent for $targetDate (attendance: $currentAttendance -> $newAttendance)');
+      return newAttendance;
     } catch (e) {
       print('❌ Error recording absent day: $e');
-      return 100.0;
+      return 75.0;
     }
   }
 
   /// Get current performance score
   static Future<double> getCurrentPerformance(String driverId) async {
     try {
-      final doc = await _firestore.collection('users').doc(driverId).get();
-      if (!doc.exists) return 100.0;
+      final doc =
+          await _firestore.collection('users').doc(driverId).get();
+      if (!doc.exists) return 75.0;
 
       final performance =
           (doc.data()?['driver_performance'] as num?)?.toDouble();
-      return performance ?? 100.0;
+      return performance ?? 75.0;
     } catch (e) {
       print('❌ Error getting current performance: $e');
-      return 100.0;
+      return 75.0;
     }
   }
 
-  /// Initialize performance score for existing drivers
   static Future<void> initializePerformance(String driverId) async {
     try {
-      final doc = await _firestore.collection('users').doc(driverId).get();
+      final doc =
+          await _firestore.collection('users').doc(driverId).get();
       if (!doc.exists) return;
 
       final data = doc.data();
       if (data == null) return;
 
-      // Only initialize if driver_performance doesn't exist
       if (!data.containsKey('driver_performance') ||
           data['driver_performance'] == null) {
         await _firestore.collection('users').doc(driverId).update({
-          'driver_performance': 100.0,
+          'driver_performance': 75.0,
+          'attendance_score': 75.0,
+          'performance_tier': 'Silver',
         });
       }
     } catch (e) {

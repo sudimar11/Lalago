@@ -26,9 +26,11 @@ import 'package:foodie_driver/widgets/attendance_card.dart';
 import 'package:foodie_driver/widgets/time_input_dialog.dart';
 import 'package:foodie_driver/services/time_tracking_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
+import 'package:foodie_driver/services/performance_tier_helper.dart';
 import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/ui/profile/AttendanceHistoryScreen.dart';
 import 'package:foodie_driver/widgets/shared_app_bar.dart';
+import 'package:foodie_driver/services/order_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   final User user;
@@ -95,7 +97,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (MyAppState.currentUser!.driverPerformance == null) {
       DriverPerformanceService.initializePerformance(
           MyAppState.currentUser!.userID);
-      MyAppState.currentUser!.driverPerformance = 100.0;
+      MyAppState.currentUser!.driverPerformance = 75.0;
     }
   }
 
@@ -465,96 +467,251 @@ class _ProfileScreenState extends State<ProfileScreen> {
               },
             ),
           ),
-          // Performance Score Card
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: Card(
-              elevation: 1,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: _getPerformanceColor(
-                                MyAppState.currentUser!.driverPerformance ??
-                                    100.0)
-                            .withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10),
+          StreamBuilder<DocumentSnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('users')
+                .doc(MyAppState.currentUser!.userID)
+                .snapshots(),
+            builder: (context, snapshot) {
+              final data = snapshot.data?.data()
+                  as Map<String, dynamic>? ??
+                  {};
+              final perf =
+                  (data['driver_performance'] as num?)
+                      ?.toDouble() ??
+                  75.0;
+              final accRate =
+                  (data['acceptance_rate'] as num?)
+                      ?.toDouble();
+              final avgRating =
+                  (data['average_rating'] as num?)
+                      ?.toDouble();
+              final attScore =
+                  (data['attendance_score'] as num?)
+                      ?.toDouble();
+              final tier = PerformanceTierHelper.getTier(perf);
+              final tierConfig =
+                  PerformanceTierHelper.defaultConfig;
+
+              double? nextThreshold;
+              String? nextTierName;
+              if (perf < tierConfig.bronzeThreshold) {
+                nextThreshold = tierConfig.bronzeThreshold;
+                nextTierName = 'Bronze';
+              } else if (perf < tierConfig.silverThreshold) {
+                nextThreshold = tierConfig.silverThreshold;
+                nextTierName = 'Silver';
+              } else if (perf < tierConfig.goldThreshold) {
+                nextThreshold = tierConfig.goldThreshold;
+                nextTierName = 'Gold';
+              }
+
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
+                    child: Card(
+                      elevation: 1,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Icon(
-                        Icons.trending_up,
-                        color: _getPerformanceColor(
-                            MyAppState.currentUser!.driverPerformance ?? 100.0),
-                        size: 24,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: tier.color
+                                    .withValues(alpha: 0.12),
+                                borderRadius:
+                                    BorderRadius.circular(10),
+                              ),
+                              child: Icon(
+                                Icons.trending_up,
+                                color: tier.color,
+                                size: 24,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Performance Score',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: isDarkMode(context)
+                                          ? Colors.grey.shade400
+                                          : Colors.grey.shade600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment
+                                            .baseline,
+                                    textBaseline:
+                                        TextBaseline.alphabetic,
+                                    children: [
+                                      Text(
+                                        '${perf.toStringAsFixed(1)}%',
+                                        style: TextStyle(
+                                          fontSize: 28,
+                                          fontWeight:
+                                              FontWeight.bold,
+                                          color: tier.color,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding:
+                                            const EdgeInsets
+                                                .symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: tier.color
+                                              .withValues(
+                                            alpha: 0.15,
+                                          ),
+                                          borderRadius:
+                                              BorderRadius
+                                                  .circular(8),
+                                        ),
+                                        child: Text(
+                                          tier.name,
+                                          style: TextStyle(
+                                            color: tier.color,
+                                            fontWeight:
+                                                FontWeight.w600,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Performance Score',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: isDarkMode(context)
-                                  ? Colors.grey.shade400
-                                  : Colors.grey.shade600,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.baseline,
-                            textBaseline: TextBaseline.alphabetic,
-                            children: [
-                              Text(
-                                '${(MyAppState.currentUser!.driverPerformance ?? 100.0).toStringAsFixed(1)}%',
-                                style: TextStyle(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.bold,
-                                  color: _getPerformanceColor(
-                                      MyAppState.currentUser!.driverPerformance ??
-                                          100.0),
-                                ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 2,
+                    ),
+                    child: Card(
+                      elevation: 1,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Performance Breakdown',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: isDarkMode(context)
+                                    ? Colors.grey.shade300
+                                    : Colors.grey.shade700,
                               ),
-                              const SizedBox(width: 8),
+                            ),
+                            const SizedBox(height: 12),
+                            _buildMetricRow(
+                              context,
+                              'Acceptance Rate',
+                              accRate != null
+                                  ? '${accRate.toStringAsFixed(1)}%'
+                                  : '--',
+                              accRate ?? 0,
+                              100,
+                              Colors.blue,
+                            ),
+                            const SizedBox(height: 8),
+                            _buildMetricRow(
+                              context,
+                              'Customer Rating',
+                              avgRating != null
+                                  ? '${avgRating.toStringAsFixed(1)}/5'
+                                  : '--',
+                              avgRating ?? 0,
+                              5,
+                              Colors.amber,
+                            ),
+                            const SizedBox(height: 8),
+                            _buildMetricRow(
+                              context,
+                              'Attendance',
+                              attScore != null
+                                  ? '${attScore.toStringAsFixed(1)}%'
+                                  : '--',
+                              attScore ?? 0,
+                              100,
+                              Colors.green,
+                            ),
+                            if (nextTierName != null &&
+                                nextThreshold != null) ...[
+                              const SizedBox(height: 12),
                               Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
+                                padding:
+                                    const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: _getPerformanceColor(MyAppState
-                                              .currentUser!.driverPerformance ??
-                                          100.0)
-                                      .withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
+                                  color: isDarkMode(context)
+                                      ? Colors.blueGrey.shade800
+                                      : Colors.blue.shade50,
+                                  borderRadius:
+                                      BorderRadius.circular(8),
                                 ),
                                 child: Text(
-                                  _getPerformanceLabel(
-                                      MyAppState.currentUser!.driverPerformance ??
-                                          100.0),
+                                  '${(nextThreshold - perf).toStringAsFixed(1)} points to $nextTierName',
                                   style: TextStyle(
-                                    color: _getPerformanceColor(
-                                        MyAppState.currentUser!.driverPerformance ??
-                                            100.0),
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 11,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                    color: isDarkMode(context)
+                                        ? Colors.blue.shade200
+                                        : Colors.blue.shade700,
                                   ),
                                 ),
                               ),
                             ],
-                          ),
-                        ],
+                            const SizedBox(height: 10),
+                            Text(
+                              'Gold: +20% per delivery  |  '
+                              'Silver: +10%  |  '
+                              'Bronze: base rate',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isDarkMode(context)
+                                    ? Colors.grey.shade500
+                                    : Colors.grey.shade500,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ),
+                  ),
+                ],
+              );
+            },
           ),
           // Today's Bonus Card
           Padding(
@@ -1994,6 +2151,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // Save to Firebase
       print('🔥 DEBUG: Saving check-in data to Firebase...');
       await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
+      await OrderService.updateRiderStatus();
       print('✅ DEBUG: Check-in data saved to Firebase successfully');
 
       // Save the last check-in date
@@ -2319,6 +2477,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       http.post(Uri.parse('http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),headers:{'Content-Type':'application/json'},body:json.encode({'location':'ProfileScreen.dart:2138','message':'Before Firebase save','data':{'checkedInToday':MyAppState.currentUser!.checkedInToday,'checkedOutToday':MyAppState.currentUser!.checkedOutToday,'isOnline':MyAppState.currentUser!.isOnline},'timestamp':DateTime.now().millisecondsSinceEpoch,'sessionId':'debug-session','runId':'checkout-test','hypothesisId':'E'})).catchError((_)=>http.Response('', 500));
       // #endregion
       await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
+      await OrderService.updateRiderStatus();
       print('✅ DEBUG: Check-out data saved to Firebase successfully');
       // #region agent log
       http.post(Uri.parse('http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),headers:{'Content-Type':'application/json'},body:json.encode({'location':'ProfileScreen.dart:2140','message':'After Firebase save','data':{'checkedInToday':MyAppState.currentUser!.checkedInToday,'checkedOutToday':MyAppState.currentUser!.checkedOutToday,'isOnline':MyAppState.currentUser!.isOnline},'timestamp':DateTime.now().millisecondsSinceEpoch,'sessionId':'debug-session','runId':'checkout-test','hypothesisId':'E'})).catchError((_)=>http.Response('', 500));
@@ -2951,29 +3110,69 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // Get performance color based on score
   Color _getPerformanceColor(double score) {
-    if (score >= 90) {
-      return Colors.green;
-    } else if (score >= 75) {
-      return Colors.orange;
-    } else if (score >= 60) {
-      return Colors.amber;
-    } else {
-      return Colors.red;
-    }
+    return PerformanceTierHelper.getTier(score).color;
   }
 
-  // Get performance label based on score
   String _getPerformanceLabel(double score) {
-    if (score >= 90) {
-      return 'Excellent';
-    } else if (score >= 75) {
-      return 'Good';
-    } else if (score >= 60) {
-      return 'Fair';
-    } else {
-      return 'Needs Improvement';
-    }
+    return PerformanceTierHelper.getTier(score).name;
+  }
+
+  Widget _buildMetricRow(
+    BuildContext context,
+    String label,
+    String valueText,
+    double value,
+    double maxValue,
+    Color color,
+  ) {
+    final ratio = maxValue > 0
+        ? (value / maxValue).clamp(0.0, 1.0)
+        : 0.0;
+    return Row(
+      children: [
+        SizedBox(
+          width: 110,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: isDarkMode(context)
+                  ? Colors.grey.shade400
+                  : Colors.grey.shade600,
+            ),
+          ),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: ratio,
+              backgroundColor: isDarkMode(context)
+                  ? Colors.grey.shade800
+                  : Colors.grey.shade200,
+              valueColor:
+                  AlwaysStoppedAnimation<Color>(color),
+              minHeight: 6,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 48,
+          child: Text(
+            valueText,
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: isDarkMode(context)
+                  ? Colors.white70
+                  : Colors.black87,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }

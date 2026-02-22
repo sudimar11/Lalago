@@ -3,6 +3,16 @@ service cloud.firestore {
   match /databases/{database}/documents {
     // Temporary rules for testing
     // WARNING: These rules are NOT for production use
+    // Validate riderAvailability values on user documents
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && (!('riderAvailability' in request.resource.data) ||
+            request.resource.data.riderAvailability in
+            ['available', 'on_delivery', 'on_break', 'offline',
+             'checked_out', 'suspended']);
+    }
+
     match /{document=**} {
       // Reads remain open for now; writes require authentication.
       allow read: if true;

@@ -143,7 +143,8 @@ class DeliveryZoneSettingsPage extends StatelessWidget {
                       child: Text(
                         '${a.boundaryType == "radius" ? "Radius ${a.radiusKm?.toStringAsFixed(0) ?? "?"} km" : "Fixed"} • '
                         '${a.barangays.length} barangays • '
-                        '${a.assignedDriverIds.length} riders',
+                        '${a.assignedDriverIds.length} riders'
+                        '${a.maxRiders != null ? " • Cap: ${a.maxRiders}" : ""}',
                         style: TextStyle(
                           color: Colors.grey[600],
                           fontSize: 13,
@@ -190,6 +191,7 @@ class _ServiceAreaEditPageState extends State<_ServiceAreaEditPage> {
   final _nameCtrl = TextEditingController();
   final _barangayCtrl = TextEditingController();
   final _searchCtrl = TextEditingController();
+  final _maxRidersCtrl = TextEditingController();
   final _mapControllerCompleter = Completer<GoogleMapController>();
 
   bool _searching = false;
@@ -219,6 +221,9 @@ class _ServiceAreaEditPageState extends State<_ServiceAreaEditPage> {
     _centerLat = a?.centerLat;
     _centerLng = a?.centerLng;
     _selectedDriverIds = Set.from(a?.assignedDriverIds ?? []);
+    if (a?.maxRiders != null) {
+      _maxRidersCtrl.text = a!.maxRiders.toString();
+    }
   }
 
   @override
@@ -226,6 +231,7 @@ class _ServiceAreaEditPageState extends State<_ServiceAreaEditPage> {
     _nameCtrl.dispose();
     _barangayCtrl.dispose();
     _searchCtrl.dispose();
+    _maxRidersCtrl.dispose();
     super.dispose();
   }
 
@@ -394,6 +400,21 @@ class _ServiceAreaEditPageState extends State<_ServiceAreaEditPage> {
         return;
       }
     }
+    final maxRidersText = _maxRidersCtrl.text.trim();
+    int? parsedMaxRiders;
+    if (maxRidersText.isNotEmpty) {
+      parsedMaxRiders = int.tryParse(maxRidersText);
+      if (parsedMaxRiders == null || parsedMaxRiders <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Max riders must be a positive number',
+            ),
+          ),
+        );
+        return;
+      }
+    }
     setState(() => _saving = true);
     try {
       final area = ServiceArea(
@@ -408,6 +429,7 @@ class _ServiceAreaEditPageState extends State<_ServiceAreaEditPage> {
         createdAt: widget.initial?.createdAt,
         updatedAt: null,
         order: widget.initial?.order ?? 0,
+        maxRiders: parsedMaxRiders,
       );
       if (widget.initial != null) {
         await _service.update(widget.initial!.id, area);
@@ -776,6 +798,104 @@ class _ServiceAreaEditPageState extends State<_ServiceAreaEditPage> {
                         showCheckmark: true,
                       );
                     }).toList(),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 16),
+            _SectionCard(
+              icon: Icons.groups_outlined,
+              title: 'Rider Capacity',
+              children: [
+                TextField(
+                  controller: _maxRidersCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Maximum Riders',
+                    hintText: 'Leave empty for unlimited',
+                    filled: true,
+                    prefixIcon: const Icon(
+                      Icons.people_outline,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 16,
+                    ),
+                  ),
+                  keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.next,
+                ),
+                if (widget.initial != null &&
+                    widget.initial!
+                        .assignedDriverIds.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection(USERS)
+                        .where(
+                          'role',
+                          isEqualTo: USER_ROLE_DRIVER,
+                        )
+                        .snapshots(),
+                    builder: (context, snap) {
+                      if (!snap.hasData) {
+                        return const SizedBox.shrink();
+                      }
+                      final ids =
+                          widget.initial!.assignedDriverIds;
+                      final fiveMinAgo = DateTime.now().subtract(
+                        const Duration(minutes: 5),
+                      );
+                      int active = 0;
+                      for (final doc in snap.data!.docs) {
+                        if (!ids.contains(doc.id)) continue;
+                        final d = doc.data()
+                            as Map<String, dynamic>;
+                        if (d['checkedOutToday'] == true) {
+                          continue;
+                        }
+                        final ts =
+                            d['locationUpdatedAt'] as Timestamp?;
+                        if (ts != null &&
+                            ts.toDate().isAfter(fiveMinAgo)) {
+                          active++;
+                        }
+                      }
+                      final max = widget.initial!.maxRiders;
+                      final label = max != null
+                          ? '$active / $max active now'
+                          : '$active active now (unlimited)';
+                      final isOver =
+                          max != null && active >= max;
+                      return Row(
+                        children: [
+                          Icon(
+                            isOver
+                                ? Icons.warning_amber_rounded
+                                : Icons.info_outline,
+                            size: 18,
+                            color: isOver
+                                ? Colors.red
+                                : Colors.grey[600],
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            label,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: isOver
+                                  ? Colors.red
+                                  : Colors.grey[600],
+                              fontWeight: isOver
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ],
               ],

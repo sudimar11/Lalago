@@ -12,6 +12,11 @@ class ServiceArea {
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final int order;
+  final int? maxRiders; // null = unlimited
+  final int currentActiveRiders;
+
+  bool get isAtCapacity =>
+      maxRiders != null && currentActiveRiders >= maxRiders!;
 
   const ServiceArea({
     required this.id,
@@ -25,9 +30,35 @@ class ServiceArea {
     this.createdAt,
     this.updatedAt,
     this.order = 0,
+    this.maxRiders,
+    this.currentActiveRiders = 0,
   });
 
-  factory ServiceArea.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+  ServiceArea copyWith({
+    int? currentActiveRiders,
+    int? maxRiders,
+  }) {
+    return ServiceArea(
+      id: id,
+      name: name,
+      barangays: barangays,
+      boundaryType: boundaryType,
+      centerLat: centerLat,
+      centerLng: centerLng,
+      radiusKm: radiusKm,
+      assignedDriverIds: assignedDriverIds,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      order: order,
+      maxRiders: maxRiders ?? this.maxRiders,
+      currentActiveRiders:
+          currentActiveRiders ?? this.currentActiveRiders,
+    );
+  }
+
+  factory ServiceArea.fromDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
     final d = doc.data() ?? {};
     final rawBarangays = d['barangays'];
     final rawDrivers = d['assignedDriverIds'];
@@ -46,7 +77,8 @@ class ServiceArea {
           : [],
       createdAt: _toDateTime(d['createdAt']),
       updatedAt: _toDateTime(d['updatedAt']),
-      order: (d['order'] is num) ? (d['order'] as num).toInt() : 0,
+      order: _toInt(d['order']) ?? 0,
+      maxRiders: _toInt(d['maxRiders']),
     );
   }
 
@@ -54,6 +86,13 @@ class ServiceArea {
     if (v == null) return null;
     if (v is num) return v.toDouble();
     if (v is String) return double.tryParse(v);
+    return null;
+  }
+
+  static int? _toInt(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v);
     return null;
   }
 
@@ -76,6 +115,11 @@ class ServiceArea {
       if (centerLat != null) m['centerLat'] = centerLat;
       if (centerLng != null) m['centerLng'] = centerLng;
       if (radiusKm != null) m['radiusKm'] = radiusKm;
+    }
+    if (maxRiders != null) {
+      m['maxRiders'] = maxRiders;
+    } else {
+      m['maxRiders'] = null;
     }
     m['updatedAt'] = FieldValue.serverTimestamp();
     return m;
