@@ -5140,6 +5140,63 @@ class FireStoreUtils {
     }
   }
 
+  /// Paginated fetch of orders by status (e.g. completed).
+  /// Requires Firestore composite index: authorID, status, createdAt.
+  Future<Map<String, dynamic>> getOrdersByStatusPaginated({
+    required String userID,
+    required String status,
+    int limit = 10,
+    DocumentSnapshot? lastDocument,
+  }) async {
+    try {
+      Query query = firestore
+          .collection(ORDERS)
+          .where('authorID', isEqualTo: userID)
+          .where('status', isEqualTo: status)
+          .orderBy('createdAt', descending: true)
+          .limit(limit);
+
+      if (lastDocument != null) {
+        query = query.startAfterDocument(lastDocument);
+      }
+
+      final snapshot = await query.get();
+
+      final orders = snapshot.docs
+          .map((doc) {
+            try {
+              final data = doc.data() as Map<String, dynamic>;
+              return OrderModel.fromJson(data);
+            } catch (e) {
+              debugPrint(
+                  'getOrdersByStatusPaginated parse error ${doc.id}: $e');
+              return null;
+            }
+          })
+          .whereType<OrderModel>()
+          .toList();
+
+      final lastDoc =
+          snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+
+      return {
+        'orders': orders,
+        'lastDocument': lastDoc,
+      };
+    } catch (e, stackTrace) {
+      debugPrint('getOrdersByStatusPaginated error: $e');
+      debugPrint('StackTrace: $stackTrace');
+      if (e.toString().contains('index')) {
+        debugPrint(
+            'Firestore index may be missing. Check console for index link.');
+      }
+      return {
+        'orders': <OrderModel>[],
+        'lastDocument': null,
+      };
+    }
+  }
+
   Future<List<VendorModel>> getPopularRestaurantsPaginated({
     required int limit,
     DocumentSnapshot? lastDocument,

@@ -15,6 +15,7 @@ import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/services/audio_service.dart';
 import 'package:foodie_driver/services/order_location_service.dart';
 import 'package:foodie_driver/services/order_chat_service.dart';
+import 'package:foodie_driver/services/proximity_config_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
 import 'package:foodie_driver/services/order_service.dart';
@@ -35,6 +36,8 @@ import 'package:foodie_driver/widgets/shrinking_timer_bar.dart';
 
 const String _keyAutoMarkPickedUpAtRestaurant =
     'auto_mark_picked_up_at_restaurant';
+const String _keyPickupOverrideSkipFarWarning =
+    'pickup_override_skip_far_warning';
 
 // Dark map style JSON (cached to avoid repeated string operations)
 const String _darkMapStyle = '[{"featureType": "all","elementType": "geometry","stylers": [{"color": "#242f3e"}]},{"featureType": "all","elementType": "labels.text.stroke","stylers": [{"lightness": -80}]},{"featureType": "administrative","elementType": "labels.text.fill","stylers": [{"color": "#746855"}]},{"featureType": "administrative.locality","elementType": "labels.text.fill","stylers": [{"color": "#d59563"}]},{"featureType": "poi","elementType": "labels.text.fill","stylers": [{"color": "#d59563"}]},{"featureType": "poi.park","elementType": "geometry","stylers": [{"color": "#263c3f"}]},{"featureType": "poi.park","elementType": "labels.text.fill","stylers": [{"color": "#6b9a76"}]},{"featureType": "road","elementType": "geometry.fill","stylers": [{"color": "#2b3544"}]},{"featureType": "road","elementType": "labels.text.fill","stylers": [{"color": "#9ca5b3"}]},{"featureType": "road.arterial","elementType": "geometry.fill","stylers": [{"color": "#38414e"}]},{"featureType": "road.arterial","elementType": "geometry.stroke","stylers": [{"color": "#212a37"}]},{"featureType": "road.highway","elementType": "geometry.fill","stylers": [{"color": "#746855"}]},{"featureType": "road.highway","elementType": "geometry.stroke","stylers": [{"color": "#1f2835"}]},{"featureType": "road.highway","elementType": "labels.text.fill","stylers": [{"color": "#f3d19c"}]},{"featureType": "road.local","elementType": "geometry.fill","stylers": [{"color": "#38414e"}]},{"featureType": "road.local","elementType": "geometry.stroke","stylers": [{"color": "#212a37"}]},{"featureType": "transit","elementType": "geometry","stylers": [{"color": "#2f3948"}]},{"featureType": "transit.station","elementType": "labels.text.fill","stylers": [{"color": "#d59563"}]},{"featureType": "water","elementType": "geometry","stylers": [{"color": "#17263c"}]},{"featureType": "water","elementType": "labels.text.fill","stylers": [{"color": "#515c6d"}]},{"featureType": "water","elementType": "labels.text.stroke","stylers": [{"lightness": -20}]}]';
@@ -435,16 +438,23 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   /// Mark order as picked up (In Transit) and set restaurantArrivalConfirmed.
-  Future<void> _doPickupAtRestaurant(String orderId) async {
+  /// When [fromMapOverride] is true, logs pickupMethod and pickedUpFarFromRestaurant.
+  Future<void> _doPickupAtRestaurant(String orderId,
+      {bool fromMapOverride = false}) async {
     try {
-      await FirebaseFirestore.instance
-          .collection(ORDERS)
-          .doc(orderId)
-          .update({
+      final data = <String, dynamic>{
         'status': 'In Transit',
         'pickedUpAt': FieldValue.serverTimestamp(),
         'restaurantArrivalConfirmed': true,
-      });
+      };
+      if (fromMapOverride) {
+        data['pickupMethod'] = 'map_override';
+        data['pickedUpFarFromRestaurant'] = true;
+      }
+      await FirebaseFirestore.instance
+          .collection(ORDERS)
+          .doc(orderId)
+          .update(data);
 
       final currentUserId = MyAppState.currentUser?.userID;
       if (currentOrder != null && currentUserId != null) {
@@ -479,6 +489,54 @@ class HomeScreenState extends State<HomeScreen> {
           backgroundColor: Colors.red,
         );
       }
+    }
+  }
+
+  /// Handles tap on pickup-phase button: near opens PickOrder, far shows dialog
+  /// or direct pickup (when "Don't show again" is set).
+  Future<void> _handlePickupButtonTap() async {
+    if (currentOrder == null) return;
+    final orderId = currentOrder!.id;
+    final driverLocation = MyAppState.currentUser?.location;
+
+    bool isNear;
+    int distanceMeters = 0;
+    if (driverLocation == null) {
+      isNear = false;
+    } else {
+      await ProximityConfigService.instance.getConfig();
+      final threshold =
+          ProximityConfigService.instance.enterThreshold;
+      distanceMeters = Geolocator.distanceBetween(
+        currentOrder!.vendor.latitude,
+        currentOrder!.vendor.longitude,
+        driverLocation.latitude,
+        driverLocation.longitude,
+      ).round();
+      isNear = distanceMeters <= threshold;
+    }
+
+    if (isNear) {
+      push(context, PickOrder(currentOrder: currentOrder));
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_keyPickupOverrideSkipFarWarning) == true) {
+      await _doPickupAtRestaurant(orderId, fromMapOverride: true);
+      return;
+    }
+
+    final result = await DialogUtils.showConfirmPickupWhenFarDialog(
+      context,
+      distanceMeters: distanceMeters,
+    );
+    if (!mounted) return;
+    if (result == null || !result.confirmed) return;
+
+    await _doPickupAtRestaurant(orderId, fromMapOverride: true);
+    if (result.dontShowAgain) {
+      await prefs.setBool(_keyPickupOverrideSkipFarWarning, true);
     }
   }
 
@@ -1148,28 +1206,36 @@ class HomeScreenState extends State<HomeScreen> {
               child: SizedBox(
                 height: 40,
                 width: MediaQuery.of(context).size.width,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.all(
-                        Radius.circular(4),
+                child: Builder(
+                  builder: (context) {
+                    final isPickupPhase = currentOrder!.status ==
+                            ORDER_STATUS_SHIPPED ||
+                        currentOrder!.status == ORDER_STATUS_DRIVER_ACCEPTED;
+                    final enabled = isPickupPhase || _isNearRequiredLocation;
+                    final backgroundColor = isPickupPhase
+                        ? (_isNearRequiredLocation
+                            ? Color(COLOR_PRIMARY)
+                            : Colors.orange)
+                        : (_isNearRequiredLocation
+                            ? Color(COLOR_PRIMARY)
+                            : Color(COLOR_PRIMARY).withValues(alpha: 0.5));
+                    return ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: const BorderRadius.all(
+                            Radius.circular(4),
+                          ),
+                        ),
+                        backgroundColor: backgroundColor,
                       ),
-                    ),
-                    backgroundColor: _isNearRequiredLocation
-                        ? Color(COLOR_PRIMARY)
-                        : Color(COLOR_PRIMARY).withValues(alpha: 0.5),
-                  ),
-                  onPressed: _isNearRequiredLocation
-                      ? () async {
-                          if (currentOrder!.status == ORDER_STATUS_SHIPPED ||
-                              currentOrder!.status ==
-                                  ORDER_STATUS_DRIVER_ACCEPTED) {
-                            push(
-                              context,
-                              PickOrder(currentOrder: currentOrder),
-                            );
-                          } else if (currentOrder!.status ==
-                              ORDER_STATUS_IN_TRANSIT) {
+                      onPressed: enabled
+                          ? () async {
+                              if (isPickupPhase) {
+                                await _handlePickupButtonTap();
+                                return;
+                              }
+                              if (currentOrder!.status ==
+                                  ORDER_STATUS_IN_TRANSIT) {
                             push(
                               context,
                               Scaffold(
@@ -1455,18 +1521,24 @@ class HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                             );
-                          }
-                        }
-                      : null,
-                  child: Text(
-                    _isNearRequiredLocation
-                        ? (buttonText ?? "")
-                        : "Move closer to ${currentOrder!.status == ORDER_STATUS_IN_TRANSIT ? 'customer' : 'restaurant'} (within 50m)",
-                    style: TextStyle(
-                        color: Color(0xffFFFFFF),
-                        fontFamily: "Poppinsm",
-                        letterSpacing: 0.5),
-                  ),
+                              }
+                            }
+                          : null,
+                      child: Text(
+                        isPickupPhase
+                            ? (_isNearRequiredLocation
+                                ? (buttonText ?? "")
+                                : 'CONFIRM PICKUP (OVERRIDE)')
+                            : (_isNearRequiredLocation
+                                ? (buttonText ?? "")
+                                : "Move closer to ${currentOrder!.status == ORDER_STATUS_IN_TRANSIT ? 'customer' : 'restaurant'} (within 50m)"),
+                        style: const TextStyle(
+                            color: Color(0xffFFFFFF),
+                            fontFamily: "Poppinsm",
+                            letterSpacing: 0.5),
+                      ),
+                    );
+                  },
                 ),
               ),
             ),

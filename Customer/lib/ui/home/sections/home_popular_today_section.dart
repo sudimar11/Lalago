@@ -11,20 +11,57 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/AppGlobal.dart';
 
 class HomePopularTodaySection extends StatelessWidget {
   final List<ProductModel> popularTodayFoods;
   final List<VendorModel> vendors;
+  final bool isLoading;
+  final bool hasError;
+  final VoidCallback? onRetry;
 
   const HomePopularTodaySection({
     Key? key,
     required this.popularTodayFoods,
     required this.vendors,
+    this.isLoading = false,
+    this.hasError = false,
+    this.onRetry,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    if (hasError && onRetry != null) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          HomeSectionUtils.buildTitleRow(
+            titleValue: "Popular Today",
+            isViewAll: true,
+          ),
+          HomeSectionUtils.sectionError(
+            message: 'Failed to load popular today',
+            onRetry: onRetry!,
+          ),
+        ],
+      );
+    }
+    if (isLoading) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          HomeSectionUtils.buildTitleRow(
+            titleValue: "Popular Today",
+            isViewAll: true,
+          ),
+          SizedBox(
+            height: 150,
+            child: ShimmerWidgets.productListShimmer(),
+          ),
+        ],
+      );
+    }
     final List<ProductModel> displayFoods = popularTodayFoods
         .where((product) => _hasPhoto(product.photo))
         .toList();

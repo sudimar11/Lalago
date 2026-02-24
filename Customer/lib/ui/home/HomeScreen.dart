@@ -83,6 +83,7 @@ import 'package:foodie_customer/ui/home/sections/home_nearby_foods_section.dart'
 import 'package:foodie_customer/ui/home/sections/home_popular_today_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_header_section.dart';
 import 'package:foodie_customer/ui/home/sections/banner_section.dart';
+import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 
@@ -117,6 +118,7 @@ import 'package:foodie_customer/ui/home/home_content_stack.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/widget/lazy_loading_widget.dart';
 import 'package:foodie_customer/ui/home/more_stories_screen.dart';
+import 'package:foodie_customer/ui/orderHistory/order_history_screen.dart';
 import 'package:foodie_customer/ui/dialogs/PostCompletionDialog.dart';
 import 'package:foodie_customer/userPrefrence.dart';
 
@@ -178,6 +180,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // Order Again section
   List<ProductModel> orderAgainProducts = [];
   bool isLoadingOrderAgain = true;
+  bool orderAgainError = false;
   StreamSubscription<List<OrderModel>>? orderAgainStreamSubscription;
 
   bool _didRunNearbyFallback = false;
@@ -185,6 +188,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _didLogRecommendedVendorEmpty = false;
   bool _didRunPopularTodayFallback = false;
   bool _isLoadingPopularToday = false;
+  bool _popularTodayError = false;
+  bool _nearbyFoodsError = false;
 
   // Completion dialog tracking
   StreamSubscription<List<OrderModel>>? _completionDialogStreamSubscription;
@@ -199,6 +204,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isProcessingRestaurants = false;
   Timer? _setStateDebounceTimer;
   bool _pendingStateUpdate = false;
+
+  /// True when restaurant stream has emitted at least once.
+  bool _hasReceivedVendorData = false;
+  bool _topRestaurantsError = false;
 
   /// Unified state update method with intelligent debouncing
   ///
@@ -353,6 +362,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ScrollController for home screen scroll detection (for lazy loading)
   final ScrollController _homeScrollController = ScrollController();
+  static const double _scrollToTopThreshold = 500.0;
+  bool _showScrollToTop = false;
+  void _onHomeScroll() {
+    if (!_homeScrollController.hasClients) return;
+    final double offset = _homeScrollController.offset;
+    final bool show = offset > _scrollToTopThreshold;
+    if (show != _showScrollToTop && mounted && !_isLeavingHome) {
+      _showScrollToTop = show;
+      _updateState();
+    }
+  }
 
   // Cache for restaurant open/closed status to avoid expensive recalculations
   final Map<String, bool> _restaurantOpenStatusCache = {};
@@ -361,6 +381,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // Meal for One • Sulit price section
   List<ProductModel> mealForOneProducts = [];
   bool isLoadingMealForOne = true;
+  bool mealForOneError = false;
   List<VendorModel> mealForOneVendors = [];
   static const double sulitCap = 150.0; // Price cap for sulit meals (in pesos)
 
@@ -399,8 +420,10 @@ class _HomeScreenState extends State<HomeScreen> {
   List<BannerModel> bannerMiddleHome = [];
 
   bool isHomeBannerLoading = true;
+  bool isHomeBannerError = false;
 
   bool isHomeBannerMiddleLoading = true;
+  bool isPromosError = false;
 
   final CarouselSliderController _carouselController =
       CarouselSliderController();
@@ -768,18 +791,19 @@ class _HomeScreenState extends State<HomeScreen> {
     };
 
     _onOrderAgainViewAll = () {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Order Again feature coming soon!'),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      if (MyAppState.currentUser == null) {
+        push(context, LoginScreen());
+      } else {
+        push(context, const OrderHistoryScreen());
+      }
     };
 
     // Cache method reference
     _buildCouponsForYouItemCached = buildCouponsForYouItem;
 
     _loadInitialData();
+
+    _homeScrollController.addListener(_onHomeScroll);
 
     // Defer heavy operations until after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -849,9 +873,22 @@ class _HomeScreenState extends State<HomeScreen> {
         fireStoreUtils.getNewestRestaurantsStream(limit: 15).asBroadcastStream();
     await _loadMostRatedRestaurantsFallback();
 
-
     // Initialize stories future once
     _cachedStoriesFuture = FireStoreUtils().getStory();
+  }
+
+  void _retryNearbyRestaurants() {
+    if (!mounted || _isLeavingHome) return;
+    _cachedNewArrivalStream =
+        fireStoreUtils.getVendorsForNewArrival().asBroadcastStream();
+    _updateState();
+  }
+
+  void _retryNewRestaurants() {
+    if (!mounted || _isLeavingHome) return;
+    _cachedNewestRestaurantsStream =
+        fireStoreUtils.getNewestRestaurantsStream(limit: 15).asBroadcastStream();
+    _updateState();
   }
 
   Future<void> _loadMostRatedRestaurantsFallback() async {
@@ -883,6 +920,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _updateState(callback: () {
       isLoadingPromos = true;
+      isPromosError = false;
     });
 
     try {
@@ -899,6 +937,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted && !_isLeavingHome) {
         _updateState(callback: () {
           isLoadingPromos = false;
+          isPromosError = true;
         });
       }
     }
@@ -990,58 +1029,68 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   getBanner() async {
-    // Run all banner/category/offer fetches in parallel
-    final results = await Future.wait([
-      fireStoreUtils.getHomeTopBanner(),
-      fireStoreUtils.getHomePageShowCategory(),
-      fireStoreUtils.getHomeMiddleBanner(),
-      FireStoreUtils().getPublicCoupons(),
-      FirebaseFirestore.instance.collection(Setting).doc('story').get(),
-    ]);
-
-    if (!mounted || _isLeavingHome) {
-      return;
-    }
-
-    // Batch all setState calls into one for better performance
+    if (!mounted || _isLeavingHome) return;
     _updateState(callback: () {
-      bannerTopHome = results[0] as List<BannerModel>;
-      _updateCachedFilteredBanners();
-
-      categoryWiseProductList = results[1] as List<VendorCategoryModel>;
-      debugPrint(
-          '📱 HomeScreen.getBanner(): categoryWiseProductList assigned ${categoryWiseProductList.length} categories');
-      for (int i = 0; i < categoryWiseProductList.length; i++) {
-        debugPrint(
-            '  [$i] id="${categoryWiseProductList[i].id}" title="${categoryWiseProductList[i].title}"');
-      }
-
-      bannerMiddleHome = results[2] as List<BannerModel>;
-      isHomeBannerMiddleLoading = false;
-
-      offerList = results[3] as List<OfferModel>;
-
-      final storyDoc = results[4] as DocumentSnapshot<Map<String, dynamic>>;
-      storyEnable = storyDoc.data()?['isEnabled'] as bool? ?? false;
+      isHomeBannerError = false;
     });
+    try {
+      // Run all banner/category/offer fetches in parallel
+      final results = await Future.wait([
+        fireStoreUtils.getHomeTopBanner(),
+        fireStoreUtils.getHomePageShowCategory(),
+        fireStoreUtils.getHomeMiddleBanner(),
+        FireStoreUtils().getPublicCoupons(),
+        FirebaseFirestore.instance.collection(Setting).doc('story').get(),
+      ]);
 
-    // Download and cache all banner images to disk before showing carousel
-    if (mounted && !_isLeavingHome) {
-      await _downloadAndCacheBannerImages();
+      if (!mounted || _isLeavingHome) {
+        return;
+      }
 
+      // Batch all setState calls into one for better performance
+      _updateState(callback: () {
+        bannerTopHome = results[0] as List<BannerModel>;
+        _updateCachedFilteredBanners();
+
+        categoryWiseProductList = results[1] as List<VendorCategoryModel>;
+        debugPrint(
+            '📱 HomeScreen.getBanner(): categoryWiseProductList assigned ${categoryWiseProductList.length} categories');
+        for (int i = 0; i < categoryWiseProductList.length; i++) {
+          debugPrint(
+              '  [$i] id="${categoryWiseProductList[i].id}" title="${categoryWiseProductList[i].title}"');
+        }
+
+        bannerMiddleHome = results[2] as List<BannerModel>;
+        isHomeBannerMiddleLoading = false;
+
+        offerList = results[3] as List<OfferModel>;
+
+        final storyDoc = results[4] as DocumentSnapshot<Map<String, dynamic>>;
+        storyEnable = storyDoc.data()?['isEnabled'] as bool? ?? false;
+      });
+
+      // Download and cache all banner images to disk before showing carousel
       if (mounted && !_isLeavingHome) {
-        // Only set loading to false after images are cached
-        _updateState(callback: () {
-          isHomeBannerLoading = false;
-        });
+        await _downloadAndCacheBannerImages();
+
+        if (mounted && !_isLeavingHome) {
+          _updateState(callback: () {
+            isHomeBannerLoading = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          _updateState(callback: () {
+            isHomeBannerLoading = false;
+          });
+        }
       }
-    } else {
-      // If not mounted, still set loading to false to prevent stuck state
-      if (mounted) {
-        _updateState(callback: () {
-          isHomeBannerLoading = false;
-        });
-      }
+    } catch (e) {
+      if (!mounted || _isLeavingHome) return;
+      _updateState(callback: () {
+        isHomeBannerLoading = false;
+        isHomeBannerError = true;
+      });
     }
   }
 
@@ -1165,6 +1214,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted || _isLeavingHome) return;
       _updateState(callback: () {
         isLoadingOrderAgain = true;
+        orderAgainError = false;
       });
 
       // Cancel any existing subscription
@@ -1241,6 +1291,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (!mounted || _isLeavingHome) return;
           _updateState(callback: () {
             isLoadingOrderAgain = false;
+            orderAgainError = true;
           });
         },
       );
@@ -1248,12 +1299,17 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted || _isLeavingHome) return;
       _updateState(callback: () {
         isLoadingOrderAgain = false;
+        orderAgainError = true;
       });
     }
   }
 
   // Fetch meal for one products (sulit price)
   Future<void> fetchMealForOneProducts() async {
+    if (!mounted || _isLeavingHome) return;
+    _updateState(callback: () {
+      mealForOneError = false;
+    });
     try {
       List<ProductModel> mealForOneList = [];
 
@@ -1326,6 +1382,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted || _isLeavingHome) return;
       _updateState(callback: () {
         isLoadingMealForOne = false;
+        mealForOneError = true;
       });
     }
   }
@@ -1804,10 +1861,8 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: isDark
           ? const Color.fromARGB(255, 201, 144, 1)
           : const Color(0xffFFFFFF),
-      body: isLoading == true
-          ? ShimmerWidgets.homeScreenShimmer()
-          : (MyAppState.selectedPosotion.location!.latitude == 0 &&
-                  MyAppState.selectedPosotion.location!.longitude == 0)
+      body: (MyAppState.selectedPosotion.location!.latitude == 0 &&
+              MyAppState.selectedPosotion.location!.longitude == 0)
               ? Center(
                   child: showEmptyState("We don't have your location.", context,
                       description:
@@ -1901,12 +1956,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     );
                   }, buttonTitle: 'Select'),
                 )
-              : HomeContentStack(
-                  homeContent: RefreshIndicator(
-                    onRefresh: _refreshHomeData,
-                    color: Color(COLOR_PRIMARY),
-                    child: SingleChildScrollView(
-                      controller: _homeScrollController,
+              : Stack(
+                  children: [
+                    HomeContentStack(
+                      homeContent: RefreshIndicator(
+                        onRefresh: _refreshHomeData,
+                        color: Color(COLOR_PRIMARY),
+                        child: SingleChildScrollView(
+                          controller: _homeScrollController,
                       physics: const AlwaysScrollableScrollPhysics(),
                       child: Container(
                         color: isDark
@@ -1943,10 +2000,20 @@ class _HomeScreenState extends State<HomeScreen> {
                             CategoriesHorizontalSection(
                               categoriesFuture: _cachedCuisinesFuture ??
                                   fireStoreUtils.getCuisines(),
+                              onRetry: () {
+                                _cachedCuisinesFuture =
+                                    fireStoreUtils.getCuisines();
+                                _updateState();
+                              },
                             ),
 
                             RepaintBoundary(
                               child: BannerSection(
+                                isBannerLoading: isHomeBannerLoading,
+                                bannerErrorMessage: isHomeBannerError
+                                    ? 'Failed to load banner'
+                                    : null,
+                                onBannerRetry: getBanner,
                                 areBannerImagesCached: _areBannerImagesCached,
                                 cachedFilteredBanners: _cachedFilteredBanners,
                                 cachedCarouselItems: _cachedCarouselItems,
@@ -1962,26 +2029,20 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
 
                             // Promos Section
-                            if (isLoadingPromos || activePromos.isNotEmpty)
+                            if (isLoadingPromos ||
+                                activePromos.isNotEmpty ||
+                                isPromosError)
                               Column(
                                 mainAxisAlignment: MainAxisAlignment.start,
                                 children: [
-                                  isLoadingPromos
-                                      ? Container(
-                                          width: screenWidth,
-                                          height: 200,
-                                          margin: const EdgeInsets.fromLTRB(
-                                              0, 0, 0, 0),
-                                          child: Center(
-                                            child: CircularProgressIndicator
-                                                .adaptive(
-                                              valueColor:
-                                                  AlwaysStoppedAnimation(
-                                                      Color(COLOR_PRIMARY)),
-                                            ),
-                                          ),
+                                  isPromosError
+                                      ? HomeSectionUtils.sectionError(
+                                          message: 'Failed to load promos',
+                                          onRetry: _loadActivePromos,
                                         )
-                                      : RepaintBoundary(
+                                      : isLoadingPromos
+                                          ? ShimmerWidgets.promoSkeleton()
+                                          : RepaintBoundary(
                                           child: SizedBox(
                                             height: 200,
                                             child: ListView.builder(
@@ -2019,6 +2080,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: HomePopularTodaySection(
                                 popularTodayFoods: popularTodayFoods,
                                 vendors: popularTodayVendors,
+                                isLoading: _isLoadingPopularToday,
+                                hasError: _popularTodayError,
+                                onRetry: _refreshHomeData,
                               ),
                             ),
 
@@ -2026,13 +2090,18 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: HomeNearbyFoodsSection(
                                 lstNearByFood: lstNearByFood,
                                 vendors: nearbyFoodVendors,
+                                isLoading: lstNearByFood.isEmpty &&
+                                    !_hasReceivedVendorData,
+                                hasError: _nearbyFoodsError,
+                                onRetry: _refreshHomeData,
                               ),
                             ),
 
-                            // Order Again Section (hide when no previous orders)
+                            // Order Again Section (skeleton when loading, list when has data)
                             if (MyAppState.currentUser != null &&
-                                !isLoadingOrderAgain &&
-                                orderAgainProducts.isNotEmpty)
+                                (isLoadingOrderAgain ||
+                                    orderAgainProducts.isNotEmpty ||
+                                    orderAgainError))
                               Column(
                                 mainAxisAlignment: MainAxisAlignment.start,
                                 children: [
@@ -2040,8 +2109,16 @@ class _HomeScreenState extends State<HomeScreen> {
                                     titleValue: "Order Again",
                                     onClick: _onOrderAgainViewAll,
                                   ),
-                                  RepaintBoundary(
-                                    child: Container(
+                                  orderAgainError
+                                      ? HomeSectionUtils.sectionError(
+                                          message:
+                                              'Failed to load order again',
+                                          onRetry: fetchOrderAgainProducts,
+                                        )
+                                      : isLoadingOrderAgain
+                                          ? ShimmerWidgets.orderAgainSkeleton()
+                                          : RepaintBoundary(
+                                          child: Container(
                                       width: screenWidth,
                                       height: 220,
                                       margin: const EdgeInsets.fromLTRB(
@@ -2079,6 +2156,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                 vendors: recommendedVendors.isNotEmpty
                                     ? recommendedVendors
                                     : vendors,
+                                isLoading: recommendedProducts.isEmpty &&
+                                    allProducts.isNotEmpty &&
+                                    !_didRunRecommendedFallback,
                               ),
                             ),
 
@@ -2091,6 +2171,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                     : vendors,
                                 allProducts: allProducts,
                                 isLoadingMealForOne: isLoadingMealForOne,
+                                hasError: mealForOneError,
+                                onRetry: fetchMealForOneProducts,
                               ),
                             ),
 
@@ -2105,6 +2187,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 lstFav: lstFav,
                                 isRestaurantOpen: isRestaurantOpen,
                                 onFavoriteChanged: _onFavoriteChanged,
+                                onRetry: _retryNearbyRestaurants,
                               ),
                             ),
 
@@ -2119,6 +2202,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 lstFav: lstFav,
                                 isRestaurantOpen: isRestaurantOpen,
                                 onFavoriteChanged: _onFavoriteChanged,
+                                onRetry: _retryNewRestaurants,
                               ),
                             ),
 
@@ -2130,6 +2214,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 fallbackRestaurants:
                                     mostRatedRestaurantsFallback,
                                 onFavoriteChanged: _onFavoriteChanged,
+                                isLoading: popularRestaurantLst.isEmpty &&
+                                    !_hasReceivedVendorData,
+                                hasError: _topRestaurantsError,
+                                onRetry: _refreshHomeData,
                               ),
                             ),
 
@@ -2139,6 +2227,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                     categoryWiseProductList,
                                 allProducts: allProducts,
                                 currencyModel: currencyModel,
+                                isLoadingCategories: categoryWiseProductList
+                                        .isEmpty &&
+                                    isHomeBannerLoading,
+                                onRetry: _refreshHomeData,
                               ),
                             ),
 
@@ -2160,6 +2252,33 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
+                ),
+                    Positioned(
+                      bottom: 16,
+                      right: 16,
+                      child: AnimatedOpacity(
+                        opacity: _showScrollToTop ? 1.0 : 0.0,
+                        duration: const Duration(milliseconds: 200),
+                        child: IgnorePointer(
+                          ignoring: !_showScrollToTop,
+                          child: FloatingActionButton(
+                            mini: true,
+                            backgroundColor: Color(COLOR_PRIMARY),
+                            onPressed: () {
+                              if (_homeScrollController.hasClients) {
+                                _homeScrollController.animateTo(
+                                  0,
+                                  duration: const Duration(milliseconds: 400),
+                                  curve: Curves.easeOut,
+                                );
+                              }
+                            },
+                            child: const Icon(Icons.arrow_upward),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
     );
   }
@@ -3103,6 +3222,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _setStateDebounceTimer?.cancel();
     _pendingStateUpdate = false;
     _connectivitySubscription?.cancel();
+    _homeScrollController.removeListener(_onHomeScroll);
     _homeScrollController.dispose();
 
     // Clear restaurant open status cache
@@ -4189,6 +4309,8 @@ class _HomeScreenState extends State<HomeScreen> {
           // Skip if already processing or disposed
           if (_isProcessingRestaurants || !mounted || _isLeavingHome) return;
           _isProcessingRestaurants = true;
+          _hasReceivedVendorData = true;
+          _topRestaurantsError = false;
 
           try {
             vendors
@@ -4212,14 +4334,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
               if (!_isLoadingPopularToday && popularTodayFoods.isEmpty) {
                 _isLoadingPopularToday = true;
+                _popularTodayError = false;
                 try {
                   await _loadPopularToday(value);
+                } catch (e) {
+                  if (mounted && !_isLeavingHome) {
+                    _popularTodayError = true;
+                  }
                 } finally {
-                  _isLoadingPopularToday = false;
+                  if (mounted && !_isLeavingHome) {
+                    _isLoadingPopularToday = false;
+                  }
                 }
-              } else {
               }
 
+              _nearbyFoodsError = false;
               // Create a map of vendor ID to vendor for quick lookup
               Map<String, VendorModel> vendorMap = {};
               for (var vendor in event) {
@@ -4251,7 +4380,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 _updateState();
               }
             }).catchError((error) {
-              // Silently handle errors to prevent crashes
+              if (!mounted || _isLeavingHome) return;
+              _updateState(callback: () {
+                _popularTodayError = true;
+                _nearbyFoodsError = true;
+                _isLoadingPopularToday = false;
+              });
             });
 
             // Process restaurants in isolate to prevent UI freezes
@@ -4341,8 +4475,11 @@ class _HomeScreenState extends State<HomeScreen> {
           }).catchError((error) {});
         },
         onError: (error) {
-          // Handle stream errors gracefully
+          if (!mounted || _isLeavingHome) return;
           _isProcessingRestaurants = false;
+          _updateState(callback: () {
+            _topRestaurantsError = true;
+          });
         },
       );
     });

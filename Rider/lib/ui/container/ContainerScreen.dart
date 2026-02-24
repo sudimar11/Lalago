@@ -12,6 +12,7 @@ import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/session_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/order_location_service.dart';
+import 'package:foodie_driver/services/proximity_config_service.dart';
 import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/notification_service.dart';
@@ -580,6 +581,14 @@ class _ContainerScreen extends State<ContainerScreen> {
           longitude: locationData.longitude ?? 0.0,
         );
 
+        // Accuracy filter: skip low-quality GPS readings for proximity
+        final maxAcc = ProximityConfigService.instance.maxAllowedAccuracy;
+        if (locationData.accuracy != null &&
+            locationData.accuracy! > maxAcc) {
+          _skippedLocationUpdateCount++;
+          return;
+        }
+
         // Fix #1: Rate Limiter Check (before Firestore read)
         final now = DateTime.now();
         if (_lastAcceptedLocationUpdate != null) {
@@ -765,6 +774,7 @@ class _ContainerScreen extends State<ContainerScreen> {
     }
 
     try {
+      await ProximityConfigService.instance.getConfig();
       final permissionStatus = await location.hasPermission().timeout(
         const Duration(seconds: 10),
         onTimeout: () => PermissionStatus.denied,

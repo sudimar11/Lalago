@@ -4,6 +4,7 @@ import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/new_arrival_card.dart';
+import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/view_all_new_arrival_restaurant_screen.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
@@ -14,6 +15,7 @@ class NewRestaurantsSection extends StatelessWidget {
   final List<String> lstFav;
   final bool Function(VendorModel) isRestaurantOpen;
   final VoidCallback onFavoriteChanged;
+  final VoidCallback? onRetry;
 
   const NewRestaurantsSection({
     Key? key,
@@ -23,6 +25,7 @@ class NewRestaurantsSection extends StatelessWidget {
     required this.lstFav,
     required this.isRestaurantOpen,
     required this.onFavoriteChanged,
+    this.onRetry,
   }) : super(key: key);
 
   @override
@@ -44,6 +47,12 @@ class NewRestaurantsSection extends StatelessWidget {
           stream: vendorsStream,
           initialData: const [],
           builder: (context, snapshot) {
+            if (snapshot.hasError && onRetry != null) {
+              return HomeSectionUtils.sectionError(
+                message: 'Failed to load new restaurants',
+                onRetry: onRetry!,
+              );
+            }
             final raw = snapshot.data ?? const <VendorModel>[];
 
             final nearbyOpen = raw

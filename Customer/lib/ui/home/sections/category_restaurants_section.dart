@@ -20,11 +20,14 @@ import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/home/view_all_category_product_screen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
 class CategoryRestaurantsSection extends StatelessWidget {
   final List<VendorCategoryModel> categoryWiseProductList;
   final List<ProductModel> allProducts;
   final CurrencyModel? currencyModel;
+  final bool isLoadingCategories;
+  final VoidCallback? onRetry;
   final FireStoreUtils fireStoreUtils = FireStoreUtils();
 
   CategoryRestaurantsSection({
@@ -32,10 +35,27 @@ class CategoryRestaurantsSection extends StatelessWidget {
     required this.categoryWiseProductList,
     required this.allProducts,
     this.currencyModel,
+    this.isLoadingCategories = false,
+    this.onRetry,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (categoryWiseProductList.isEmpty && isLoadingCategories) {
+      return Column(
+        children: [
+          SizedBox(
+            height: 100,
+            child: ShimmerWidgets.categoryListShimmer(),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 200,
+            child: ShimmerWidgets.restaurantListShimmer(),
+          ),
+        ],
+      );
+    }
     debugPrint('🎯 CategoryRestaurantsSection.build(): Creating ListView with itemCount=${categoryWiseProductList.length}');
     return ListView.builder(
       itemCount: categoryWiseProductList.length,
@@ -50,6 +70,12 @@ class CategoryRestaurantsSection extends StatelessWidget {
           stream: fireStoreUtils.getCategoryRestaurants(categoryId),
           builder: (context, snapshot) {
             debugPrint('🏪 CategoryRestaurantsSection[$index] "$categoryTitle": StreamBuilder - connectionState=${snapshot.connectionState}, hasData=${snapshot.hasData}, dataLength=${snapshot.data?.length ?? -1}');
+            if (snapshot.hasError && onRetry != null) {
+              return HomeSectionUtils.sectionError(
+                message: 'Failed to load restaurants for $categoryTitle',
+                onRetry: onRetry!,
+              );
+            }
             if (snapshot.connectionState == ConnectionState.waiting) {
               return Container();
             }

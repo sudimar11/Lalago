@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:foodie_customer/constants.dart';
+import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
-import 'package:foodie_customer/ui/home/view_all_sulit_foods_screen.dart';
-import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
+import 'package:foodie_customer/ui/login/LoginScreen.dart';
+import 'package:foodie_customer/ui/orderHistory/order_history_screen.dart';
+import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 
 class HomeOrderAgainSection extends StatelessWidget {
   final List<ProductModel> orderAgainProducts;
@@ -29,13 +31,11 @@ class HomeOrderAgainSection extends StatelessWidget {
         HomeSectionUtils.buildTitleRow(
           titleValue: "Order Again",
           onClick: () {
-            push(
-              context,
-              const ViewAllSulitFoodsScreen(
-                sulitProducts: [],
-                vendors: [],
-              ),
-            );
+            if (MyAppState.currentUser == null) {
+              push(context, LoginScreen());
+            } else {
+              push(context, const OrderHistoryScreen());
+            }
           },
         ),
         SizedBox(

@@ -61,6 +61,9 @@ class VendorModel {
   bool specialDiscountEnable;
   List<WorkingHoursModel> workingHours;
 
+  /// Client-only: distance in km from user (not from Firestore).
+  double? distanceInKM;
+
   // ,this.filters = filters ?? Filters(cuisine: '');
 
   VendorModel(
@@ -84,6 +87,7 @@ class VendorModel {
       this.restaurantMenuPhotos = const [],
       this.specialDiscount = const [],
       this.workingHours = const [],
+      this.distanceInKM,
       this.specialDiscountEnable = false,
       this.location = '',
       this.reviewsCount = 0,

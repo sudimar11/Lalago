@@ -8,6 +8,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/new_arrival_card.dart';
+import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/view_all_new_arrival_restaurant_screen.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
@@ -18,6 +19,7 @@ class NearbyRestaurantsSection extends StatefulWidget {
   final List<String> lstFav;
   final bool Function(VendorModel) isRestaurantOpen;
   final VoidCallback onFavoriteChanged;
+  final VoidCallback? onRetry;
 
   const NearbyRestaurantsSection({
     Key? key,
@@ -27,6 +29,7 @@ class NearbyRestaurantsSection extends StatefulWidget {
     required this.lstFav,
     required this.isRestaurantOpen,
     required this.onFavoriteChanged,
+    this.onRetry,
   }) : super(key: key);
 
   @override
@@ -91,6 +94,12 @@ class _NearbyRestaurantsSectionState extends State<NearbyRestaurantsSection> {
           stream: widget.vendorsStream,
           initialData: const [],
           builder: (context, snapshot) {
+            if (snapshot.hasError && widget.onRetry != null) {
+              return HomeSectionUtils.sectionError(
+                message: 'Failed to load nearby restaurants',
+                onRetry: widget.onRetry!,
+              );
+            }
             final nearbyAll =
                 (snapshot.data ?? const <VendorModel>[]).toList();
             final fallbackAll =

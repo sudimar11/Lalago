@@ -195,6 +195,60 @@ class ShimmerWidgets {
     );
   }
 
+  /// Section skeleton for BannerSection (height 170 to match carousel).
+  static Widget bannerSkeleton() {
+    return baseShimmer(
+      child: Container(
+        height: 170,
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          color: Colors.grey[300],
+        ),
+      ),
+    );
+  }
+
+  /// Section skeleton for Promos (horizontal promo cards ~160x180).
+  static Widget promoSkeleton() {
+    return SizedBox(
+      height: 200,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        physics: const ClampingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(10, 10, 16, 0),
+        itemCount: 5,
+        itemBuilder: (context, index) => baseShimmer(
+          child: Container(
+            width: 160,
+            height: 180,
+            margin: const EdgeInsets.only(right: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              color: Colors.grey[300],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Section skeleton for Order Again (horizontal product cards).
+  static Widget orderAgainSkeleton() {
+    return SizedBox(
+      height: 220,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        physics: const ClampingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 0, 0, 10),
+        itemCount: 5,
+        itemBuilder: (context, index) => baseShimmer(
+          child: productCardShimmer(),
+        ),
+      ),
+    );
+  }
+
   // Category shimmer
   static Widget categoryShimmer() {
     return Container(

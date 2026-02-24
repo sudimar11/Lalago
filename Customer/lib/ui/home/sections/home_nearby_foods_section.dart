@@ -9,20 +9,57 @@ import 'package:foodie_customer/ui/home/view_all_popular_food_near_by_screen.dar
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/AppGlobal.dart';
 
 class HomeNearbyFoodsSection extends StatelessWidget {
   final List<ProductModel> lstNearByFood;
   final List<VendorModel> vendors;
+  final bool isLoading;
+  final bool hasError;
+  final VoidCallback? onRetry;
 
   const HomeNearbyFoodsSection({
     Key? key,
     required this.lstNearByFood,
     required this.vendors,
+    this.isLoading = false,
+    this.hasError = false,
+    this.onRetry,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    if (hasError && onRetry != null) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          HomeSectionUtils.buildTitleRow(
+            titleValue: "Nearby Foods",
+            onClick: () {},
+          ),
+          HomeSectionUtils.sectionError(
+            message: 'Failed to load nearby foods',
+            onRetry: onRetry!,
+          ),
+        ],
+      );
+    }
+    if (isLoading) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          HomeSectionUtils.buildTitleRow(
+            titleValue: "Nearby Foods",
+            onClick: () {},
+          ),
+          SizedBox(
+            height: 150,
+            child: ShimmerWidgets.productListShimmer(),
+          ),
+        ],
+      );
+    }
     final List<ProductModel> displayFoods = lstNearByFood
         .where((product) => _hasPhoto(product.photo))
         .toList();

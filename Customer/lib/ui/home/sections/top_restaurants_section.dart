@@ -16,7 +16,9 @@ import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
+import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/view_all_popular_restaurant_screen.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
 class TopRestaurantsSection extends StatelessWidget {
   final List<VendorModel> popularRestaurantLst;
@@ -24,6 +26,9 @@ class TopRestaurantsSection extends StatelessWidget {
   final List<String> lstFav;
   final VoidCallback onFavoriteChanged;
   final List<VendorModel> fallbackRestaurants;
+  final bool isLoading;
+  final bool hasError;
+  final VoidCallback? onRetry;
   final FireStoreUtils fireStoreUtils = FireStoreUtils();
 
   TopRestaurantsSection({
@@ -33,6 +38,9 @@ class TopRestaurantsSection extends StatelessWidget {
     required this.lstFav,
     required this.onFavoriteChanged,
     required this.fallbackRestaurants,
+    this.isLoading = false,
+    this.hasError = false,
+    this.onRetry,
   });
 
   @override
@@ -48,7 +56,19 @@ class TopRestaurantsSection extends StatelessWidget {
             );
           },
         ),
-        popularRestaurantLst.isEmpty
+        hasError && onRetry != null
+            ? HomeSectionUtils.sectionError(
+                message: 'Failed to load top restaurants',
+                onRetry: onRetry!,
+              )
+            : isLoading
+                ? Container(
+                    width: MediaQuery.of(context).size.width,
+                    height: 260,
+                    margin: const EdgeInsets.fromLTRB(10, 0, 0, 10),
+                    child: ShimmerWidgets.restaurantListShimmer(),
+                  )
+                : popularRestaurantLst.isEmpty
             ? (fallbackRestaurants.isEmpty
                 ? showEmptyState('No Popular restaurant', context)
                 : _buildRestaurantList(
