@@ -11,6 +11,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+
+  lalago_shared:
+    path: ../packages/lalago_shared
+
   cupertino_icons: ^1.0.6
   permission_handler: ^11.3.1
   firebase_core: ^2.32.0

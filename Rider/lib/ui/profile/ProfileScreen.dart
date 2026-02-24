@@ -1,10 +1,12 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -19,6 +21,7 @@ import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/ui/contactUs/ContactUsScreen.dart';
 import 'package:foodie_driver/ui/reauthScreen/reauth_user_screen.dart';
 import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
+import 'package:foodie_driver/ui/profile/zone_browser_screen.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/widgets/more_options_bottom_sheet.dart';
 import 'package:foodie_driver/userPrefrence.dart';
@@ -48,10 +51,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isSavingCheckIn = false;
   bool _isSavingCheckOut = false;
   bool _isSavingCheckOutToday = false;
+  RiderPresetLocationData? _currentZone;
+  bool _isLoadingZone = true;
+
+  Future<void> _loadCurrentZone() async {
+    final presetId =
+        MyAppState.currentUser?.selectedPresetLocationId;
+    if (presetId == null || presetId.trim().isEmpty) {
+      if (mounted) setState(() => _isLoadingZone = false);
+      return;
+    }
+    try {
+      final zone =
+          await RiderPresetLocationService.getPresetById(presetId);
+      if (mounted) {
+        setState(() {
+          _currentZone = zone;
+          _isLoadingZone = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingZone = false);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _loadCurrentZone();
 
     // Initialize fields if they don't exist in global user object
     if (MyAppState.currentUser!.checkInTime == null) {
@@ -159,98 +186,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _showChangeLocationPicker(BuildContext context) async {
-    try {
-      final presets =
-          await RiderPresetLocationService.getPresetLocations();
-      if (!mounted) return;
-      if (presets.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No preset locations. Contact admin.'),
-            backgroundColor: Colors.orange,
+  Future<void> _openZoneBrowser() async {
+    final result = await Navigator.push<RiderPresetLocationData>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const ZoneBrowserScreen(),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() => _currentZone = result);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Work area changed to ${result.name}',
           ),
-        );
-        return;
-      }
-
-      final selected = await showModalBottomSheet<
-          RiderPresetLocationData>(
-        context: context,
-        isScrollControlled: true,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        builder: (ctx) => DraggableScrollableSheet(
-          initialChildSize: 0.5,
-          minChildSize: 0.3,
-          maxChildSize: 0.8,
-          expand: false,
-          builder: (_, controller) => Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  'Change delivery location',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-              ),
-              Expanded(
-                child: ListView.builder(
-                  controller: controller,
-                  itemCount: presets.length,
-                  itemBuilder: (_, i) {
-                    final p = presets[i];
-                    return ListTile(
-                      leading: const Icon(Icons.place),
-                      title: Text(p.name),
-                      subtitle: Text(
-                        '${p.latitude.toStringAsFixed(5)}, '
-                        '${p.longitude.toStringAsFixed(5)}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                      onTap: () => Navigator.pop(ctx, p),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
+          backgroundColor: Colors.green,
         ),
       );
-
-      if (selected == null || !mounted) return;
-
-      MyAppState.currentUser!.location = UserLocation(
-        latitude: selected.latitude,
-        longitude: selected.longitude,
-      );
-      MyAppState.currentUser!.locationUpdatedAt = Timestamp.now();
-      MyAppState.currentUser!.selectedPresetLocationId = selected.id;
-      await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Location updated'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to update location: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
     }
   }
 
@@ -949,13 +901,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     color: Colors.blue,
                   ),
                 ),
-                ListTile(
-                  onTap: () => _showChangeLocationPicker(context),
-                  title: Text(
-                    'Change delivery location',
-                    style: TextStyle(fontSize: 16),
-                  ),
-                  leading: Icon(Icons.place, color: Colors.orange),
+                _WorkAreaCard(
+                  currentZone: _currentZone,
+                  isLoading: _isLoadingZone,
+                  onBrowseZones: _openZoneBrowser,
                 ),
                 // ListTile(
                 //   onTap: () {
@@ -3171,6 +3120,198 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   : Colors.black87,
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+double _zoomForRadius(double radiusKm) {
+  if (radiusKm <= 0) return 14.0;
+  final diameter = radiusKm * 2;
+  final zoom = 14.0 - (math.log(diameter) / math.ln2);
+  return zoom.clamp(8.0, 17.0);
+}
+
+class _WorkAreaCard extends StatelessWidget {
+  final RiderPresetLocationData? currentZone;
+  final bool isLoading;
+  final VoidCallback onBrowseZones;
+
+  const _WorkAreaCard({
+    required this.currentZone,
+    required this.isLoading,
+    required this.onBrowseZones,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 8,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              'MY WORK AREA',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.0,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ),
+          if (isLoading)
+            Container(
+              height: 120,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Center(
+                child: CircularProgressIndicator.adaptive(),
+              ),
+            )
+          else if (currentZone == null)
+            _buildNoZoneSelected(context)
+          else
+            _buildZonePreview(context),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: onBrowseZones,
+              icon: const Icon(Icons.map_outlined, size: 18),
+              label: const Text('BROWSE ALL ZONES'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Color(COLOR_PRIMARY),
+                side: BorderSide(
+                  color: Color(COLOR_PRIMARY),
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoZoneSelected(BuildContext context) {
+    return Container(
+      height: 120,
+      decoration: BoxDecoration(
+        color: isDarkMode(context)
+            ? Colors.grey.shade800
+            : Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.grey.shade300,
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.place_outlined,
+              size: 32,
+              color: Colors.grey.shade400,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No work area selected',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey.shade500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildZonePreview(BuildContext context) {
+    final zone = currentZone!;
+    final hasCircle = zone.hasRadius;
+    final center = LatLng(zone.latitude, zone.longitude);
+    final zoom = hasCircle
+        ? _zoomForRadius(zone.radiusKm!)
+        : 14.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          height: 120,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.grey.shade300,
+            ),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(11),
+            child: GoogleMap(
+              initialCameraPosition: CameraPosition(
+                target: center,
+                zoom: zoom,
+              ),
+              liteModeEnabled: Platform.isAndroid,
+              zoomGesturesEnabled: false,
+              scrollGesturesEnabled: false,
+              rotateGesturesEnabled: false,
+              tiltGesturesEnabled: false,
+              zoomControlsEnabled: false,
+              mapToolbarEnabled: false,
+              myLocationEnabled: false,
+              myLocationButtonEnabled: false,
+              circles: hasCircle
+                  ? {
+                      Circle(
+                        circleId: const CircleId(
+                          'zone_preview',
+                        ),
+                        center: center,
+                        radius: zone.radiusKm! * 1000,
+                        fillColor: Colors.blue
+                            .withOpacity(0.1),
+                        strokeColor: Colors.blue
+                            .withOpacity(0.5),
+                        strokeWidth: 2,
+                      ),
+                    }
+                  : {},
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Icon(
+              Icons.place,
+              color: Colors.blue,
+              size: 20,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                zone.name,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     );

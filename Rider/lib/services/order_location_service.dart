@@ -77,7 +77,7 @@ class OrderLocationService {
   static bool isAtRequiredLocation(
       OrderModel order, UserLocation driverLocation) {
     // Monitor restaurant proximity for pickup states
-    if (order.status == ORDER_STATUS_DRIVER_PENDING ||
+    if (order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
         order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
         order.status == ORDER_STATUS_SHIPPED) {
       return isNearRestaurant(order, driverLocation);
@@ -122,7 +122,7 @@ class OrderLocationService {
       _updateProximity(isNear);
 
       // Check for restaurant arrival detection
-      if (order.status == ORDER_STATUS_DRIVER_PENDING ||
+      if (order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
           order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
           order.status == ORDER_STATUS_SHIPPED) {
         _checkRestaurantArrival(order, currentDriver.location);
@@ -162,7 +162,7 @@ class OrderLocationService {
       _updateProximity(isNear);
 
       // Check for restaurant arrival detection
-      if (order.status == ORDER_STATUS_DRIVER_PENDING ||
+      if (order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
           order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
           order.status == ORDER_STATUS_SHIPPED) {
         _checkRestaurantArrival(order, driverLocation);

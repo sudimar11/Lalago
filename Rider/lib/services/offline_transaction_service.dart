@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../model/pending_order_completion.dart';
+import 'order_service.dart';
 
 class OfflineTransactionService extends ChangeNotifier {
   static const String _boxName = 'pending_completions';
@@ -248,6 +249,9 @@ class OfflineTransactionService extends ChangeNotifier {
         'incentive': completion.incentive,
       });
     });
+
+    // Remove order from rider's queue and restore availability
+    await OrderService.completeOrder(completion.orderId);
   }
 
   /// Check if order is already queued

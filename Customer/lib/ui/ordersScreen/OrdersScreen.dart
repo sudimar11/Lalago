@@ -10,6 +10,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/OrderDetailsScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
+import 'package:foodie_customer/utils/order_status_messages.dart';
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:provider/provider.dart';
 
@@ -21,11 +22,13 @@ class OrdersScreen extends StatefulWidget {
   _OrdersScreenState createState() => _OrdersScreenState();
 }
 
-class _OrdersScreenState extends State<OrdersScreen> {
+class _OrdersScreenState extends State<OrdersScreen>
+    with SingleTickerProviderStateMixin {
   late Stream<List<OrderModel>> ordersFuture;
   FireStoreUtils _fireStoreUtils = FireStoreUtils();
   List<OrderModel> ordersList = [];
   late CartDatabase cartDatabase;
+  late TabController _tabController;
 
   void _initializeStream() {
     if (MyAppState.currentUser == null) {
@@ -45,6 +48,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
     print(
         '🔍 OrdersScreen: Initializing with userID: ${MyAppState.currentUser?.userID}');
     print('🔍 OrdersScreen: Current user: ${MyAppState.currentUser?.toJson()}');
@@ -118,8 +122,74 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   @override
   void dispose() {
+    _tabController.dispose();
     FireStoreUtils().closeOrdersStream();
     super.dispose();
+  }
+
+  bool _isActiveOrder(String status) {
+    final s = status.toLowerCase();
+    return s == 'order placed' ||
+        s == 'placed' ||
+        s == 'order accepted' ||
+        s == 'accepted' ||
+        (s.contains('driver') && s.contains('assigned')) ||
+        s == 'driver accepted' ||
+        s == 'order shipped' ||
+        s == 'shipped' ||
+        s == 'in transit' ||
+        s == 'driver rejected';
+  }
+
+  Widget _buildTabContent(
+    List<OrderModel> orders, {
+    required bool isActiveTab,
+  }) {
+    if (orders.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isActiveTab ? Icons.access_time : Icons.history,
+              size: 64,
+              color: Colors.grey,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              isActiveTab ? 'No active orders' : 'No past orders',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: isDarkMode(context) ? Colors.white : Colors.black87,
+                fontFamily: 'Poppinsm',
+              ),
+            ),
+            if (!isActiveTab) ...[
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () => _tabController.animateTo(0),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Color(COLOR_PRIMARY),
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text('View Active Orders'),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+    return ListView.builder(
+      itemCount: orders.length,
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemBuilder: (context, index) => buildOrderItem(orders[index]),
+    );
   }
 
   @override
@@ -165,104 +235,167 @@ class _OrdersScreenState extends State<OrdersScreen> {
       );
     }
     
-    return Scaffold(
-      backgroundColor:
-          isDarkMode(context) ? Color(DARK_COLOR) : Color(0xffFFFFFF),
-      appBar: AppBar(
-        backgroundColor: Color(COLOR_PRIMARY),
-        elevation: 0,
-        centerTitle: false, // keep it aligned to the left
-        titleSpacing: 0,
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.maybePop(context),
-        ),
-        title: Text(
-          'Orders',
-          style: TextStyle(
-            fontFamily: "Poppinsm",
-            fontSize: 18,
-            color: Colors.white,
-          ),
-        ),
-        actions: [
-          StreamBuilder<List<CartProduct>>(
-            stream: cartDatabase.watchProducts,
-            initialData: const [],
-            builder: (context, snapshot) {
-              int cartCount = 0;
-              if (snapshot.hasData) {
-                cartCount =
-                    snapshot.data!.fold(0, (sum, item) => sum + item.quantity);
-              }
-              return Stack(
-                children: [
-                  IconButton(
-                    icon: Icon(Icons.shopping_cart, color: Colors.white),
-                    onPressed: () {
-                      push(context, CartScreen());
-                    },
-                  ),
-                  if (cartCount > 0)
-                    Positioned(
-                      right: 8,
-                      top: 8,
-                      child: Container(
-                        padding: EdgeInsets.all(2),
-                        decoration: BoxDecoration(
-                          color: Color(COLOR_PRIMARY),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        constraints: BoxConstraints(
-                          minWidth: 16,
-                          minHeight: 16,
-                        ),
-                        child: Text(
-                          cartCount.toString(),
-                          style: TextStyle(
+    return StreamBuilder<List<OrderModel>>(
+      stream: ordersFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Scaffold(
+            backgroundColor:
+                isDarkMode(context) ? Color(DARK_COLOR) : Color(0xffFFFFFF),
+            appBar: AppBar(
+              backgroundColor: Color(COLOR_PRIMARY),
+              elevation: 0,
+              centerTitle: false,
+              titleSpacing: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                onPressed: () => Navigator.maybePop(context),
+              ),
+              title: Text(
+                'Orders',
+                style: TextStyle(
+                  fontFamily: 'Poppinsm',
+                  fontSize: 18,
+                  color: Colors.white,
+                ),
+              ),
+              actions: [
+                StreamBuilder<List<CartProduct>>(
+                  stream: cartDatabase.watchProducts,
+                  initialData: const [],
+                  builder: (context, cartSnapshot) {
+                    int cartCount = 0;
+                    if (cartSnapshot.hasData) {
+                      cartCount = cartSnapshot.data!
+                          .fold(0, (sum, item) => sum + item.quantity);
+                    }
+                    return Stack(
+                      children: [
+                        IconButton(
+                          icon: const Icon(
+                            Icons.shopping_cart,
                             color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
                           ),
-                          textAlign: TextAlign.center,
+                          onPressed: () => push(context, CartScreen()),
                         ),
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-      body: StreamBuilder<List<OrderModel>>(
-        stream: ordersFuture,
-        builder: (context, snapshot) {
-          print(
-              '🔍 OrdersScreen StreamBuilder - Connection state: ${snapshot.connectionState}');
-          print(
-              '🔍 OrdersScreen StreamBuilder - Has data: ${snapshot.hasData}');
-          print(
-              '🔍 OrdersScreen StreamBuilder - Data length: ${snapshot.data?.length ?? 0}');
-          print('🔍 OrdersScreen StreamBuilder - Error: ${snapshot.error}');
-
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Center(
+                        if (cartCount > 0)
+                          Positioned(
+                            right: 8,
+                            top: 8,
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: Color(COLOR_PRIMARY),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              constraints: const BoxConstraints(
+                                minWidth: 16,
+                                minHeight: 16,
+                              ),
+                              child: Text(
+                                cartCount.toString(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+            body: Center(
               child: CircularProgressIndicator.adaptive(
                 valueColor: AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
               ),
-            );
-          }
+            ),
+          );
+        }
 
-          if (snapshot.hasError) {
-            print('❌ OrdersScreen StreamBuilder - Error: ${snapshot.error}');
-            return Center(
+        if (snapshot.hasError) {
+          return Scaffold(
+            backgroundColor:
+                isDarkMode(context) ? Color(DARK_COLOR) : Color(0xffFFFFFF),
+            appBar: AppBar(
+              backgroundColor: Color(COLOR_PRIMARY),
+              elevation: 0,
+              centerTitle: false,
+              titleSpacing: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                onPressed: () => Navigator.maybePop(context),
+              ),
+              title: Text(
+                'Orders',
+                style: TextStyle(
+                  fontFamily: 'Poppinsm',
+                  fontSize: 18,
+                  color: Colors.white,
+                ),
+              ),
+              actions: [
+                StreamBuilder<List<CartProduct>>(
+                  stream: cartDatabase.watchProducts,
+                  initialData: const [],
+                  builder: (context, cartSnapshot) {
+                    int cartCount = 0;
+                    if (cartSnapshot.hasData) {
+                      cartCount = cartSnapshot.data!
+                          .fold(0, (sum, item) => sum + item.quantity);
+                    }
+                    return Stack(
+                      children: [
+                        IconButton(
+                          icon: const Icon(
+                            Icons.shopping_cart,
+                            color: Colors.white,
+                          ),
+                          onPressed: () => push(context, CartScreen()),
+                        ),
+                        if (cartCount > 0)
+                          Positioned(
+                            right: 8,
+                            top: 8,
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: Color(COLOR_PRIMARY),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              constraints: const BoxConstraints(
+                                minWidth: 16,
+                                minHeight: 16,
+                              ),
+                              child: Text(
+                                cartCount.toString(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+            body: Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.error, size: 64, color: Colors.red),
-                  SizedBox(height: 16),
+                  const Icon(Icons.error, size: 64, color: Colors.red),
+                  const SizedBox(height: 16),
                   Text('Error loading orders: ${snapshot.error}'),
-                  SizedBox(height: 16),
+                  const SizedBox(height: 16),
                   ElevatedButton(
                     onPressed: () {
                       setState(() {
@@ -270,35 +403,117 @@ class _OrdersScreenState extends State<OrdersScreen> {
                             .getOrders(MyAppState.currentUser!.userID);
                       });
                     },
-                    child: Text('Retry'),
+                    child: const Text('Retry'),
                   ),
                 ],
               ),
-            );
-          }
+            ),
+          );
+        }
 
-          if (!snapshot.hasData || (snapshot.data?.isEmpty ?? true)) {
-            print('📭 OrdersScreen StreamBuilder - No orders found');
-            return Center(
-              child: showEmptyState('No Previous Orders', context,
-                  description: "Let's orders food!"),
-            );
-          } else {
-            print(
-                '✅ OrdersScreen StreamBuilder - Found ${snapshot.data!.length} orders');
-            snapshot.data!.forEach((order) {
-              print(
-                  '📦 Order: ${order.id} - Status: ${order.status} - CreatedAt: ${order.createdAt}');
-            });
-            return ListView.builder(
-              itemCount: snapshot.data!.length,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemBuilder: (context, index) =>
-                  buildOrderItem(snapshot.data![index]),
-            );
-          }
-        },
-      ),
+        final orders = snapshot.data ?? [];
+        final activeOrders =
+            orders.where((o) => _isActiveOrder(o.status)).toList();
+        final pastOrders =
+            orders.where((o) => !_isActiveOrder(o.status)).toList();
+        final activeCount = activeOrders.length;
+        final pastCount = pastOrders.length;
+
+        return Scaffold(
+          backgroundColor:
+              isDarkMode(context) ? Color(DARK_COLOR) : Color(0xffFFFFFF),
+          appBar: AppBar(
+            backgroundColor: Color(COLOR_PRIMARY),
+            elevation: 0,
+            centerTitle: false,
+            titleSpacing: 0,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => Navigator.maybePop(context),
+            ),
+            title: Text(
+              'Orders',
+              style: TextStyle(
+                fontFamily: 'Poppinsm',
+                fontSize: 18,
+                color: Colors.white,
+              ),
+            ),
+            bottom: TabBar(
+              controller: _tabController,
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white70,
+              indicatorColor: Colors.white,
+              tabs: [
+                Tab(
+                  icon: const Icon(Icons.access_time, size: 20),
+                  text: 'Active ($activeCount)',
+                ),
+                Tab(
+                  icon: const Icon(Icons.history, size: 20),
+                  text: 'Past ($pastCount)',
+                ),
+              ],
+            ),
+            actions: [
+              StreamBuilder<List<CartProduct>>(
+                stream: cartDatabase.watchProducts,
+                initialData: const [],
+                builder: (context, cartSnapshot) {
+                  int cartCount = 0;
+                  if (cartSnapshot.hasData) {
+                    cartCount = cartSnapshot.data!
+                        .fold(0, (sum, item) => sum + item.quantity);
+                  }
+                  return Stack(
+                    children: [
+                      IconButton(
+                        icon: const Icon(
+                          Icons.shopping_cart,
+                          color: Colors.white,
+                        ),
+                        onPressed: () => push(context, CartScreen()),
+                      ),
+                      if (cartCount > 0)
+                        Positioned(
+                          right: 8,
+                          top: 8,
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: BoxDecoration(
+                              color: Color(COLOR_PRIMARY),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 16,
+                              minHeight: 16,
+                            ),
+                            child: Text(
+                              cartCount.toString(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+          body: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildTabContent(activeOrders, isActiveTab: true),
+              _buildTabContent(pastOrders, isActiveTab: false),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -552,7 +767,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            'View Details',
+                            getButtonText(orderModel.status),
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w500,
@@ -645,7 +860,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
           ),
           SizedBox(width: 4),
           Text(
-            status,
+            getStatusMessage(status),
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w500,

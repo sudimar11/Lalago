@@ -18,6 +18,22 @@ function getMessaging() {
   return admin.messaging();
 }
 
+function parsePreparationMinutes(prepTimeStr) {
+  if (!prepTimeStr) return 30;
+  const str = prepTimeStr.toString().toLowerCase().trim();
+  const minMatch = str.match(/(\d+)\s*min/);
+  if (minMatch) return Math.min(120, Math.max(5, parseInt(minMatch[1], 10)));
+  const colonMatch = str.match(/(\d+):(\d+)/);
+  if (colonMatch) {
+    const hours = parseInt(colonMatch[1], 10);
+    const minutes = parseInt(colonMatch[2], 10);
+    return Math.min(120, Math.max(5, hours * 60 + minutes));
+  }
+  const numMatch = str.match(/(\d+)/);
+  if (numMatch) return Math.min(120, Math.max(5, parseInt(numMatch[1], 10)));
+  return 30;
+}
+
 function setCors(res) {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -524,6 +540,25 @@ exports.autoDispatcher = functions.firestore
           createdAt: afterData.createdAt || admin.firestore.Timestamp.now(),
         };
 
+        // Search radius expansion based on rejection/retry attempts
+        const dispatchData = afterData?.dispatch || {};
+        const rejectionCount = _asNumber(dispatchData.rejectionCount) || 0;
+        const retryCount = _asNumber(dispatchData.retryCount) || 0;
+        const totalAttempts = rejectionCount + retryCount;
+
+        let searchRadiusKm = 3;
+        if (totalAttempts >= 5) {
+          searchRadiusKm = 10;
+          console.log(
+            `[AI AutoDispatcher] Order ${orderId} has ${totalAttempts} attempts, ` +
+            `expanding search to ${searchRadiusKm}km`
+          );
+        } else if (totalAttempts >= 3) {
+          searchRadiusKm = 7;
+        } else if (totalAttempts >= 1) {
+          searchRadiusKm = 5;
+        }
+
         // 2. Find available drivers
         const driversSnapshot = await getDb().collection('users')
           .where('role', '==', 'driver')
@@ -590,6 +625,9 @@ exports.autoDispatcher = functions.firestore
           
           const eta = calculateETA(driverLocation, order.restaurantLocation);
           const distanceKm = _distanceMeters(driverLocation, order.restaurantLocation) / 1000;
+
+          if (distanceKm > searchRadiusKm) continue;
+
           const headingMatch = _calculateDriverHeading(driver, driverLocation, order.restaurantLocation);
 
           eligibleDrivers.push({
@@ -697,7 +735,8 @@ exports.autoDispatcher = functions.firestore
         });
 
         // 5. Assign rider to order using AI prescription (LalaGo-Restaurant pattern)
-        const riderDeadline = _addSeconds(_nowTimestamp(), RIDER_ACCEPT_TIMEOUT_SECONDS);
+        const riderTimeoutSec = await _getRiderTimeoutSeconds();
+        const riderDeadline = _addSeconds(_nowTimestamp(), riderTimeoutSec);
         await change.after.ref.update({
           driverID: bestDriver.driverId,
           driverDistance: bestDriver.distance,
@@ -1200,6 +1239,71 @@ async function _sendRestaurantNotificationBestEffort(orderData, orderId) {
   }
 }
 
+async function _addDriverChatSystemMessage(orderId, status, customerId) {
+  try {
+    const db = getDb();
+    const messageId = require('crypto').randomUUID();
+    const statusMessages = {
+      'Order Shipped': 'Your order is ready for pickup',
+      'In Transit': 'Driver is on the way with your order',
+      'Order Completed': 'Your order has been delivered. Thank you!',
+    };
+    const messageText = statusMessages[status] || `Order status updated: ${status}`;
+
+    await db
+      .collection('chat_driver')
+      .doc(orderId)
+      .collection('thread')
+      .doc(messageId)
+      .set({
+        id: messageId,
+        senderId: 'system',
+        receiverId: customerId,
+        orderId,
+        message: messageText,
+        messageType: 'system',
+        senderType: 'system',
+        orderStatus: status,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        isRead: false,
+        readBy: {},
+      });
+  } catch (e) {
+    console.error('[AUTO_READY] Error adding chat system message:', e);
+  }
+}
+
+async function _sendPrepTimeReminder(orderId, orderData, minutesLeft) {
+  try {
+    let token = String(orderData?.vendor?.fcmToken || '');
+    if (!token && orderData?.vendorID) {
+      const vendorSnap = await getDb()
+        .collection('vendors')
+        .doc(orderData.vendorID)
+        .get();
+      token = String(vendorSnap.exists ? vendorSnap.data()?.fcmToken || '' : '');
+    }
+    if (!token) return;
+
+    const shortId = orderId.length > 8 ? orderId.substring(0, 8) : orderId;
+    await getMessaging().send({
+      token,
+      notification: {
+        title: 'Preparation Time Almost Over',
+        body: `Order #${shortId} will be ready in ${minutesLeft} minutes. Please mark as ready.`,
+      },
+      data: {
+        type: 'prep_time_reminder',
+        orderId: String(orderId),
+        minutesLeft: String(minutesLeft),
+      },
+    });
+    console.log(`[AUTO_READY] Reminder sent to restaurant for order ${orderId}`);
+  } catch (e) {
+    console.error('[AUTO_READY] Error sending prep time reminder:', e);
+  }
+}
+
 async function _removeOrderRequestFromDriver(driverId, orderId) {
   if (!driverId) return;
   try {
@@ -1245,6 +1349,43 @@ async function _releaseDriverFromOrder(driverId, orderId) {
   } catch (e) {
     console.error(
       `[RiderFirst] Failed releasing driver ${driverId} from ${orderId}:`,
+      e
+    );
+  }
+}
+
+async function sendReassignmentNotification(driverId, orderId) {
+  if (!driverId) return;
+  try {
+    const driverSnap = await getDb().collection('users').doc(driverId).get();
+    const fcmToken = driverSnap.exists ? driverSnap.data()?.fcmToken : null;
+    if (!fcmToken) return;
+    await getMessaging().send({
+      token: fcmToken,
+      notification: {
+        title: 'Order Reassigned',
+        body: 'An order was reassigned due to timeout.',
+      },
+      data: {
+        type: 'order_reassigned',
+        orderId: String(orderId),
+      },
+      android: {
+        notification: {
+          sound: 'reassign',
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            sound: 'reassign.wav',
+          },
+        },
+      },
+    });
+  } catch (e) {
+    console.error(
+      `[sendReassignmentNotification] Failed for driver ${driverId} order ${orderId}:`,
       e
     );
   }
@@ -1511,7 +1652,8 @@ async function _offerOrderToDriver({
   stackDecision,
 }) {
   const now = _nowTimestamp();
-  const deadline = _addSeconds(now, RIDER_ACCEPT_TIMEOUT_SECONDS);
+  const timeoutSec = await _getRiderTimeoutSeconds();
+  const deadline = _addSeconds(now, timeoutSec);
 
   await orderRef.update({
     status: 'Driver Assigned',
@@ -1669,11 +1811,90 @@ exports.handleDriverRejection = functions.firestore
 
     console.log(`[HandleDriverRejection] Driver rejected order ${orderId}`);
 
+    const reason = String(afterData.driverRejectionReason || '');
+    if (reason === 'restaurant_closed') {
+      const rejectedDriverId = String(afterData.driverID || '');
+      if (rejectedDriverId) {
+        await _releaseDriverFromOrder(rejectedDriverId, orderId);
+      }
+
+      const evidenceUrl = String(afterData.driverRejectionEvidence || '');
+
+      const adminsSnap = await getDb()
+        .collection('users')
+        .where('role', '==', 'admin')
+        .get();
+
+      const tokens = [];
+      for (const doc of adminsSnap.docs) {
+        const t = doc.data()?.fcmToken;
+        if (t) tokens.push(t);
+      }
+
+      if (tokens.length > 0) {
+        const body = evidenceUrl
+          ? `Order ${orderId} – restaurant closed (photo attached)`
+          : `Order ${orderId} – restaurant closed`;
+
+        for (const token of tokens) {
+          try {
+            await getMessaging().send({
+              token,
+              notification: {
+                title: 'Restaurant Closed Report',
+                body,
+              },
+              data: {
+                type: 'restaurant_closed',
+                orderId,
+                evidenceUrl: evidenceUrl || '',
+              },
+            });
+          } catch (_) {}
+        }
+      }
+
+      console.log(
+        `[HandleDriverRejection] Order ${orderId} restaurant_closed, ` +
+        `skipping retrigger, notified ${tokens.length} admin(s)`
+      );
+      return null;
+    }
+
     const rejectedDriverId = String(afterData.driverID || '');
+    const driverRejectionReason = String(afterData.driverRejectionReason || '');
 
     // Release the rejected driver from the order
     if (rejectedDriverId) {
       await _releaseDriverFromOrder(rejectedDriverId, orderId);
+    }
+
+    // Update assignments_log with rejection status and reason
+    try {
+      const assignSnap = await getDb()
+        .collection('assignments_log')
+        .where('driverId', '==', rejectedDriverId)
+        .limit(50)
+        .get();
+      const match = assignSnap.docs.find((d) => {
+        const d2 = d.data();
+        return (d2.orderId || d2.order_id || '') === orderId;
+      });
+      if (match) {
+        const updateData = {
+          status: 'rejected',
+          rejectedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        if (driverRejectionReason) {
+          updateData.rejectionReason = driverRejectionReason;
+        }
+        await match.ref.update(updateData);
+      }
+    } catch (assignErr) {
+      console.warn(
+        '[HandleDriverRejection] Failed to update assignments_log:',
+        assignErr.message
+      );
     }
 
     await _logDispatchEvent({
@@ -1724,6 +1945,53 @@ exports.handleDriverRejection = functions.firestore
     });
 
     console.log(`[HandleDriverRejection] Retriggered dispatch for order ${orderId}, excluded driver ${rejectedDriverId}`);
+    return null;
+  });
+
+// =============================
+// Update acceptance rate on rejection
+// =============================
+exports.updateAcceptanceRateOnRejection = functions.firestore
+  .document('restaurant_orders/{orderId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+
+    if (before.status !== 'Driver Rejected' && after.status === 'Driver Rejected') {
+      const riderId = String(after.driverID || after.driverId || '');
+      if (!riderId) return null;
+
+      console.log(`[AcceptanceRate] Recalculating for rider ${riderId} due to rejection`);
+
+      const db = getDb();
+      const assignmentsSnap = await db
+        .collection('assignments_log')
+        .where('driverId', '==', riderId)
+        .orderBy('createdAt', 'desc')
+        .limit(50)
+        .get();
+
+      let accepted = 0;
+      let total = 0;
+      assignmentsSnap.docs.forEach((doc) => {
+        const status = doc.data().status;
+        if (['accepted', 'rejected', 'timeout'].includes(status)) {
+          total++;
+          if (status === 'accepted') accepted++;
+        }
+      });
+
+      const acceptanceRate = total > 0 ? (accepted / total) * 100 : 100;
+
+      await db.collection('users').doc(riderId).update({
+        acceptance_rate: Math.round(acceptanceRate * 10) / 10,
+        lastAcceptanceUpdate: admin.firestore.FieldValue.serverTimestamp(),
+        totalRejections: admin.firestore.FieldValue.increment(1),
+        lastRejectionAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      console.log(`[AcceptanceRate] Updated to ${acceptanceRate.toFixed(1)}% for rider ${riderId}`);
+    }
     return null;
   });
 
@@ -1831,10 +2099,10 @@ exports.riderFirstDispatchTimeouts = functions.pubsub
       }
     }
 
-    // 2) Rider accept timeouts (Driver Pending > 60s)
+    // 2) Rider accept timeouts (Driver Assigned > 60s - rider did not accept in time)
     const adminTimeoutSnap = await db
       .collection('restaurant_orders')
-      .where('status', '==', 'Driver Pending')
+      .where('status', '==', 'Driver Assigned')
       .where('dispatch.riderAcceptDeadline', '<=', now)
       .limit(25)
       .get();
@@ -1862,6 +2130,7 @@ exports.riderFirstDispatchTimeouts = functions.pubsub
         orderId,
         payload: { driverId, action: 'set_order_accepted_for_redispatch' },
       });
+      await sendReassignmentNotification(driverId, orderId);
     }
 
     // 4) Batch timeouts -- if any order in a batch timed out, release the whole batch
@@ -1895,6 +2164,7 @@ exports.riderFirstDispatchTimeouts = functions.pubsub
 
       for (const oid of orderIds) {
         await _releaseDriverFromOrder(driverId, oid);
+        await sendReassignmentNotification(driverId, oid);
         await db.collection('restaurant_orders').doc(oid).update({
           status: 'Order Accepted',
           driverID: admin.firestore.FieldValue.delete(),
@@ -1916,6 +2186,87 @@ exports.riderFirstDispatchTimeouts = functions.pubsub
       });
     }
 
+    return null;
+  });
+
+// =============================
+// Fast timeout checker (every 10s) - real-time release of expired assignments
+// =============================
+exports.riderAcceptDeadlineChecker = functions.pubsub
+  .schedule('every 10 seconds')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const cfg = await _loadDispatchWeights();
+    const tc = cfg.timeoutChecker || {};
+    if (tc.enabled === false) {
+      return null;
+    }
+    const batchSize = Math.min(500, Math.max(1, tc.batchSize || 50));
+    const now = _nowTimestamp();
+    const nowMs = now.toMillis ? now.toMillis() : now.seconds * 1000;
+
+    const expiredSnap = await db
+      .collection('restaurant_orders')
+      .where('status', '==', 'Driver Assigned')
+      .where('dispatch.riderAcceptDeadline', '<=', now)
+      .limit(batchSize)
+      .get();
+
+    if (expiredSnap.empty) {
+      return null;
+    }
+
+    const BATCH_COMMIT_SIZE = 20;
+    const pending = [];
+
+    for (const doc of expiredSnap.docs) {
+      const orderId = doc.id;
+      const data = doc.data() || {};
+      const driverId = String(data.driverID || '');
+      const deadline = data?.dispatch?.riderAcceptDeadline;
+      const delaySeconds = deadline && deadline.toMillis
+        ? Math.round((nowMs - deadline.toMillis()) / 1000)
+        : null;
+
+      await _releaseDriverFromOrder(driverId, orderId);
+
+      pending.push({
+        ref: doc.ref,
+        orderId,
+        driverId,
+        delaySeconds,
+      });
+    }
+
+    for (let i = 0; i < pending.length; i += BATCH_COMMIT_SIZE) {
+      const chunk = pending.slice(i, i + BATCH_COMMIT_SIZE);
+      const writeBatch = db.batch();
+      for (const item of chunk) {
+        writeBatch.update(item.ref, {
+          status: 'Order Accepted',
+          'dispatch.stage': 'fast_timeout_retrigger',
+          'dispatch.lock': false,
+          'dispatch.excludedDriverIds': admin.firestore.FieldValue.arrayUnion(item.driverId),
+          'dispatch.retryCount': admin.firestore.FieldValue.increment(1),
+          'dispatch.lastRetriggerAt': admin.firestore.FieldValue.serverTimestamp(),
+          driverID: admin.firestore.FieldValue.delete(),
+          assignedDriverName: admin.firestore.FieldValue.delete(),
+        });
+      }
+      await writeBatch.commit();
+    }
+
+    for (const item of pending) {
+      await _logDispatchEvent({
+        type: 'fast_timeout_retrigger',
+        orderId: item.orderId,
+        payload: { driverId: item.driverId, delaySeconds: item.delaySeconds },
+      });
+      await sendReassignmentNotification(item.driverId, item.orderId);
+    }
+
+    console.log(`[FastTimeoutChecker] Processed ${pending.length} expired assignments`);
     return null;
   });
 
@@ -1998,6 +2349,251 @@ exports.monitorStuckOrders = functions.pubsub
         orderId: doc.id,
         payload: { source: 'unassigned_retry', attemptCount },
       });
+    }
+
+    return null;
+  });
+
+// =============================
+// Auto-mark orders as ready when prep time has elapsed
+// =============================
+exports.autoMarkReadyOrders = functions.pubsub
+  .schedule('every 2 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = admin.firestore.Timestamp.now();
+    const nowDate = now.toDate();
+    let processedCount = 0;
+    let errorCount = 0;
+
+    console.log('[AUTO_READY] ===== STARTING AUTO-READY CHECK =====');
+    console.log('[AUTO_READY] Time: ' + nowDate.toISOString());
+
+    try {
+      const ordersSnapshot = await db
+        .collection('restaurant_orders')
+        .where('status', '==', 'Driver Accepted')
+        .limit(100)
+        .get();
+
+      console.log(`[AUTO_READY] Found ${ordersSnapshot.size} orders to check`);
+
+      for (const doc of ordersSnapshot.docs) {
+        try {
+          const orderData = doc.data() || {};
+          const orderId = doc.id;
+
+          let readyTime;
+          if (orderData.readyAt) {
+            readyTime = orderData.readyAt.toDate
+              ? orderData.readyAt.toDate()
+              : new Date(orderData.readyAt._seconds * 1000);
+          } else {
+            const acceptedAt = orderData.acceptedAt;
+            if (!acceptedAt) continue;
+            const prepTimeStr =
+              orderData.estimatedTimeToPrepare || '30 min';
+            if (!orderData.estimatedTimeToPrepare) continue;
+            const prepMinutes = parsePreparationMinutes(prepTimeStr);
+            const acceptedDate = acceptedAt.toDate
+              ? acceptedAt.toDate()
+              : new Date(acceptedAt._seconds * 1000);
+            readyTime = new Date(
+              acceptedDate.getTime() + prepMinutes * 60000
+            );
+          }
+
+          const minutesLeft = Math.round(
+            (readyTime.getTime() - nowDate.getTime()) / 60000
+          );
+
+          // Send reminder if within threshold and not yet reminded
+          if (
+            minutesLeft > 0 &&
+            !orderData?.dispatch?.prepTimeReminderSent
+          ) {
+            const vendorSnap = await db
+              .collection('vendors')
+              .doc(orderData.vendorID)
+              .get();
+            const vendorData = vendorSnap.exists
+              ? vendorSnap.data()
+              : {};
+            const remindersEnabled =
+              vendorData?.prepRemindersEnabled ?? true;
+            const reminderMinutes = vendorData?.reminderMinutes ?? 5;
+
+            if (
+              remindersEnabled &&
+              minutesLeft <= reminderMinutes
+            ) {
+              await _sendPrepTimeReminder(orderId, orderData, minutesLeft);
+              await doc.ref.update({
+                'dispatch.prepTimeReminderSent': true,
+                'dispatch.prepTimeReminderAt':
+                  admin.firestore.FieldValue.serverTimestamp(),
+              });
+            }
+          }
+
+          // Check if ready time has passed
+          if (nowDate >= readyTime) {
+            console.log(
+              `[AUTO_READY] Order ${orderId} is ready - auto-marking`
+            );
+
+            await doc.ref.update({
+              status: 'Order Shipped',
+              shippedAt: admin.firestore.FieldValue.serverTimestamp(),
+              autoMarkedReady: true,
+              autoMarkedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+
+            const customerId =
+              orderData.author?.id || orderData.authorID || '';
+            if (customerId) {
+              await _addDriverChatSystemMessage(
+                orderId,
+                'Order Shipped',
+                customerId
+              );
+            }
+
+            processedCount++;
+          }
+        } catch (orderErr) {
+          console.error(
+            `[AUTO_READY] Error processing order ${doc.id}:`,
+            orderErr
+          );
+          errorCount++;
+        }
+      }
+
+      console.log('[AUTO_READY] ===== COMPLETED =====');
+      console.log(
+        `[AUTO_READY] Processed: ${processedCount}, Errors: ${errorCount}`
+      );
+
+      await db.collection('system_logs').add({
+        type: 'auto_ready_check',
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        ordersChecked: ordersSnapshot.size,
+        ordersMarked: processedCount,
+        errors: errorCount,
+      });
+    } catch (err) {
+      console.error('[AUTO_READY] Fatal error:', err);
+      try {
+        await getDb().collection('system_logs').add({
+          type: 'auto_ready_error',
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+          error: err.message,
+          stack: err.stack,
+        });
+      } catch (logErr) {
+        console.error('[AUTO_READY] Failed to log error:', logErr);
+      }
+    }
+
+    return null;
+  });
+
+// =============================
+// Send prep time reminders to restaurants (every 5 min)
+// =============================
+exports.sendPrepTimeReminders = functions.pubsub
+  .schedule('every 5 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = admin.firestore.Timestamp.now();
+    const nowDate = now.toDate();
+    let reminderCount = 0;
+
+    console.log('[REMINDER] ===== SENDING PREP TIME REMINDERS =====');
+
+    try {
+      const ordersSnapshot = await db
+        .collection('restaurant_orders')
+        .where('status', '==', 'Driver Accepted')
+        .limit(50)
+        .get();
+
+      for (const doc of ordersSnapshot.docs) {
+        try {
+          const orderData = doc.data() || {};
+          const orderId = doc.id;
+
+          if (orderData.autoMarkedReady) continue;
+
+          let readyTime;
+          if (orderData.readyAt) {
+            readyTime = orderData.readyAt.toDate
+              ? orderData.readyAt.toDate()
+              : new Date(orderData.readyAt._seconds * 1000);
+          } else {
+            const acceptedAt = orderData.acceptedAt;
+            if (!acceptedAt) continue;
+            if (!orderData.estimatedTimeToPrepare) continue;
+            const prepMinutes = parsePreparationMinutes(
+              orderData.estimatedTimeToPrepare
+            );
+            const acceptedDate = acceptedAt.toDate
+              ? acceptedAt.toDate()
+              : new Date(acceptedAt._seconds * 1000);
+            readyTime = new Date(
+              acceptedDate.getTime() + prepMinutes * 60000
+            );
+          }
+          const minutesUntilReady = Math.round(
+            (readyTime.getTime() - nowDate.getTime()) / 60000
+          );
+
+          if (
+            minutesUntilReady < 3 ||
+            minutesUntilReady > 5 ||
+            orderData?.dispatch?.prepTimeReminderSent
+          ) {
+            continue;
+          }
+
+          const vendorSnap = await db
+            .collection('vendors')
+            .doc(orderData.vendorID)
+            .get();
+          const vendorData = vendorSnap.exists ? vendorSnap.data() : {};
+          const remindersEnabled = vendorData?.prepRemindersEnabled ?? true;
+          const reminderMinutesPref = vendorData?.reminderMinutes ?? 5;
+
+          if (
+            !remindersEnabled ||
+            minutesUntilReady > reminderMinutesPref
+          ) {
+            continue;
+          }
+
+          await _sendPrepTimeReminder(orderId, orderData, minutesUntilReady);
+          await doc.ref.update({
+            'dispatch.prepTimeReminderSent': true,
+            'dispatch.prepTimeReminderAt':
+              admin.firestore.FieldValue.serverTimestamp(),
+          });
+          reminderCount++;
+        } catch (orderErr) {
+          console.error(
+            `[REMINDER] Error processing order ${doc.id}:`,
+            orderErr
+          );
+        }
+      }
+
+      console.log(
+        `[REMINDER] ===== COMPLETED: ${reminderCount} reminders sent =====`
+      );
+    } catch (err) {
+      console.error('[REMINDER] Fatal error:', err);
     }
 
     return null;
@@ -2315,7 +2911,8 @@ async function _offerBatchToDriver({
   stackDecision,
 }) {
   const now = _nowTimestamp();
-  const deadline = _addSeconds(now, RIDER_ACCEPT_TIMEOUT_SECONDS);
+  const timeoutSec = await _getRiderTimeoutSeconds();
+  const deadline = _addSeconds(now, timeoutSec);
 
   for (let idx = 0; idx < group.length; idx++) {
     await group[idx].ref.update({
@@ -2602,6 +3199,11 @@ const DEFAULT_DISPATCH_WEIGHTS = {
   performanceBoostThreshold: 90.0,
   performancePenaltyThreshold: 65.0,
   weatherCondition: 'normal',
+  timeoutChecker: {
+    enabled: true,
+    frequencySeconds: 10,
+    batchSize: 50,
+  },
 };
 
 async function _loadDispatchWeights() {
@@ -2621,6 +3223,11 @@ async function _loadDispatchWeights() {
   }
   _dispatchWeightsCacheTime = now;
   return _dispatchWeightsCache;
+}
+
+async function _getRiderTimeoutSeconds() {
+  const w = await _loadDispatchWeights();
+  return Math.max(30, Math.min(180, (w.riderTimeoutSeconds ?? 60)));
 }
 
 function _isPeakHour(w) {
@@ -3736,6 +4343,145 @@ exports.sendIndividualNotification = functions.region('us-central1').https.onReq
 });
 
 /**
+ * Firestore Trigger: Send order status notification to customer
+ *
+ * Triggered on restaurant_orders/{orderId} document updates when status changes.
+ * Sends FCM with title/body based on new status and data payload for deep linking.
+ */
+exports.sendOrderStatusNotification = functions
+  .region('us-central1')
+  .firestore.document('restaurant_orders/{orderId}')
+  .onUpdate(async (change, context) => {
+    const orderId = String(context.params.orderId || '');
+    const beforeData = change.before.data() || {};
+    const afterData = change.after.data() || {};
+    const beforeStatus = String(beforeData.status || '');
+    const afterStatus = String(afterData.status || '');
+
+    if (beforeStatus === afterStatus) return null;
+
+    const customerId = String(
+      afterData.authorID ||
+        afterData.authorId ||
+        afterData.customerId ||
+        afterData.customerID ||
+        (afterData.author && afterData.author.id) ||
+        ''
+    );
+    if (!customerId) {
+      console.log(
+        `[sendOrderStatusNotification] Skip: missing customerId. orderId=${orderId}`
+      );
+      return null;
+    }
+
+    let title = 'Order Update';
+    let body = 'Your order status has been updated.';
+
+    switch (afterStatus) {
+      case 'Order Placed':
+        title = 'Order Received';
+        body = 'Your order has been placed successfully!';
+        break;
+      case 'Order Accepted':
+        title = 'Order Confirmed';
+        body = 'Restaurant has confirmed your order';
+        break;
+      case 'Driver Assigned':
+        title = 'Rider Assigned';
+        body = 'A rider has been assigned to your order';
+        break;
+      case 'Driver Accepted':
+        title = 'Preparing Your Order';
+        body = 'Restaurant is now preparing your food';
+        break;
+      case 'Order Shipped':
+        title = 'Food Ready for Pickup';
+        body = 'Your order is ready! Rider is picking it up';
+        break;
+      case 'In Transit':
+        title = 'On the Way';
+        body = 'Your order is on the way! Track your rider';
+        break;
+      case 'Order Completed':
+        title = 'Order Delivered';
+        body = 'Your order has been delivered. Enjoy!';
+        break;
+      case 'Driver Rejected':
+        title = 'Finding Another Rider';
+        body = 'Your order is being reassigned';
+        break;
+      case 'Order Cancelled':
+        title = 'Order Cancelled';
+        body = 'Your order has been cancelled.';
+        break;
+      case 'Order Rejected':
+        title = 'Order Unsuccessful';
+        body = 'Your order could not be completed.';
+        break;
+      default:
+        break;
+    }
+
+    const db = getDb();
+    let customerFcmToken = null;
+    const author = afterData.author || {};
+    customerFcmToken = author.fcmToken || null;
+
+    if (!customerFcmToken && customerId) {
+      try {
+        const userDoc = await db.collection('users').doc(customerId).get();
+        if (userDoc.exists) {
+          customerFcmToken = userDoc.data()?.fcmToken || null;
+        }
+      } catch (e) {
+        console.error(
+          `[sendOrderStatusNotification] Error reading user:`,
+          e
+        );
+      }
+    }
+
+    if (!customerFcmToken) {
+      console.log(
+        `[sendOrderStatusNotification] Skip: no FCM token. orderId=${orderId} customerId=${customerId}`
+      );
+      return null;
+    }
+
+    try {
+      const message = {
+        notification: { title, body },
+        token: customerFcmToken,
+        data: {
+          type: 'order_update',
+          orderId: String(orderId),
+          status: String(afterStatus),
+          customerId: String(customerId),
+        },
+        android: {
+          priority: 'high',
+          notification: { sound: 'default' },
+        },
+        apns: {
+          payload: { aps: { sound: 'default' } },
+        },
+      };
+
+      await getMessaging().send(message);
+      console.log(
+        `[sendOrderStatusNotification] Sent. orderId=${orderId} status=${afterStatus}`
+      );
+    } catch (e) {
+      console.error(
+        `[sendOrderStatusNotification] Failed for orderId=${orderId}:`,
+        e
+      );
+    }
+    return null;
+  });
+
+/**
  * Firestore Trigger: Award referral credits on order completion
  *
  * Triggered on restaurant_orders/{orderId} document updates.
@@ -4001,6 +4747,36 @@ exports.orderCompletionEnrichment = functions.firestore
         }
       } catch (prepErr) {
         console.error('[PrepTimeTracking] Error:', prepErr);
+      }
+
+      // Send FCM to rider when food is ready for pickup
+      try {
+        const orderId = change.after.id;
+        const driverId = String(afterData.driverID || '');
+        if (driverId) {
+          const driverSnap = await getDb().collection('users').doc(driverId).get();
+          const fcmToken = driverSnap.exists ? driverSnap.data()?.fcmToken : null;
+          const vendor = afterData.vendor || {};
+          const restaurantName = (vendor.title || 'Restaurant').toString().trim();
+          if (fcmToken) {
+            await getMessaging().send({
+              token: fcmToken,
+              notification: {
+                title: 'Food Ready for Pickup',
+                body: `Your order from ${restaurantName} is now ready!`,
+              },
+              data: {
+                type: 'food_ready',
+                orderId: String(orderId),
+              },
+            });
+            console.log(`[FoodReadyFCM] Sent to rider ${driverId} for order ${orderId}`);
+          } else {
+            console.log(`[FoodReadyFCM] No FCM token for rider ${driverId}`);
+          }
+        }
+      } catch (fcmErr) {
+        console.error('[FoodReadyFCM] Error:', fcmErr);
       }
     }
 
@@ -4528,6 +5304,53 @@ exports.dailyDispatchAnalytics = functions.pubsub
     return null;
   });
 
+// --- Callable: Release order due to rider accept timeout (Admin client timeout) ---
+exports.releaseOrderDueToTimeout = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const orderId = data?.orderId;
+    if (!orderId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'orderId required',
+      );
+    }
+    const db = getDb();
+    const orderSnap = await db.collection('restaurant_orders').doc(orderId).get();
+    if (!orderSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Order not found');
+    }
+    const orderData = orderSnap.data() || {};
+    if (orderData.status !== 'Driver Assigned') {
+      return { success: false, reason: 'already_handled' };
+    }
+    const deadline = orderData?.dispatch?.riderAcceptDeadline;
+    if (!deadline || deadline.toMillis() > Date.now()) {
+      return { success: false, reason: 'deadline_not_passed' };
+    }
+    const driverId = String(orderData.driverID || '');
+    console.log(`[releaseOrderDueToTimeout] Processing order ${orderId}`);
+    await _releaseDriverFromOrder(driverId, orderId);
+    await sendReassignmentNotification(driverId, orderId);
+    await orderSnap.ref.update({
+      status: 'Order Accepted',
+      'dispatch.stage': 'admin_client_timeout',
+      'dispatch.lock': false,
+      'dispatch.excludedDriverIds': admin.firestore.FieldValue.arrayUnion(
+        driverId,
+      ),
+      'dispatch.retryCount': admin.firestore.FieldValue.increment(1),
+      driverID: admin.firestore.FieldValue.delete(),
+      assignedDriverName: admin.firestore.FieldValue.delete(),
+    });
+    await _logDispatchEvent({
+      type: 'admin_client_timeout',
+      orderId,
+      payload: { driverId },
+    });
+    return { success: true };
+  });
+
 // --- One-time migration: backfill riderAvailability + riderDisplayStatus ---
 exports.migrateRiderStatus = functions.https.onRequest(async (req, res) => {
   try {
@@ -4973,6 +5796,55 @@ exports.migratePerformanceFields = functions
       res.json({ success: true, migrated });
     } catch (err) {
       console.error('[Migration] Error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+/**
+ * One-time migration: Update all orders with status "Driver Pending" to "Driver Accepted".
+ * Run after deploying the Driver Pending removal. Safe to run multiple times.
+ */
+exports.migrateDriverPendingToAccepted = functions
+  .region('us-central1')
+  .https.onRequest(async (req, res) => {
+    setCors(res);
+    if (handleCors(req, res)) return;
+
+    try {
+      const db = getDb();
+      const snap = await db
+        .collection('restaurant_orders')
+        .where('status', '==', 'Driver Pending')
+        .get();
+
+      let count = 0;
+      const batchSize = 500;
+      const batches = [];
+
+      for (const doc of snap.docs) {
+        batches.push(
+          doc.ref.update({
+            status: 'Driver Accepted',
+            'migration.driverPendingToAcceptedAt':
+              admin.firestore.FieldValue.serverTimestamp(),
+          })
+        );
+        count++;
+      }
+
+      if (count > 0) {
+        for (let i = 0; i < batches.length; i += batchSize) {
+          const chunk = batches.slice(i, i + batchSize);
+          await Promise.all(chunk);
+        }
+      }
+
+      console.log(
+        `[Migration] Updated ${count} orders from Driver Pending to Driver Accepted`
+      );
+      res.json({ updated: count });
+    } catch (err) {
+      console.error('[Migration] migrateDriverPendingToAccepted error:', err);
       res.status(500).json({ error: err.message });
     }
   });

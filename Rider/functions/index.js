@@ -626,7 +626,7 @@ exports.processDriverLocationLifecycle = functions
 
           // A) "Driver is on the way to the restaurant"
           if (
-            ['Driver Pending', 'Driver Accepted', 'Order Shipped'].includes(
+            ['Driver Accepted', 'Order Shipped'].includes(
               orderStatus
             ) &&
             distanceFromAccept > 100 &&
@@ -895,4 +895,160 @@ exports.checkZoneCapacity = functions
       maxRiders: maxRiders,
       utilizationPercentage: utilizationPercentage,
     };
+  });
+
+/**
+ * Monitor rider inactivity and auto-logout riders who have been inactive
+ * for longer than the configured threshold. Runs every 5 minutes.
+ */
+exports.monitorRiderInactivity = functions.pubsub
+  .schedule('every 5 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async (context) => {
+    const db = admin.firestore();
+
+    const configSnap = await db
+      .collection('config')
+      .doc('rider_time_settings')
+      .get();
+    const config = configSnap.exists ? configSnap.data() : {};
+    const inactivityTimeoutMinutes = config.inactivityTimeoutMinutes ?? 15;
+    const excludeWithActiveOrders = config.excludeWithActiveOrders !== false;
+    const thresholdMs = inactivityTimeoutMinutes * 60 * 1000;
+
+    const ridersSnap = await db
+      .collection('users')
+      .where('role', '==', 'driver')
+      .get();
+
+    const now = Date.now();
+    let loggedOut = 0;
+
+    for (const riderDoc of ridersSnap.docs) {
+      const data = riderDoc.data();
+      const avail = data.riderAvailability;
+      if (avail !== 'available' && avail !== 'on_delivery') continue;
+
+      const orders = data.inProgressOrderID || [];
+      const hasActiveOrders = orders.length > 0;
+      if (excludeWithActiveOrders && hasActiveOrders) continue;
+
+      const lastActRaw = data.lastActivityTimestamp;
+      const locRaw = data.locationUpdatedAt;
+      const lastActTs = lastActRaw && lastActRaw.toDate
+        ? lastActRaw.toDate()
+        : lastActRaw;
+      const locTs = locRaw && locRaw.toDate
+        ? locRaw.toDate()
+        : locRaw;
+      const lastAct = lastActTs || locTs;
+      if (!lastAct) continue;
+
+      const lastActMs = lastAct instanceof Date
+        ? lastAct.getTime()
+        : (lastAct.toMillis ? lastAct.toMillis() : new Date(lastAct).getTime());
+      const inactiveMs = now - lastActMs;
+      if (inactiveMs < thresholdMs) continue;
+
+      const inactiveMinutes = Math.round(inactiveMs / 60000);
+
+      await db.collection('system_logs').add({
+        type: 'auto_logout',
+        riderId: riderDoc.id,
+        reason: 'inactivity',
+        inactiveMinutes,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      await riderDoc.ref.update({
+        isOnline: false,
+        riderAvailability: 'offline',
+        riderDisplayStatus: 'Offline',
+      });
+      loggedOut++;
+      console.log(
+        `[Inactivity] Auto-logout rider ${riderDoc.id}, ` +
+        `inactive ${inactiveMinutes} min`
+      );
+    }
+
+    if (loggedOut > 0) {
+      console.log(`[Inactivity] Done – auto-logged out ${loggedOut} rider(s)`);
+    }
+    return null;
+  });
+
+/**
+ * Scheduled cleanup: check each order in every rider's
+ * inProgressOrderID array and remove entries whose actual
+ * status is completed, cancelled, rejected, or missing.
+ * Runs every 60 minutes.
+ */
+exports.cleanupStuckOrders = functions.pubsub
+  .schedule('every 60 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async (context) => {
+    const db = admin.firestore();
+    const ridersSnap = await db
+      .collection('users')
+      .where('role', '==', 'driver')
+      .get();
+
+    const doneStatuses = [
+      'Order Completed',
+      'Order Cancelled',
+      'Order Rejected',
+      'Driver Rejected',
+    ];
+
+    let totalCleaned = 0;
+
+    for (const rider of ridersSnap.docs) {
+      const data = rider.data();
+      const orders = data.inProgressOrderID || [];
+      if (orders.length === 0) continue;
+
+      const toRemove = [];
+
+      for (const orderId of orders) {
+        const orderDoc = await db
+          .collection('restaurant_orders')
+          .doc(orderId)
+          .get();
+
+        if (!orderDoc.exists) {
+          toRemove.push(orderId);
+          continue;
+        }
+
+        const status = orderDoc.data().status || '';
+        if (doneStatuses.includes(status)) {
+          toRemove.push(orderId);
+        }
+      }
+
+      if (toRemove.length > 0) {
+        await rider.ref.update({
+          inProgressOrderID:
+            admin.firestore.FieldValue.arrayRemove(toRemove),
+        });
+        totalCleaned += toRemove.length;
+        console.log(
+          `[CLEANUP] Rider ${rider.id}: removed ` +
+          `${toRemove.length} stuck orders ` +
+          `(${toRemove.join(', ')})`
+        );
+      }
+    }
+
+    if (totalCleaned > 0) {
+      console.log(
+        `[CLEANUP] Done – removed ${totalCleaned} ` +
+        `stuck order(s) total`
+      );
+    } else {
+      console.log('[CLEANUP] Done – no stuck orders');
+    }
+
+    return null;
   });

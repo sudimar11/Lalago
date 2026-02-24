@@ -9,6 +9,7 @@ import 'package:foodie_driver/model/OrderProductModel.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/services/order_location_service.dart';
+import 'package:foodie_driver/utils/order_ready_time_helper.dart';
 
 class PickOrder extends StatefulWidget {
   final OrderModel? currentOrder;
@@ -27,15 +28,68 @@ class _PickOrderState extends State<PickOrder> {
   int val = -1;
   bool _isNearRestaurant = false;
   StreamSubscription<bool>? _proximitySubscription;
+  StreamSubscription<DocumentSnapshot>? _orderStatusSubscription;
+  Timer? _countdownTimer;
+  OrderModel? _orderModel;
   final Map<String, Map<String, dynamic>> _availabilityByProductId = {};
   bool _isAvailabilityLoading = false;
   final Map<String, Map<String, dynamic>> _replacementsByProductId = {};
 
+  OrderModel get _order => _orderModel ?? widget.currentOrder!;
+
+  bool _isFoodReady() {
+    if (_order.status == ORDER_STATUS_SHIPPED) return true;
+    final baseTime =
+        _order.acceptedAt?.toDate() ?? _order.createdAt.toDate();
+    final prepMinutes = OrderReadyTimeHelper.parsePreparationMinutes(
+      _order.estimatedTimeToPrepare,
+    );
+    final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    return DateTime.now().isAfter(readyAt) ||
+        DateTime.now().isAtSameMomentAs(readyAt);
+  }
+
+  void _startOrderStatusListener() {
+    if (widget.currentOrder == null) return;
+    final orderId = widget.currentOrder!.id;
+    _orderStatusSubscription = FirebaseFirestore.instance
+        .collection('restaurant_orders')
+        .doc(orderId)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted || !snap.exists) return;
+      try {
+        final data = snap.data()!;
+        data['id'] = orderId;
+        final updated = OrderModel.fromJson(data);
+        if (mounted) {
+          setState(() => _orderModel = updated);
+        }
+      } catch (_) {}
+    });
+  }
+
+  void _startCountdownTimer() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!mounted) return;
+      setState(() {});
+      if (_isFoodReady()) {
+        _countdownTimer?.cancel();
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    _orderModel = widget.currentOrder;
     _checkProximity();
     _loadAvailability();
+    _startOrderStatusListener();
+    if (!_isFoodReady()) {
+      _startCountdownTimer();
+    }
     _proximitySubscription = OrderLocationService.proximityStream.listen(
       (isNear) {
         if (mounted) {
@@ -50,6 +104,8 @@ class _PickOrderState extends State<PickOrder> {
   @override
   void dispose() {
     _proximitySubscription?.cancel();
+    _orderStatusSubscription?.cancel();
+    _countdownTimer?.cancel();
     super.dispose();
   }
 
@@ -57,7 +113,7 @@ class _PickOrderState extends State<PickOrder> {
     final driverLocation = MyAppState.currentUser?.location;
     if (driverLocation != null && widget.currentOrder != null) {
       _isNearRestaurant = OrderLocationService.isNearRestaurant(
-          widget.currentOrder!, driverLocation);
+          _order, driverLocation);
       if (mounted) {
         setState(() {});
       }
@@ -66,7 +122,7 @@ class _PickOrderState extends State<PickOrder> {
 
   Future<void> _loadAvailability() async {
     if (widget.currentOrder == null) return;
-    final ids = widget.currentOrder!.products
+    final ids = _order.products
         .map((product) => product.id)
         .where((id) => id.isNotEmpty)
         .toSet();
@@ -103,8 +159,8 @@ class _PickOrderState extends State<PickOrder> {
   }
 
   String _readOrderVendorId() {
-    final order = widget.currentOrder;
-    if (order == null) return '';
+    if (widget.currentOrder == null) return '';
+    final order = _order;
     if (order.vendorID.isNotEmpty) return order.vendorID;
     final vendorId = order.vendor.id;
     return vendorId;
@@ -268,14 +324,132 @@ class _PickOrderState extends State<PickOrder> {
     await _loadAvailability();
   }
 
+  Widget _buildPreparingView() {
+    final baseTime =
+        _order.acceptedAt?.toDate() ?? _order.createdAt.toDate();
+    final prepMinutes = OrderReadyTimeHelper.parsePreparationMinutes(
+      _order.estimatedTimeToPrepare,
+    );
+    final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    final now = DateTime.now();
+    final remaining = readyAt.difference(now);
+    final remainingMinutes = remaining.inMinutes.clamp(0, 999);
+    final isReadyNow = remainingMinutes <= 0;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 25.0, vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(2),
+              border: Border.all(color: Colors.grey.shade100, width: 0.1),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.grey.shade200,
+                  blurRadius: 2.0,
+                  spreadRadius: 0.4,
+                  offset: Offset(0.2, 0.2),
+                ),
+              ],
+              color: isDarkMode(context)
+                  ? Color(DARK_CARD_BG_COLOR)
+                  : Colors.white,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                Icon(
+                  Icons.schedule,
+                  size: 32,
+                  color: Colors.orange.shade700,
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Food is being prepared",
+                      style: TextStyle(
+                        color: Colors.orange.shade800,
+                        fontFamily: "Poppinsm",
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      isReadyNow
+                          ? "Ready now"
+                          : "Ready in ~$remainingMinutes min",
+                      style: TextStyle(
+                        color: Colors.orange.shade600,
+                        fontFamily: "Poppinsr",
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 28),
+          Text(
+            "${_order.vendor.title}",
+            style: TextStyle(
+              color: isDarkMode(context) ? Colors.white : Color(0xff333333),
+              fontFamily: "Poppinsm",
+              fontSize: 16,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            "Waiting for restaurant to finish preparing your order.",
+            style: TextStyle(
+              color: isDarkMode(context)
+                  ? Colors.grey.shade400
+                  : Color(0xff9091A4),
+              fontFamily: "Poppinsr",
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final hasUnavailableItems = widget.currentOrder!.products.any((product) {
+    final hasUnavailableItems = _order.products.any((product) {
       final status =
           _availabilityByProductId[product.id]?['availabilityStatus']?.toString();
       return status == 'unavailable';
     });
     final canConfirmItems = !hasUnavailableItems;
+    final isFoodReady = _isFoodReady();
+
+    if (!isFoodReady) {
+      return Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: Icon(Icons.chevron_left),
+            onPressed: () => Navigator.pop(context),
+          ),
+          titleSpacing: -8,
+          title: Text(
+            "Pick: ${_order.id}",
+            style: TextStyle(
+              color: isDarkMode(context)
+                  ? Color(0xffFFFFFF)
+                  : Color(0xff000000),
+              fontFamily: "Poppinsr",
+            ),
+          ),
+          centerTitle: false,
+        ),
+        body: _buildPreparingView(),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -285,7 +459,7 @@ class _PickOrderState extends State<PickOrder> {
         ),
         titleSpacing: -8,
         title: Text(
-          "Pick: ${widget.currentOrder!.id}",
+          "Pick: ${_order.id}",
           style: TextStyle(
             color: isDarkMode(context) ? Color(0xffFFFFFF) : Color(0xff000000),
             fontFamily: "Poppinsr",
@@ -352,7 +526,7 @@ class _PickOrderState extends State<PickOrder> {
             SizedBox(height: 24),
             ListView.builder(
                 shrinkWrap: true,
-                itemCount: widget.currentOrder!.products.length,
+                itemCount: _order.products.length,
                 itemBuilder: (context, index) {
                   final product = widget.currentOrder!.products[index];
                   final availability = _availabilityByProductId[product.id];
@@ -370,7 +544,7 @@ class _PickOrderState extends State<PickOrder> {
                             child: CachedNetworkImage(
                                 height: 55,
                                 // width: 50,
-                                imageUrl: '${widget.currentOrder!.products[index].photo}',
+                                imageUrl: '${_order.products[index].photo}',
                                 imageBuilder: (context, imageProvider) => Container(
                                       decoration: BoxDecoration(
                                           borderRadius: BorderRadius.circular(8),
@@ -517,14 +691,14 @@ class _PickOrderState extends State<PickOrder> {
                   ),
                   ListTile(
                     title: Text(
-                      '${widget.currentOrder!.author.fullName()}',
+                      '${_order.author.fullName()}',
                       style: TextStyle(
                         color: isDarkMode(context) ? Colors.white : Color(0xff333333),
                         fontFamily: "Poppinsm",
                       ),
                     ),
                     subtitle: Text(
-                      "${widget.currentOrder!.address.getFullAddress()}",
+                      "${_order.address.getFullAddress()}",
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -554,7 +728,7 @@ class _PickOrderState extends State<PickOrder> {
                       _isNearRestaurant &&
                       canConfirmItems)
                   ? Color(COLOR_PRIMARY)
-                  : Color(COLOR_PRIMARY).withValues(alpha: 0.5),
+                  : Color(COLOR_PRIMARY).withOpacity(0.5),
             ),
             child: Text(
               _isNearRestaurant
@@ -564,10 +738,9 @@ class _PickOrderState extends State<PickOrder> {
             ),
             onPressed: (_value == true && _isNearRestaurant && canConfirmItems)
                 ? () async {
-                    print('HomeScreenState.completePickUp');
                     showProgress(context, 'Updating order...', false);
-                    widget.currentOrder!.status = ORDER_STATUS_IN_TRANSIT;
-                    await FireStoreUtils.updateOrder(widget.currentOrder!);
+                    _order.status = ORDER_STATUS_IN_TRANSIT;
+                    await FireStoreUtils.updateOrder(_order);
                     hideProgress();
                     setState(() {});
                     Navigator.pop(context);

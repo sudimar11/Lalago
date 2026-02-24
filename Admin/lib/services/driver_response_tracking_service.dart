@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 /// Tracks driver responses to order assignments.
 /// Monitors acceptance, rejection, and timeout. Logs outcomes to
@@ -72,11 +73,14 @@ class DriverResponseTrackingService {
         );
       } else if (_isDriverRejected(status)) {
         _timeoutTimers[orderId]?.cancel();
+        final rejectionReason =
+            data['driverRejectionReason'] as String?;
         await _handleDriverRejection(
           orderId: orderId,
           driverId: driverId,
           assignmentLogId: assignmentLogId,
           assignedAt: assignedAt,
+          rejectionReason: rejectionReason,
           onComplete: onListenerComplete,
         );
       }
@@ -115,10 +119,10 @@ class DriverResponseTrackingService {
       if (!snap.exists) return;
       final data = snap.data() ?? {};
       final status = statusToText(data['status']);
-      if (status != 'Driver Pending') return;
+      if (status != 'Driver Assigned') return;
 
-      print('[Driver Response] Timeout for order $orderId '
-          '(driver: $driverId)');
+      print('[TIMER] Client timeout for order $orderId - '
+          'invoking releaseOrderDueToTimeout');
 
       await _firestore
           .collection('assignments_log')
@@ -135,6 +139,17 @@ class DriverResponseTrackingService {
         responseTimeSeconds: 65,
         reason: 'client_timeout',
       );
+
+      try {
+        final result = await FirebaseFunctions.instanceFor(region: 'us-central1')
+            .httpsCallable('releaseOrderDueToTimeout')
+            .call({'orderId': orderId});
+        if ((result.data as Map<dynamic, dynamic>?)?['success'] == true) {
+          print('[Driver Response] Order $orderId released for redispatch');
+        }
+      } catch (e) {
+        print('[Driver Response] releaseOrderDueToTimeout failed: $e');
+      }
 
       onComplete(orderId);
     } catch (e) {
@@ -182,6 +197,7 @@ class DriverResponseTrackingService {
     required String driverId,
     required String assignmentLogId,
     required DateTime assignedAt,
+    String? rejectionReason,
     required void Function(String orderId) onComplete,
   }) async {
     print('[Driver Response] Driver $driverId REJECTED '
@@ -190,14 +206,19 @@ class DriverResponseTrackingService {
       final responseSeconds =
           DateTime.now().difference(assignedAt).inSeconds;
 
-      await _firestore
-          .collection('assignments_log')
-          .doc(assignmentLogId)
-          .update({
+      final updateData = <String, dynamic>{
         'status': 'rejected',
         'rejectedAt': FieldValue.serverTimestamp(),
         'responseTimeSeconds': responseSeconds,
-      });
+      };
+      if (rejectionReason != null && rejectionReason.isNotEmpty) {
+        updateData['rejectionReason'] = rejectionReason;
+      }
+
+      await _firestore
+          .collection('assignments_log')
+          .doc(assignmentLogId)
+          .update(updateData);
 
       await _logOutcome(
         orderId: orderId,

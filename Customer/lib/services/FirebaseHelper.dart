@@ -399,7 +399,7 @@ class FireStoreUtils {
       final activeStatuses = {
         ORDER_STATUS_PLACED,
         ORDER_STATUS_ACCEPTED,
-        ORDER_STATUS_DRIVER_PENDING,
+        ORDER_STATUS_DRIVER_ACCEPTED,
         ORDER_STATUS_SHIPPED,
         ORDER_STATUS_IN_TRANSIT,
       };
@@ -483,6 +483,19 @@ class FireStoreUtils {
       }
     });
     yield* ordersByIdStreamController.stream;
+  }
+
+  static Future<OrderModel?> getOrderByIdOnce(String orderId) async {
+    try {
+      final doc = await firestore.collection(ORDERS).doc(orderId).get();
+      if (doc.exists && doc.data() != null) {
+        return OrderModel.fromJson(doc.data()!);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('FireStoreUtils.getOrderByIdOnce error: $e');
+      return null;
+    }
   }
 
   Future<RatingModel?> getOrderReviewsbyID(

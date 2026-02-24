@@ -1800,6 +1800,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final vendorMap = _cachedVendorMap ?? {};
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: isDark
           ? const Color.fromARGB(255, 201, 144, 1)
           : const Color(0xffFFFFFF),

@@ -45,6 +45,8 @@ import 'package:foodie_restaurant/ui/ordersScreen/OrderDetailsScreen.dart';
 
 import 'package:foodie_restaurant/ui/reviewScreen.dart';
 
+import 'package:foodie_restaurant/utils/order_ready_time_helper.dart';
+
 class OrdersScreen extends StatefulWidget {
   @override
   _OrdersScreenState createState() => _OrdersScreenState();
@@ -746,9 +748,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
         ],
       );
     }
-    // Driver Accepted or Driver Pending → show preparation timer
-    else if (orderModel.status == "Driver Accepted" ||
-        orderModel.status == "Driver Pending") {
+    // Driver Accepted → show preparation timer
+    else if (orderModel.status == "Driver Accepted") {
       print(
           '🕒 DEBUG: Building UI for ${orderModel.status} order: ${orderModel.id}');
       _stopSoundLoop();
@@ -760,9 +761,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
-            orderModel.status == "Driver Accepted"
-                ? 'Driver Accepted - Preparation in Progress'.tr()
-                : 'Driver Pending - Preparation in Progress'.tr(),
+            'Driver Accepted - Preparation in Progress'.tr(),
             style: TextStyle(
               fontSize: 16,
               color: Colors.green,
@@ -775,6 +774,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
             orderId: orderModel.id,
             orderModel: orderModel,
             onShipOrder: () => shipOrder(orderModel),
+            acceptedAt: orderModel.acceptedAt?.toDate(),
           ),
         ],
       );
@@ -785,27 +785,39 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   void shipOrder(OrderModel orderModel) async {
     try {
-      // Update the order's status to "Order Shipped" in Firestore
       await FirebaseFirestore.instance
           .collection('restaurant_orders')
           .doc(orderModel.id)
-          .update({'status': 'Order Shipped'});
+          .update({
+        'status': 'Order Shipped',
+        'shippedAt': FieldValue.serverTimestamp(),
+      });
 
-      // Display a success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Order status updated to "Order Shipped".'),
-          backgroundColor: Colors.green,
-        ),
+      await FireStoreUtils.addDriverChatSystemMessage(
+        orderId: orderModel.id,
+        status: 'Order Shipped',
+        customerId: orderModel.author.userID,
+        customerFcmToken: orderModel.author.fcmToken,
+        restaurantId: orderModel.vendorID,
       );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Order marked as ready for pickup'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } catch (e) {
-      // Display an error message if something goes wrong
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to update order status: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update order status: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -886,13 +898,20 @@ class _OrdersScreenState extends State<OrdersScreen> {
         return;
       }
 
-      // Update only the status and prep-time
+      final prepMinutes =
+          OrderReadyTimeHelper.parsePreparationMinutes(preparationTime);
+      final now = DateTime.now();
+      final readyAt = now.add(Duration(minutes: prepMinutes));
+
       await FirebaseFirestore.instance
           .collection("restaurant_orders")
           .doc(orderModel.id)
           .update({
         "status": "Order Accepted",
         "estimatedTimeToPrepare": preparationTime,
+        "acceptedAt": FieldValue.serverTimestamp(),
+        "readyAt": Timestamp.fromDate(readyAt),
+        "prepMinutes": prepMinutes,
       });
 
       // Prompt user to find a driver next
@@ -1500,11 +1519,13 @@ class _PreparationTimerWidget extends StatefulWidget {
   final String orderId;
   final OrderModel orderModel;
   final VoidCallback onShipOrder;
+  final DateTime? acceptedAt;
 
   const _PreparationTimerWidget({
     required this.orderId,
     required this.orderModel,
     required this.onShipOrder,
+    this.acceptedAt,
   });
 
   @override
@@ -1521,7 +1542,10 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
   @override
   void initState() {
     super.initState();
-    _acceptedTime = DateTime.now();
+    _acceptedTime = widget.acceptedAt ??
+        widget.orderModel.acceptedAt?.toDate() ??
+        widget.orderModel.createdAt.toDate() ??
+        DateTime.now();
     _startTimer();
   }
 
@@ -1558,8 +1582,18 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
   }
 
   void _triggerAlarm() async {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Order will be ready in ~3 minutes. Mark as ready now!',
+          ),
+          backgroundColor: Colors.orange,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
     try {
-      // Use the device's default alarm sound
       final bytes = await rootBundle
           .load('assets/audio/mixkit-happy-bells-notification-937.mp3');
       final audioData = bytes.buffer.asUint8List();
@@ -1567,7 +1601,6 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
       final audioPlayer = AudioPlayer(playerId: "alarm_${widget.orderId}");
       await audioPlayer.play(BytesSource(audioData));
 
-      // Stop alarm after 10 seconds
       Timer(Duration(seconds: 10), () {
         audioPlayer.stop();
         audioPlayer.dispose();
@@ -1583,28 +1616,60 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
     try {
       print('🚨 EXCEEDED ALARM: Time exceeded for order ${widget.orderId}');
 
-      // Create a new audio player for the exceeded alarm
       _exceededAlarmPlayer =
           AudioPlayer(playerId: "exceeded_alarm_${widget.orderId}");
 
-      // Load and play the alarm sound
       final bytes = await rootBundle
           .load('assets/audio/mixkit-happy-bells-notification-937.mp3');
       final audioData = bytes.buffer.asUint8List();
 
-      // Play the alarm continuously
       await _exceededAlarmPlayer!.play(BytesSource(audioData));
 
-      // Set up looping for continuous alarm
       _exceededAlarmPlayer!.onPlayerComplete.listen((event) {
         if (_hasExceededAlarm && mounted) {
-          // Replay the alarm if time is still exceeded
           _exceededAlarmPlayer!.play(BytesSource(audioData));
         }
       });
+
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showExceededDialog();
+        });
+      }
     } catch (e) {
       print('🚨 Error triggering exceeded alarm: $e');
     }
+  }
+
+  void _showExceededDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Order Ready?'),
+        content: const Text(
+          'The preparation time has passed. Is the order ready for pickup?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _stopExceededAlarm();
+            },
+            child: const Text('NOT YET'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _stopExceededAlarm();
+              widget.onShipOrder();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: const Text('YES, MARK READY'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _stopExceededAlarm() {
@@ -1618,32 +1683,21 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
   }
 
   int _getRemainingMinutes() {
-    if (widget.orderModel.estimatedTimeToPrepare == null ||
-        widget.orderModel.estimatedTimeToPrepare!.isEmpty) {
-      return 0;
-    }
-
-    final timeParts = widget.orderModel.estimatedTimeToPrepare!.split(':');
-    if (timeParts.length != 2) {
-      return 0;
-    }
-
-    int estimatedMinutes;
-    if (timeParts[0].contains('.')) {
-      estimatedMinutes = (double.parse(timeParts[0]) * 60).round();
-    } else {
-      estimatedMinutes = int.parse(timeParts[0]) * 60 + int.parse(timeParts[1]);
-    }
-
-    if (_acceptedTime == null) {
-      return estimatedMinutes;
-    }
-
+    if (_acceptedTime == null) return 0;
+    final totalPrep = OrderReadyTimeHelper.parsePreparationMinutes(
+      widget.orderModel.estimatedTimeToPrepare,
+    );
     final now = DateTime.now();
     final elapsed = now.difference(_acceptedTime!).inMinutes;
-    final remaining = estimatedMinutes - elapsed;
-
+    final remaining = totalPrep - elapsed;
     return remaining > 0 ? remaining : 0;
+  }
+
+  Color _getTimerColor() {
+    final remaining = _getRemainingMinutes();
+    if (remaining <= 0) return Colors.red;
+    if (remaining <= 3) return Colors.orange;
+    return Colors.green;
   }
 
   @override
@@ -1668,31 +1722,19 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
         widget.orderModel.estimatedTimeToPrepare!.isEmpty) {
       return 'No time set';
     }
-
-    final timeParts = widget.orderModel.estimatedTimeToPrepare!.split(':');
-    if (timeParts.length != 2) {
-      return 'Invalid time format';
-    }
-
-    int estimatedMinutes;
-    if (timeParts[0].contains('.')) {
-      estimatedMinutes = (double.parse(timeParts[0]) * 60).round();
-    } else {
-      estimatedMinutes = int.parse(timeParts[0]) * 60 + int.parse(timeParts[1]);
-    }
-
     if (_acceptedTime == null) {
-      return '${estimatedMinutes}min';
+      final total =
+          OrderReadyTimeHelper.parsePreparationMinutes(
+              widget.orderModel.estimatedTimeToPrepare);
+      return '${total}min';
     }
-
+    final total =
+        OrderReadyTimeHelper.parsePreparationMinutes(
+            widget.orderModel.estimatedTimeToPrepare);
     final now = DateTime.now();
     final elapsed = now.difference(_acceptedTime!).inMinutes;
-    final remaining = estimatedMinutes - elapsed;
-
-    if (remaining <= 0) {
-      return 'Time exceeded';
-    }
-
+    final remaining = total - elapsed;
+    if (remaining <= 0) return 'Time exceeded';
     return '${remaining}min remaining';
   }
 
@@ -1703,8 +1745,16 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
     final remainingMinutes = _getRemainingMinutes();
     final isWarning = remainingMinutes <= 3 && remainingMinutes > 0;
     final isExceeded = remainingMinutes <= 0;
+    final timerColor = _getTimerColor();
 
-    return Column(
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: timerColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: timerColor),
+      ),
+      child: Column(
       children: [
         // Timer display
         Row(
@@ -1828,6 +1878,7 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
           ],
         ),
       ],
+      ),
     );
   }
 }

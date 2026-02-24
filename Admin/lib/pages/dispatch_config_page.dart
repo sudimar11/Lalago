@@ -44,6 +44,7 @@ class _DispatchConfigPageState
   double _performancePenaltyThreshold = 65.0;
   double _longDistanceThresholdKm = 5.0;
   int _peakCapacityReduction = 1;
+  int _checkoutCapacityMultiplier = 3;
 
   double _goldThreshold = 90.0;
   double _silverThreshold = 75.0;
@@ -162,6 +163,10 @@ class _DispatchConfigPageState
             (data['peakCapacityReduction'] as num?)
                     ?.toInt() ??
                 1;
+        _checkoutCapacityMultiplier =
+            (data['checkoutCapacityMultiplier'] as num?)
+                    ?.toInt() ??
+                3;
 
         // Operations config
         _retryDelaySeconds =
@@ -292,6 +297,8 @@ class _DispatchConfigPageState
             _performancePenaltyThreshold,
         'longDistanceThresholdKm': _longDistanceThresholdKm,
         'peakCapacityReduction': _peakCapacityReduction,
+        'checkoutCapacityMultiplier':
+            _checkoutCapacityMultiplier,
         'baseCapacity': _maxActiveOrders,
         'retryDelaySeconds': _retryDelaySeconds,
         'dispatchLockTtlSeconds': _dispatchLockTtlSeconds,
@@ -841,6 +848,15 @@ class _DispatchConfigPageState
                 10,
                 (v) => setState(
                     () => _longDistanceThresholdKm = v),
+              ),
+              const SizedBox(height: 8),
+              _intStepper(
+                'Checkout Capacity Multiplier',
+                _checkoutCapacityMultiplier,
+                2,
+                5,
+                (v) => setState(
+                    () => _checkoutCapacityMultiplier = v),
               ),
             ],
           ],

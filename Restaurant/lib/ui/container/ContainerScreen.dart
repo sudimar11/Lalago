@@ -13,6 +13,7 @@ import 'package:foodie_restaurant/model/User.dart';
 import 'package:foodie_restaurant/model/VendorModel.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
+import 'package:foodie_restaurant/services/notification_service.dart';
 
 import 'package:foodie_restaurant/ui/add_resturant/add_resturant.dart';
 import 'package:foodie_restaurant/ui/add_story_screen.dart';
@@ -116,6 +117,7 @@ class _ContainerScreen extends State<ContainerScreen> {
   @override
   void initState() {
     super.initState();
+    NotificationService.onPrepTimeReminder = _showPrepTimeReminderDialog;
     setCurrency();
 
     // Initialize user from widget.user if available, otherwise from MyAppState
@@ -166,6 +168,44 @@ class _ContainerScreen extends State<ContainerScreen> {
       criticalAlert: false,
       provisional: false,
       sound: true,
+    );
+  }
+
+  @override
+  void dispose() {
+    NotificationService.onPrepTimeReminder = null;
+    super.dispose();
+  }
+
+  void _showPrepTimeReminderDialog(String orderId, String minutes) {
+    if (!mounted) return;
+    final shortId = orderId.length > 8 ? orderId.substring(0, 8) : orderId;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Order Almost Ready'),
+        content: Text(
+          'Order #$shortId will be ready in $minutes minutes.\n\n'
+          'Please mark it as ready to notify the rider.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('DISMISS'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                _drawerSelection = DrawerSelection.Orders;
+                _currentWidget = OrdersScreen();
+                _appBarTitle = 'Orders'.tr();
+              });
+            },
+            child: const Text('VIEW ORDER'),
+          ),
+        ],
+      ),
     );
   }
 

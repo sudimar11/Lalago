@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:brgy/services/order_notification_service.dart';
+import 'package:brgy/utils/order_ready_time_helper.dart';
 
 /// Service for handling automatic order acceptance
 /// Auto-accepts orders after 4 minutes if restaurant hasn't responded
@@ -71,14 +72,21 @@ class AutoAcceptService {
 
       final orderData = orderDoc.data()!;
 
-      // Update order status to "Order Accepted" with default preparation time
+      const prepTime = '30 min';
+      final prepMinutes =
+          OrderReadyTimeHelper.parsePreparationMinutes(prepTime);
+      final now = DateTime.now();
+      final readyAt = now.add(Duration(minutes: prepMinutes));
+
       await FirebaseFirestore.instance
           .collection('restaurant_orders')
           .doc(orderId)
           .update({
         'status': 'Order Accepted',
-        'estimatedTimeToPrepare': '30 min',
+        'estimatedTimeToPrepare': prepTime,
         'acceptedAt': FieldValue.serverTimestamp(),
+        'readyAt': Timestamp.fromDate(readyAt),
+        'prepMinutes': prepMinutes,
         'autoAccepted': true, // Mark as auto-accepted
       });
 

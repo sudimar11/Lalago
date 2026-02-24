@@ -120,7 +120,7 @@ class _ChatScreensState extends State<ChatScreens> {
     final steps = [
       'Order Placed',
       'Driver Assigned',
-      'Driver Pending',
+      'Driver Accepted',
       'Order Shipped',
       'In Transit',
       'Delivered',
@@ -129,7 +129,7 @@ class _ChatScreensState extends State<ChatScreens> {
     int currentStep = 0;
     if (status == 'Driver Assigned')
       currentStep = 1;
-    else if (status == 'Driver Pending')
+    else if (status == 'Driver Accepted')
       currentStep = 2;
     else if (status == 'Order Shipped')
       currentStep = 3;
@@ -227,10 +227,6 @@ class _ChatScreensState extends State<ChatScreens> {
             label: 'Running late',
             onTap: () => _handleQuickReply(
                 'I apologize, but I am running a bit late. I will be there soon.'),
-          ),
-          _QuickReplyButton(
-            label: 'Order ready',
-            onTap: () => _handleQuickReply('Order ready', 'Order Shipped'),
           ),
         ],
       ),

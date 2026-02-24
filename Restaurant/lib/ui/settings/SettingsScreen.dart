@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +25,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   User? user;
   VendorModel vendor = VendorModel();
   bool pushNewMessages = false, orderUpdates = false, newArrivals = false, promotions = false, photos = false, reststatus = false;
+  bool prepRemindersEnabled = true;
+  int reminderMinutes = 5;
 
   VendorModel? vendors;
 
@@ -48,10 +51,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
         photos = vendors!.hidePhotos;
       });
     });
+    FirebaseFirestore.instance
+        .collection('vendors')
+        .doc(MyAppState.currentUser!.vendorID)
+        .get()
+        .then((snap) {
+      if (snap.exists && snap.data() != null) {
+        final d = snap.data()!;
+        setState(() {
+          prepRemindersEnabled = d['prepRemindersEnabled'] as bool? ?? true;
+          reminderMinutes = d['reminderMinutes'] as int? ?? 5;
+        });
+      }
+    });
     //reststatus = user!.settings.reststatus;
     //print(widget.user.settings.promotions.toString()+"====U");
     print(MyAppState.currentUser!.settings.promotions.toString() + "====UR");
     super.initState();
+  }
+
+  Future<void> _savePrepReminderPrefs() async {
+    final vid = MyAppState.currentUser?.vendorID;
+    if (vid == null || vid.isEmpty) return;
+    try {
+      await FirebaseFirestore.instance.collection('vendors').doc(vid).update({
+        'prepRemindersEnabled': prepRemindersEnabled,
+        'reminderMinutes': reminderMinutes,
+      });
+    } catch (e) {
+      debugPrint('Error saving prep reminder prefs: $e');
+    }
   }
 
   @override
@@ -192,6 +221,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           reststatus = newValue;
                           setState(() {});
                         }),
+                    SwitchListTile.adaptive(
+                        activeColor: Color(COLOR_ACCENT),
+                        title: Text(
+                          'Preparation Time Reminders',
+                          style: TextStyle(
+                            fontSize: 17,
+                            color: isDarkMode(context) ? Colors.white : Colors.black,
+                          ),
+                        ),
+                        subtitle: Text(
+                          'Get notified when orders are almost ready',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: isDarkMode(context) ? Colors.white54 : Colors.black54,
+                          ),
+                        ),
+                        value: prepRemindersEnabled,
+                        onChanged: (bool newValue) {
+                          prepRemindersEnabled = newValue;
+                          setState(() {});
+                          _savePrepReminderPrefs();
+                        }),
+                    ListTile(
+                      title: Text(
+                        'Remind me before',
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      subtitle: Text('$reminderMinutes minutes'),
+                      trailing: DropdownButton<int>(
+                        value: reminderMinutes,
+                        items: [3, 5, 10].map((m) {
+                          return DropdownMenuItem(
+                            value: m,
+                            child: Text('$m min'),
+                          );
+                        }).toList(),
+                        onChanged: (int? value) {
+                          if (value != null) {
+                            reminderMinutes = value;
+                            setState(() {});
+                            _savePrepReminderPrefs();
+                          }
+                        },
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -216,6 +293,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         if (MyAppState.currentUser!.vendorID.isNotEmpty) {
                           await FireStoreUtils.updatestatus(vendor, reststatus);
                           await FireStoreUtils.updatePhoto(vendor, photos);
+                          await _savePrepReminderPrefs();
                         }
 
                         User? updateUser = await FireStoreUtils.updateCurrentUser(user!);

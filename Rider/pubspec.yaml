@@ -11,6 +11,9 @@ dependencies:
   flutter:
     sdk: flutter
 
+  lalago_shared:
+    path: ../packages/lalago_shared
+
   firebase_core: ^2.32.0
   firebase_crashlytics: ^3.5.7
   firebase_auth: ^4.20.0 # or ^4.15.3 if you want to mirror the declared constraint; 4.20.0 resolved in customer
@@ -43,6 +46,7 @@ dependencies:
   flutter_polyline_points: ^1.0.0
   cupertino_icons: ^1.0.6
   flutter_image_compress: ^2.0.4
+  audioplayers: ^5.2.1
   flutter_sound: ^9.2.13
   sign_in_with_apple: ^6.1.2
   google_sign_in: ^6.2.1

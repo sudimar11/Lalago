@@ -329,6 +329,13 @@ class FireStoreUtils {
     });
   }
 
+  /// Update lastActivityTimestamp for rider inactivity tracking.
+  static Future<void> touchLastActivity(String userId) async {
+    await firestore.collection(USERS).doc(userId).update({
+      'lastActivityTimestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
   static const String _defaultContactEmail = 'alshidarabdelnasir19@gmail.com';
 
   static Map<String, dynamic>? _contactUsCache;
@@ -1325,7 +1332,15 @@ class FireStoreUtils {
   /// returns an error message on failure or null on success
   static Future<String?> firebaseCreateNewUser(User user) async {
     try {
-      await firestore.collection(USERS).doc(user.userID).set(user.toJson());
+      final json = user.toJson();
+      if (user.role == USER_ROLE_DRIVER) {
+        json['riderAvailability'] = user.riderAvailability ?? 'offline';
+        json['riderDisplayStatus'] =
+            user.riderDisplayStatus ?? '\u{26AA} Offline';
+        json['checkedInToday'] = user.checkedInToday ?? false;
+        json['isOnline'] = user.isOnline ?? false;
+      }
+      await firestore.collection(USERS).doc(user.userID).set(json);
     } catch (e, s) {
       print('FireStoreUtils.firebaseCreateNewUser $e $s');
       return "notSignIn";

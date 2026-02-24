@@ -31,6 +31,9 @@ dependencies:
   flutter:
     sdk: flutter
 
+  lalago_shared:
+    path: ../packages/lalago_shared
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
@@ -41,6 +44,7 @@ dependencies:
   firebase_storage: ^12.3.5
   firebase_auth: ^5.3.3
   firebase_messaging: ^15.1.5
+  cloud_functions: ^5.3.3
 
   google_sign_in: ^6.3.0
   permission_handler: ^11.3.0

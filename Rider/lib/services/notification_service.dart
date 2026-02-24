@@ -3,6 +3,8 @@ import 'dart:developer';
 import 'dart:io';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:foodie_driver/services/audio_service.dart';
+import 'package:foodie_driver/services/food_ready_highlight_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:foodie_driver/model/notification_model.dart';
@@ -25,6 +27,11 @@ class NotificationService {
 
   /// Call from background message handler to show notification from FCM data.
   static Future<void> showBackgroundNotification(RemoteMessage message) async {
+    final type = message.data['type']?.toString() ?? '';
+    if (type == 'order_reassigned') {
+      await _showReassignBackgroundNotification(message);
+      return;
+    }
     final isChat = _isChatMessage(message.data);
     final title = _resolveTitle(
       message,
@@ -85,12 +92,70 @@ class NotificationService {
     );
   }
 
+  static Future<void> _showReassignBackgroundNotification(
+      RemoteMessage message) async {
+    _backgroundPlugin ??= FlutterLocalNotificationsPlugin();
+    final plugin = _backgroundPlugin!;
+    const AndroidInitializationSettings initAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const DarwinInitializationSettings initIos =
+        DarwinInitializationSettings();
+    const InitializationSettings initSettings = InitializationSettings(
+      android: initAndroid,
+      iOS: initIos,
+    );
+    await plugin.initialize(initSettings);
+    if (Platform.isAndroid) {
+      final AndroidNotificationChannel channel = AndroidNotificationChannel(
+        channelReassign,
+        'Order Reassigned',
+        description: 'Notifications when an order is reassigned due to timeout',
+        importance: Importance.max,
+        playSound: true,
+        enableVibration: true,
+        sound: RawResourceAndroidNotificationSound('reassign'),
+      );
+      await plugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.createNotificationChannel(channel);
+    }
+    final id = idReassign +
+        DateTime.now().millisecondsSinceEpoch.remainder(100000);
+    final AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+      channelReassign,
+      'Order Reassigned',
+      channelDescription: 'Order reassigned due to timeout',
+      importance: Importance.max,
+      priority: Priority.high,
+      sound: RawResourceAndroidNotificationSound('reassign'),
+    );
+    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      sound: 'reassign.wav',
+    );
+    await plugin.show(
+      id,
+      'Order Reassigned',
+      'An order was reassigned due to timeout.',
+      NotificationDetails(
+        android: androidDetails,
+        iOS: iosDetails,
+      ),
+      payload: jsonEncode(message.data),
+    );
+  }
+
   // Notification channel IDs
   static const String channelOrder = 'order_notifications';
   static const String channelEarning = 'earning_notifications';
   static const String channelPerformance = 'performance_notifications';
   static const String channelReminder = 'reminder_notifications';
   static const String channelChat = 'chat_messages';
+  static const String channelReassign = 'order_reassigned';
 
   // Notification IDs for different types
   static const int idOrder = 1000;
@@ -98,6 +163,7 @@ class NotificationService {
   static const int idPerformance = 3000;
   static const int idReminder = 4000;
   static const int idChat = 5000;
+  static const int idReassign = 6000;
 
   static bool _notificationPermissionDialogShown = false;
 
@@ -198,7 +264,21 @@ class NotificationService {
     );
     await flutterLocalNotificationsPlugin.initialize(
       initializationSettings,
-      onDidReceiveNotificationResponse: (payload) {},
+      onDidReceiveNotificationResponse: (response) {
+        final payload = response.payload;
+        if (payload != null && payload.isNotEmpty) {
+          try {
+            final data = jsonDecode(payload) as Map<String, dynamic>?;
+            final type = data?['type']?.toString() ?? '';
+            if (type == 'food_ready') {
+              final orderId = data?['orderId']?.toString();
+              if (orderId != null && orderId.isNotEmpty) {
+                FoodReadyHighlightService.instance.setHighlighted(orderId);
+              }
+            }
+          } catch (_) {}
+        }
+      },
     );
     _createNotificationChannels();
     setupInteractedMessage();
@@ -278,6 +358,16 @@ class NotificationService {
       playSound: true,
       enableVibration: true,
     );
+    final AndroidNotificationChannel reassignChannel =
+        AndroidNotificationChannel(
+      channelReassign,
+      'Order Reassigned',
+      description: 'Notifications when an order is reassigned due to timeout',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+      sound: RawResourceAndroidNotificationSound('reassign'),
+    );
 
     await flutterLocalNotificationsPlugin
         .resolvePlatformSpecificImplementation<
@@ -287,6 +377,10 @@ class NotificationService {
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(chatChannel);
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(reassignChannel);
   }
 
   static String _resolveTitle(RemoteMessage message, String fallback) {
@@ -321,11 +415,49 @@ class NotificationService {
       if (_isChatMessage(message.data)) {
         log("RIDER: Chat message received (foreground) - showing local notification");
       }
+      final type = message.data['type']?.toString() ?? '';
+      if (type == 'food_ready') {
+        final orderId = message.data['orderId']?.toString();
+        if (orderId != null && orderId.isNotEmpty) {
+          FoodReadyHighlightService.instance.setHighlighted(orderId);
+        }
+      }
+      if (type == 'order_reassigned') {
+        final orderId = message.data['orderId']?.toString();
+        if (orderId != null && orderId.isNotEmpty) {
+          AudioService.instance.playReassignSound(orderId: orderId);
+        }
+      }
+      if (type == 'order' || type == 'new_order' || type == 'order_update') {
+        final orderId = message.data['orderId']?.toString();
+        if (orderId != null && orderId.isNotEmpty) {
+          AudioService.instance.playNewOrderSound(orderId: orderId);
+        }
+      }
       display(message);
     });
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       log("::::::::::::onMessageOpenedApp:::::::::::::::::");
       log(message.notification?.toString() ?? 'data: ${message.data}');
+      final type = message.data['type']?.toString() ?? '';
+      if (type == 'food_ready') {
+        final orderId = message.data['orderId']?.toString();
+        if (orderId != null && orderId.isNotEmpty) {
+          FoodReadyHighlightService.instance.setHighlighted(orderId);
+        }
+      }
+      if (type == 'order_reassigned') {
+        final orderId = message.data['orderId']?.toString();
+        if (orderId != null && orderId.isNotEmpty) {
+          AudioService.instance.playReassignSound(orderId: orderId);
+        }
+      }
+      if (type == 'order' || type == 'new_order' || type == 'order_update') {
+        final orderId = message.data['orderId']?.toString();
+        if (orderId != null && orderId.isNotEmpty) {
+          AudioService.instance.playNewOrderSound(orderId: orderId);
+        }
+      }
       display(message);
     });
     log("RIDER: FCM onMessage listener registered for chat notifications");
@@ -339,18 +471,66 @@ class NotificationService {
 
   void display(RemoteMessage message) async {
     log('Got a message whilst in the foreground!');
-    final title = _resolveTitle(
-      message,
-      _isChatMessage(message.data) ? 'New message' : 'Notification',
-    );
-    final body = _resolveBody(
-      message,
-      _isChatMessage(message.data)
-          ? 'You have a new message from a customer.'
-          : 'You have a new update.',
-    );
+    final type = message.data['type']?.toString() ?? '';
+    if (type == 'order_reassigned') {
+      final orderId = message.data['orderId']?.toString();
+      if (orderId != null && orderId.isNotEmpty) {
+        AudioService.instance.playReassignSound(orderId: orderId);
+      }
+    }
+    if (type == 'order' || type == 'new_order' || type == 'order_update') {
+      final orderId = message.data['orderId']?.toString();
+      if (orderId != null && orderId.isNotEmpty) {
+        AudioService.instance.playNewOrderSound(orderId: orderId);
+      }
+    }
+    final title = type == 'order_reassigned'
+        ? 'Order Reassigned'
+        : _resolveTitle(
+            message,
+            _isChatMessage(message.data) ? 'New message' : 'Notification',
+          );
+    final body = type == 'order_reassigned'
+        ? 'An order was reassigned due to timeout.'
+        : _resolveBody(
+            message,
+            _isChatMessage(message.data)
+                ? 'You have a new message from a customer.'
+                : 'You have a new update.',
+          );
     log('Message title: $title body: $body');
     try {
+      if (type == 'order_reassigned') {
+        final AndroidNotificationDetails androidDetails =
+            AndroidNotificationDetails(
+          channelReassign,
+          'Order Reassigned',
+          channelDescription: 'Order reassigned due to timeout',
+          importance: Importance.max,
+          priority: Priority.high,
+          ticker: 'ticker',
+          sound: RawResourceAndroidNotificationSound('reassign'),
+        );
+        const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+          sound: 'reassign.wav',
+        );
+        final int id = idReassign +
+            DateTime.now().millisecondsSinceEpoch.remainder(100000);
+        await flutterLocalNotificationsPlugin.show(
+          id,
+          title,
+          body,
+          NotificationDetails(
+            android: androidDetails,
+            iOS: iosDetails,
+          ),
+          payload: jsonEncode(message.data),
+        );
+        return;
+      }
       final bool isChat = _isChatMessage(message.data);
       final String channelId = isChat ? channelChat : '0';
       final String channelName = isChat ? 'Chat Messages' : 'foodie-driver';

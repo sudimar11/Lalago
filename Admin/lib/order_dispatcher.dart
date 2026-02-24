@@ -110,6 +110,41 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
   final DriverResponseTrackingService _driverResponseTrackingService =
       DriverResponseTrackingService();
 
+  // Zone name cache: orderId -> zone name (resolved async, shown on next rebuild)
+  final Map<String, String> _zoneNameCache = {};
+  final DeliveryZoneService _deliveryZoneService = DeliveryZoneService();
+
+  String? _resolveZoneName(String orderId, Map<String, dynamic> data) {
+    if (_zoneNameCache.containsKey(orderId)) {
+      return _zoneNameCache[orderId];
+    }
+    final addr = _manualDispatchService.extractDeliveryAddress(data);
+    final lat = addr['lat'] as double?;
+    final lng = addr['lng'] as double?;
+    final locality = addr['locality'] as String?;
+    if (lat == null &&
+        lng == null &&
+        (locality == null || locality.isEmpty)) {
+      _zoneNameCache[orderId] = '';
+      return '';
+    }
+    _zoneNameCache[orderId] = '';
+    _deliveryZoneService
+        .getZoneMatchForDelivery(
+          lat: lat,
+          lng: lng,
+          locality: locality,
+        )
+        .then((match) {
+      final name = match?.zone.name ?? '';
+      if (_zoneNameCache[orderId] != name) {
+        _zoneNameCache[orderId] = name;
+        if (mounted) setState(() {});
+      }
+    }).catchError((_) {});
+    return '';
+  }
+
   // Recommendation rider: cache active drivers (TTL 60s), limit to first 10 orders
   List<Map<String, dynamic>>? _cachedDrivers;
   DateTime? _driversCacheTime;
@@ -294,6 +329,45 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                         label: '$stalledCount stalled',
                         color: Colors.red,
                       ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () async {
+                        print('==== ALL RIDERS ====');
+                        final snapshot = await FirebaseFirestore
+                            .instance
+                            .collection('users')
+                            .where('role',
+                                isEqualTo: 'driver')
+                            .get();
+                        for (final doc in snapshot.docs) {
+                          final d = doc.data();
+                          final loc = d['location'];
+                          final ts = d['locationUpdatedAt']
+                              as Timestamp?;
+                          final ago = ts != null
+                              ? DateTime.now()
+                                  .difference(
+                                      ts.toDate())
+                                  .inSeconds
+                              : null;
+                          print(
+                              'ID: ${doc.id}\n'
+                              '  riderAvailability: ${d['riderAvailability']}\n'
+                              '  isActive: ${d['isActive']}\n'
+                              '  isOnline: ${d['isOnline']}\n'
+                              '  checkedInToday: ${d['checkedInToday']}\n'
+                              '  checkedOutToday: ${d['checkedOutToday']}\n'
+                              '  location: ${loc != null ? "lat=${loc['latitude']},lng=${loc['longitude']}" : "null"}\n'
+                              '  locationUpdatedAt: ${ago != null ? "${ago}s ago" : "null"}\n');
+                        }
+                        print('==== END RIDERS ====');
+                      },
+                      child: const _HealthChip(
+                        icon: Icons.bug_report,
+                        label: 'Debug Riders',
+                        color: Colors.purple,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -333,12 +407,13 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
             }
             final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
             final vendorName = (vendor['title'] ?? '') as String? ?? '';
+            final zoneName = _resolveZoneName(id, data);
 
             // Check if this order has status "Order Accepted" or "Order Completed"
             final isOrderAccepted = status == 'Order Accepted';
             final isOrderPlaced = status == 'Order Placed';
             final isDriverAssigned = status == 'Driver Assigned';
-            final isDriverPending = status == 'Driver Pending';
+            final isDriverAccepted = status == 'Driver Accepted';
             final isOrderCompleted = status == 'Order Completed';
             final isInTransit = status == 'In Transit';
             final isDriverRejected =
@@ -402,11 +477,8 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
               borderColor = Colors.red;
             } else if (isDriverRejected) {
               borderColor = Colors.orange;
-            } else if (isInTransit ||
-                status == 'Driver Accepted') {
+            } else if (isInTransit || isDriverAccepted) {
               borderColor = Colors.green;
-            } else if (isDriverPending) {
-              borderColor = Colors.amber;
             } else if (isOrderAccepted && attemptCount > 0) {
               borderColor = Colors.blue;
             }
@@ -526,6 +598,13 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                                 label: vendorName,
                                 color: Colors.orange,
                               ),
+                            if (zoneName != null &&
+                                zoneName.isNotEmpty)
+                              _InfoChip(
+                                icon: Icons.map_outlined,
+                                label: zoneName,
+                                color: Colors.blue,
+                              ),
                             if (hasValidVendor)
                               InkWell(
                                 onTap: () => _openRestaurantMap(
@@ -581,19 +660,21 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                                 ),
                               const SizedBox(width: 4),
                               TextButton.icon(
-                                onPressed: () {
-                                  // TODO: recommend rider action
-                                },
+                                onPressed: () =>
+                                    _showForceAssignDialog(
+                                  context,
+                                  id,
+                                ),
                                 icon: const Icon(
-                                  Icons.person_add,
+                                  Icons.bolt,
                                   size: 16,
-                                  color: Colors.teal,
+                                  color: Colors.orange,
                                 ),
                                 label: const Text(
-                                  'Recommend rider',
+                                  'Force Assign',
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color: Colors.teal,
+                                    color: Colors.orange,
                                   ),
                                 ),
                                 style: TextButton.styleFrom(
@@ -613,7 +694,7 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                               ),
                             if (readyAt != null &&
                                 (isOrderAccepted ||
-                                    isDriverPending ||
+                                    isDriverAccepted ||
                                     status == 'Driver Accepted' ||
                                     status == 'Order Shipped'))
                               _InfoChip(
@@ -717,8 +798,8 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                         ),
                       ),
                     ),
-                  // Change Driver Button - Show for "Driver Assigned" and "Driver Pending" statuses
-                  if (isDriverAssigned || isDriverPending)
+                  // Change Driver Button - Show for "Driver Assigned" and "Driver Accepted" statuses
+                  if (isDriverAssigned || isDriverAccepted)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: SizedBox(
@@ -1334,6 +1415,262 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
     // Store the listener
     _orderStatusListeners[orderId] = listener;
   }
+
+  Future<void> _showForceAssignDialog(
+    BuildContext context,
+    String orderId,
+  ) async {
+    print('[FORCE_ASSIGN] Opening dialog for '
+        'order $orderId');
+
+    final drivers = await FirebaseFirestore.instance
+        .collection('users')
+        .where('role', isEqualTo: 'driver')
+        .get();
+
+    print('[FORCE_ASSIGN] Found '
+        '${drivers.docs.length} total drivers');
+
+    if (!context.mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Force Assign Rider'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: ListView.builder(
+            itemCount: drivers.docs.length,
+            itemBuilder: (_, i) {
+              final doc = drivers.docs[i];
+              final d = doc.data();
+              final rid = doc.id;
+              final orders =
+                  d['inProgressOrderID'] as List? ?? [];
+              final status =
+                  d['riderAvailability'] ?? 'unknown';
+              final checkedOut =
+                  d['checkedOutToday'] == true;
+              final hasLoc = d['location'] != null;
+              final firstName =
+                  d['firstName'] ?? '';
+              final lastName = d['lastName'] ?? '';
+              final name =
+                  '$firstName $lastName'.trim();
+
+              print('[FORCE_ASSIGN] Rider $rid: '
+                  'name=$name, status=$status, '
+                  'orders=${orders.length}, '
+                  'checkedOut=$checkedOut, '
+                  'loc=$hasLoc');
+
+              return ListTile(
+                leading: Icon(
+                  checkedOut
+                      ? Icons.logout
+                      : hasLoc
+                          ? Icons.person_pin_circle
+                          : Icons.person_off,
+                  color: checkedOut
+                      ? Colors.grey
+                      : hasLoc
+                          ? Colors.green
+                          : Colors.red,
+                ),
+                title: Text(
+                  name.isNotEmpty ? name : rid,
+                  style: const TextStyle(fontSize: 14),
+                ),
+                subtitle: Text(
+                  '$status '
+                  '| orders: ${orders.length} '
+                  '${checkedOut ? "| CHECKED OUT" : ""}'
+                  '${!hasLoc ? "| NO LOC" : ""}',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(
+                        Icons.bug_report,
+                        size: 20,
+                        color: Colors.blue,
+                      ),
+                      tooltip: 'Check status',
+                      onPressed: () =>
+                          _debugCheckRiderStatus(rid),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _forceAssignRider(
+                          context,
+                          orderId,
+                          rid,
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                        padding:
+                            const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                      ),
+                      child: const Text(
+                        'Assign',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _forceAssignRider(
+    BuildContext context,
+    String orderId,
+    String riderId,
+  ) async {
+    print('[FORCE_ASSIGN] Assigning rider '
+        '$riderId to order $orderId');
+
+    try {
+      final orderRef = FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(orderId);
+      final riderRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(riderId);
+
+      await FirebaseFirestore.instance
+          .runTransaction((tx) async {
+        final orderDoc = await tx.get(orderRef);
+        final riderDoc = await tx.get(riderRef);
+
+        if (!orderDoc.exists) {
+          throw Exception('Order not found');
+        }
+        if (!riderDoc.exists) {
+          throw Exception('Rider not found');
+        }
+
+        final riderData = riderDoc.data() ?? {};
+        final name =
+            '${riderData['firstName'] ?? ''} '
+                '${riderData['lastName'] ?? ''}'
+                .trim();
+
+        tx.update(orderRef, {
+          'status': 'Driver Assigned',
+          'driverID': riderId,
+          'driverName': name,
+          'assignedAt':
+              FieldValue.serverTimestamp(),
+          'dispatch.forceAssigned': true,
+          'dispatch.forceAssignedBy':
+              'admin_debug',
+        });
+
+        tx.update(riderRef, {
+          'orderRequestData': FieldValue.arrayUnion([orderId]),
+        });
+
+        print('[FORCE_ASSIGN] Transaction prepared '
+            '(rider=$name)');
+      });
+
+      print('[FORCE_ASSIGN] SUCCESS: rider $riderId -> order $orderId '
+          '(status=Driver Assigned, orderRequestData updated)');
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Rider force-assigned!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      print('[FORCE_ASSIGN] ERROR: $e');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Force assign failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _debugCheckRiderStatus(
+    String riderId,
+  ) async {
+    print('[DEBUG] ===== CHECKING RIDER $riderId =====');
+
+    final riderDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(riderId)
+        .get();
+
+    if (!riderDoc.exists) {
+      print('[DEBUG] Rider not found!');
+      return;
+    }
+
+    final d = riderDoc.data()!;
+    print('[DEBUG] inProgressOrderID: '
+        '${d['inProgressOrderID']}');
+    print('[DEBUG] riderAvailability: '
+        '${d['riderAvailability']}');
+    print('[DEBUG] riderDisplayStatus: '
+        '${d['riderDisplayStatus']}');
+    print('[DEBUG] isActive: ${d['isActive']}');
+    print('[DEBUG] checkedOutToday: '
+        '${d['checkedOutToday']}');
+    print('[DEBUG] locationUpdatedAt: '
+        '${d['locationUpdatedAt']}');
+
+    const activeStatuses = [
+      'Awaiting Rider',
+      'Driver Accepted',
+      'Order Accepted',
+      'Order Shipped',
+      'In Transit',
+    ];
+
+    print('[DEBUG] Querying restaurant_orders '
+        'for this rider...');
+    for (final status in activeStatuses) {
+      final snap = await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .where('driverID', isEqualTo: riderId)
+          .where('status', isEqualTo: status)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        print('[DEBUG] $status: '
+            '${snap.docs.length} orders');
+        for (final o in snap.docs) {
+          print('[DEBUG]   -> ${o.id}');
+        }
+      }
+    }
+
+    print('[DEBUG] ===== END RIDER CHECK =====');
+  }
 }
 
 // =================== INFO CHIP ===================
@@ -1420,81 +1757,89 @@ class _RejectionHistoryPanel extends StatelessWidget {
           .collection('assignments_log')
           .where('orderId', isEqualTo: orderId)
           .orderBy('createdAt', descending: true)
-          .limit(10)
+          .limit(20)
           .get(),
-      builder: (context, snap) {
-        if (!snap.hasData || snap.data!.docs.isEmpty) {
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return const SizedBox.shrink();
+        if (!snapshot.hasData) return const SizedBox.shrink();
+
+        final logs = snapshot.data!.docs;
+        final rejectionCount =
+            logs.where((doc) => doc['status'] == 'rejected').length;
+
+        if (logs.isEmpty) {
           return const SizedBox.shrink();
         }
-        final logs = snap.data!.docs;
-        return Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.orange.shade50,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Dispatch History (${logs.length} attempts)',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.orange.shade900,
+
+        return Card(
+          margin: const EdgeInsets.all(8),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Rejection History ($rejectionCount)',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-              ),
-              const SizedBox(height: 8),
-              ...logs.map((doc) {
-                final d = doc.data() as Map<String, dynamic>;
-                final status =
-                    d['status']?.toString() ?? 'unknown';
-                final ts = d['createdAt'] as Timestamp?;
-                final time = ts != null
-                    ? '${ts.toDate().hour}:${ts.toDate().minute.toString().padLeft(2, '0')}'
-                    : '--';
-                final dist = (d['distance'] as num?)
-                        ?.toStringAsFixed(1) ??
-                    '--';
-                final responseTime =
-                    (d['responseTimeSeconds'] as num?)
-                            ?.toInt()
-                            .toString() ??
-                        '--';
-                final icon = status == 'accepted'
-                    ? Icons.check_circle
-                    : status == 'timeout'
-                        ? Icons.timer_off
-                        : Icons.cancel;
-                final color = status == 'accepted'
-                    ? Colors.green
-                    : Colors.red;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Row(
-                    children: [
-                      Icon(icon, size: 14, color: color),
-                      const SizedBox(width: 6),
-                      Text(
-                        '$time — $status',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: color,
-                          fontWeight: FontWeight.w500,
+                const SizedBox(height: 8),
+                ...logs.map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  if (data['status'] != 'rejected') {
+                    return const SizedBox.shrink();
+                  }
+
+                  final driverId = data['driverId'] as String? ?? '';
+                  final driverIdDisplay = driverId.length > 8
+                      ? '${driverId.substring(0, 8)}...'
+                      : driverId.isNotEmpty
+                          ? driverId
+                          : 'Unknown';
+                  final reason =
+                      data['rejectionReason'] as String?;
+                  final responseTime =
+                      (data['responseTimeSeconds'] as num?)
+                              ?.toInt()
+                              .toString() ??
+                          '--';
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.close,
+                            color: Colors.orange.shade700, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Rider: $driverIdDisplay',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              if (reason != null && reason.isNotEmpty)
+                                Text('Reason: $reason'),
+                              Text(
+                                'Response: ${responseTime}s',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        '${dist}km • ${responseTime}s',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }),
-            ],
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
           ),
         );
       },
@@ -1863,11 +2208,12 @@ String _statusToText(dynamic raw) {
         return 'Order Accepted';
       case 'driver assigned':
         return 'Driver Assigned';
-      case 'driver pending':
-        return 'Driver Pending';
+      case 'driver accepted':
+        return 'Driver Accepted';
+      case 'order shipped':
+        return 'Order Shipped';
       case 'released':
       case 'in transit':
-      case 'order shipped':
         return 'In Transit';
       case 'completed':
       case 'order completed':
@@ -1993,7 +2339,8 @@ Future<void> _showChangeStatusDialog(
     'Order Placed',
     'Order Accepted',
     'Driver Assigned',
-    'Driver Pending',
+    'Driver Accepted',
+    'Order Shipped',
     'In Transit',
     'Order Completed',
     'Order Rejected',
@@ -2219,6 +2566,40 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
   final ManualDispatchService _manualDispatchService = ManualDispatchService();
   final DriverAssignmentService _driverAssignmentService =
       DriverAssignmentService();
+
+  final Map<String, String> _zoneNameCache = {};
+  final DeliveryZoneService _deliveryZoneService = DeliveryZoneService();
+
+  String? _resolveZoneName(String orderId, Map<String, dynamic> data) {
+    if (_zoneNameCache.containsKey(orderId)) {
+      return _zoneNameCache[orderId];
+    }
+    final addr = _manualDispatchService.extractDeliveryAddress(data);
+    final lat = addr['lat'] as double?;
+    final lng = addr['lng'] as double?;
+    final locality = addr['locality'] as String?;
+    if (lat == null &&
+        lng == null &&
+        (locality == null || locality.isEmpty)) {
+      _zoneNameCache[orderId] = '';
+      return '';
+    }
+    _zoneNameCache[orderId] = '';
+    _deliveryZoneService
+        .getZoneMatchForDelivery(
+          lat: lat,
+          lng: lng,
+          locality: locality,
+        )
+        .then((match) {
+      final name = match?.zone.name ?? '';
+      if (_zoneNameCache[orderId] != name) {
+        _zoneNameCache[orderId] = name;
+        if (mounted) setState(() {});
+      }
+    }).catchError((_) {});
+    return '';
+  }
 
   List<Map<String, dynamic>>? _cachedDrivers;
   DateTime? _driversCacheTime;
@@ -2533,6 +2914,7 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
             }
             final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
             final vendorName = (vendor['title'] ?? '') as String? ?? '';
+            final zoneName = _resolveZoneName(id, data);
 
             final isOrderAccepted = status == 'Order Accepted';
             final isOrderPlaced = status == 'Order Placed';
@@ -2675,6 +3057,13 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                                 label: vendorName,
                                 color: Colors.orange,
                               ),
+                            if (zoneName != null &&
+                                zoneName.isNotEmpty)
+                              _InfoChip(
+                                icon: Icons.map_outlined,
+                                label: zoneName,
+                                color: Colors.blue,
+                              ),
                             if (hasValidVendor)
                               InkWell(
                                 onTap: () => _openRestaurantMap(
@@ -2729,19 +3118,21 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                                 ),
                               const SizedBox(width: 4),
                               TextButton.icon(
-                                onPressed: () {
-                                  // TODO: recommend rider action
-                                },
+                                onPressed: () =>
+                                    _showForceAssignDialog(
+                                  context,
+                                  id,
+                                ),
                                 icon: const Icon(
-                                  Icons.person_add,
+                                  Icons.bolt,
                                   size: 16,
-                                  color: Colors.teal,
+                                  color: Colors.orange,
                                 ),
                                 label: const Text(
-                                  'Recommend rider',
+                                  'Force Assign',
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color: Colors.teal,
+                                    color: Colors.orange,
                                   ),
                                 ),
                                 style: TextButton.styleFrom(
@@ -2761,7 +3152,6 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                               ),
                             if (readyAt != null &&
                                 (isOrderAccepted ||
-                                    status == 'Driver Pending' ||
                                     status == 'Driver Accepted' ||
                                     status == 'Order Shipped'))
                               _InfoChip(
@@ -2869,6 +3259,256 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
         );
       },
     );
+  }
+
+  Future<void> _showForceAssignDialog(
+    BuildContext context,
+    String orderId,
+  ) async {
+    print('[FORCE_ASSIGN] Opening dialog for '
+        'order $orderId');
+
+    final drivers = await FirebaseFirestore.instance
+        .collection('users')
+        .where('role', isEqualTo: 'driver')
+        .get();
+
+    print('[FORCE_ASSIGN] Found '
+        '${drivers.docs.length} total drivers');
+
+    if (!context.mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Force Assign Rider'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: ListView.builder(
+            itemCount: drivers.docs.length,
+            itemBuilder: (_, i) {
+              final doc = drivers.docs[i];
+              final d = doc.data();
+              final rid = doc.id;
+              final orders =
+                  d['inProgressOrderID'] as List? ?? [];
+              final status =
+                  d['riderAvailability'] ?? 'unknown';
+              final checkedOut =
+                  d['checkedOutToday'] == true;
+              final hasLoc = d['location'] != null;
+              final firstName =
+                  d['firstName'] ?? '';
+              final lastName = d['lastName'] ?? '';
+              final name =
+                  '$firstName $lastName'.trim();
+
+              return ListTile(
+                leading: Icon(
+                  checkedOut
+                      ? Icons.logout
+                      : hasLoc
+                          ? Icons.person_pin_circle
+                          : Icons.person_off,
+                  color: checkedOut
+                      ? Colors.grey
+                      : hasLoc
+                          ? Colors.green
+                          : Colors.red,
+                ),
+                title: Text(
+                  name.isNotEmpty ? name : rid,
+                  style: const TextStyle(fontSize: 14),
+                ),
+                subtitle: Text(
+                  '$status '
+                  '| orders: ${orders.length} '
+                  '${checkedOut ? "| CHECKED OUT" : ""}'
+                  '${!hasLoc ? "| NO LOC" : ""}',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(
+                        Icons.bug_report,
+                        size: 20,
+                        color: Colors.blue,
+                      ),
+                      tooltip: 'Check status',
+                      onPressed: () =>
+                          _debugCheckRiderStatus(rid),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _forceAssignRider(
+                          context,
+                          orderId,
+                          rid,
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                        padding:
+                            const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                      ),
+                      child: const Text(
+                        'Assign',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _forceAssignRider(
+    BuildContext context,
+    String orderId,
+    String riderId,
+  ) async {
+    print('[FORCE_ASSIGN] Assigning rider '
+        '$riderId to order $orderId');
+
+    try {
+      final orderRef = FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(orderId);
+      final riderRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(riderId);
+
+      await FirebaseFirestore.instance
+          .runTransaction((tx) async {
+        final orderDoc = await tx.get(orderRef);
+        final riderDoc = await tx.get(riderRef);
+
+        if (!orderDoc.exists) {
+          throw Exception('Order not found');
+        }
+        if (!riderDoc.exists) {
+          throw Exception('Rider not found');
+        }
+
+        final riderData = riderDoc.data() ?? {};
+        final name =
+            '${riderData['firstName'] ?? ''} '
+                '${riderData['lastName'] ?? ''}'
+                .trim();
+
+        tx.update(orderRef, {
+          'status': 'Driver Assigned',
+          'driverID': riderId,
+          'driverName': name,
+          'assignedAt':
+              FieldValue.serverTimestamp(),
+          'dispatch.forceAssigned': true,
+          'dispatch.forceAssignedBy':
+              'admin_debug',
+        });
+
+        tx.update(riderRef, {
+          'orderRequestData': FieldValue.arrayUnion([orderId]),
+        });
+
+        print('[FORCE_ASSIGN] Transaction prepared '
+            '(rider=$name)');
+      });
+
+      print('[FORCE_ASSIGN] SUCCESS: rider $riderId -> order $orderId '
+          '(status=Driver Assigned, orderRequestData updated)');
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Rider force-assigned!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      print('[FORCE_ASSIGN] ERROR: $e');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Force assign failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _debugCheckRiderStatus(
+    String riderId,
+  ) async {
+    print('[DEBUG] ===== CHECKING RIDER $riderId =====');
+
+    final riderDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(riderId)
+        .get();
+
+    if (!riderDoc.exists) {
+      print('[DEBUG] Rider not found!');
+      return;
+    }
+
+    final d = riderDoc.data()!;
+    print('[DEBUG] inProgressOrderID: '
+        '${d['inProgressOrderID']}');
+    print('[DEBUG] riderAvailability: '
+        '${d['riderAvailability']}');
+    print('[DEBUG] riderDisplayStatus: '
+        '${d['riderDisplayStatus']}');
+    print('[DEBUG] isActive: ${d['isActive']}');
+    print('[DEBUG] checkedOutToday: '
+        '${d['checkedOutToday']}');
+    print('[DEBUG] locationUpdatedAt: '
+        '${d['locationUpdatedAt']}');
+
+    const activeStatuses = [
+      'Awaiting Rider',
+      'Driver Accepted',
+      'Order Accepted',
+      'Order Shipped',
+      'In Transit',
+    ];
+
+    print('[DEBUG] Querying restaurant_orders '
+        'for this rider...');
+    for (final status in activeStatuses) {
+      final snap = await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .where('driverID', isEqualTo: riderId)
+          .where('status', isEqualTo: status)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        print('[DEBUG] $status: '
+            '${snap.docs.length} orders');
+        for (final o in snap.docs) {
+          print('[DEBUG]   -> ${o.id}');
+        }
+      }
+    }
+
+    print('[DEBUG] ===== END RIDER CHECK =====');
   }
 }
 

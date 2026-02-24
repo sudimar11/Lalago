@@ -1,13 +1,19 @@
+import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_driver/main.dart';
 import 'package:foodie_driver/utils/dialog_utils.dart';
+import 'package:foodie_driver/services/audio_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/order_chat_service.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:foodie_driver/widgets/rejection_reason_dialog.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 
 /// Service class for order-related operations
 class OrderService {
@@ -84,7 +90,6 @@ class OrderService {
           .collection('restaurant_orders')
           .where('driverID', isEqualTo: currentUserId)
           .where('status', whereIn: [
-            'Driver Pending',
             'Driver Accepted',
             'Order Shipped',
             'In Transit',
@@ -132,6 +137,7 @@ class OrderService {
       );
 
       await updateRiderStatus();
+      await FireStoreUtils.touchLastActivity(currentUserId);
 
       // Send system message
       if (customerId != null) {
@@ -150,6 +156,7 @@ class OrderService {
         backgroundColor: Colors.green,
       );
 
+      AudioService.instance.markOrderAsNotified(orderId);
       return true;
     } catch (e) {
       DialogUtils.showSnackBar(
@@ -163,41 +170,64 @@ class OrderService {
 
   /// Rejects an order
   ///
-  /// [order] - The order data
   /// [orderId] - The order document ID
-  /// [context] - BuildContext for UI interactions
+  /// [context] - BuildContext for guards and snackbars
+  /// [reason] - Optional rejection reason code (e.g. too_far, restaurant_closed)
+  /// [orderData] - Optional order data; if null, fetched from Firestore
+  /// [evidence] - Optional evidence URL (e.g. photo for restaurant_closed)
   ///
   /// Returns true if order was rejected successfully, false otherwise
   static Future<bool> rejectOrder(
-    Map<String, dynamic> order,
     String orderId,
-    BuildContext context,
-  ) async {
+    BuildContext context, {
+    String? reason,
+    Map<String, dynamic>? orderData,
+    String? evidence,
+  }) async {
     try {
       final currentUserId = _auth.currentUser?.uid ?? '';
 
       final canProceed =
           await _guardAttendanceStatus(context, currentUserId);
       if (!canProceed) return false;
-      
-      final orderRef = _firestore.collection('restaurant_orders').doc(orderId);
 
-      // Get order data for system message
+      final orderRef = _firestore.collection('restaurant_orders').doc(orderId);
       final orderDoc = await orderRef.get();
-      final orderData = orderDoc.data();
-      final author = orderData?['author'] as Map<String, dynamic>? ?? {};
+      final fetchedData = orderDoc.data();
+      final data = orderData ?? fetchedData;
+      final author = data?['author'] as Map<String, dynamic>? ?? {};
       final customerId = author['id'] ?? author['customerID'];
       final customerFcmToken = author['fcmToken'] as String?;
 
-      // Update the order status
-      await orderRef.update({'status': 'Driver Rejected'});
+      final rejectedBy = List<String>.from(
+        (fetchedData?['rejectedByDrivers'] as List<dynamic>?) ?? [],
+      );
+      if (currentUserId.isNotEmpty && !rejectedBy.contains(currentUserId)) {
+        rejectedBy.add(currentUserId);
+      }
 
-      // Apply performance penalty for driver-fault cancellation
+      final updateData = <String, dynamic>{
+        'status': 'Driver Rejected',
+        'rejectedByDrivers': rejectedBy,
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'dispatch.rejectionCount': FieldValue.increment(1),
+      };
+      if (reason != null) {
+        updateData['driverRejectionReason'] = reason;
+      }
+      if (evidence != null) {
+        updateData['driverRejectionEvidence'] = evidence;
+      }
+      await orderRef.update(updateData);
+
       if (currentUserId.isNotEmpty) {
+        await _firestore.collection('users').doc(currentUserId).set(
+          {'orderRequestData': FieldValue.arrayRemove([orderId])},
+          SetOptions(merge: true),
+        );
         await DriverPerformanceService.applyCancellationPenalty(currentUserId);
       }
 
-      // Send system message
       if (customerId != null) {
         await OrderChatService.sendSystemMessage(
           orderId: orderId,
@@ -222,6 +252,73 @@ class OrderService {
       );
       return false;
     }
+  }
+
+  /// Upload photo for restaurant_closed evidence.
+  /// Returns download URL or null on failure.
+  static Future<String?> uploadRestaurantClosedEvidence(
+    File image,
+    String orderId,
+  ) async {
+    try {
+      final compressed = await FireStoreUtils.compressImage(image);
+      final fileName = '${const Uuid().v4()}.jpg';
+      final ref = FireStoreUtils.storage
+          .child('restaurant_closed_evidence/$orderId/$fileName');
+      final task = ref.putFile(compressed);
+      final snapshot = await task;
+      return await snapshot.ref.getDownloadURL();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Shows rejection dialog, handles restaurant_closed with photo, then rejects.
+  /// Returns true if rejection completed, false if cancelled.
+  static Future<bool> rejectOrderWithReason(
+    BuildContext context,
+    String orderId, {
+    Map<String, dynamic>? orderData,
+    String? preselectedReason,
+  }) async {
+    final reason =
+        preselectedReason ?? await showRejectionReasonDialog(context);
+    if (reason == null || reason.isEmpty) return false;
+
+    if (reason == 'restaurant_closed') {
+      final picker = ImagePicker();
+      final xFile = await picker.pickImage(source: ImageSource.camera);
+      if (xFile == null || !context.mounted) return false;
+
+      final imageUrl = await uploadRestaurantClosedEvidence(
+        File(xFile.path),
+        orderId,
+      );
+      if (imageUrl == null) {
+        if (context.mounted) {
+          DialogUtils.showSnackBar(
+            context,
+            message: 'Failed to upload photo',
+            backgroundColor: Colors.red,
+          );
+        }
+        return false;
+      }
+      return rejectOrder(
+        orderId,
+        context,
+        reason: reason,
+        orderData: orderData,
+        evidence: imageUrl,
+      );
+    }
+
+    return rejectOrder(
+      orderId,
+      context,
+      reason: reason,
+      orderData: orderData,
+    );
   }
 
   /// Accept all orders in a batch atomically.
@@ -294,6 +391,7 @@ class OrderService {
       await wb.commit();
 
       await updateRiderStatus();
+      await FireStoreUtils.touchLastActivity(currentUserId);
 
       // Update batch doc status
       if (orders.isNotEmpty) {
@@ -331,6 +429,9 @@ class OrderService {
             'Batch accepted (${orderIds.length} orders)!',
         backgroundColor: Colors.green,
       );
+      for (final orderId in orderIds) {
+        AudioService.instance.markOrderAsNotified(orderId);
+      }
       return true;
     } catch (e) {
       DialogUtils.showSnackBar(
@@ -347,8 +448,9 @@ class OrderService {
   static Future<bool> rejectBatch(
     List<Map<String, dynamic>> orders,
     List<String> orderIds,
-    BuildContext context,
-  ) async {
+    BuildContext context, {
+    String? reason,
+  }) async {
     try {
       final currentUserId = _auth.currentUser?.uid ?? '';
 
@@ -357,11 +459,26 @@ class OrderService {
       if (!canProceed) return false;
 
       final wb = _firestore.batch();
+      final reasonCode = reason ?? 'batch';
+
       for (final orderId in orderIds) {
-        final ref = _firestore
-            .collection('restaurant_orders')
-            .doc(orderId);
-        wb.update(ref, {'status': 'Driver Rejected'});
+        final ref = _firestore.collection('restaurant_orders').doc(orderId);
+        final doc = await ref.get();
+        final data = doc.data();
+        final rejectedBy = List<String>.from(
+          (data?['rejectedByDrivers'] as List<dynamic>?) ?? [],
+        );
+        if (currentUserId.isNotEmpty && !rejectedBy.contains(currentUserId)) {
+          rejectedBy.add(currentUserId);
+        }
+        final updateData = <String, dynamic>{
+          'status': 'Driver Rejected',
+          'rejectedByDrivers': rejectedBy,
+          'driverRejectionReason': reasonCode,
+          'rejectedAt': FieldValue.serverTimestamp(),
+          'dispatch.rejectionCount': FieldValue.increment(1),
+        };
+        wb.update(ref, updateData);
       }
       await wb.commit();
 
@@ -378,11 +495,16 @@ class OrderService {
       }
 
       if (currentUserId.isNotEmpty) {
+        await _firestore.collection('users').doc(currentUserId).set(
+          {
+            'orderRequestData': FieldValue.arrayRemove(orderIds),
+          },
+          SetOptions(merge: true),
+        );
         await DriverPerformanceService
             .applyCancellationPenalty(currentUserId);
       }
 
-      // Send system messages
       for (int i = 0; i < orders.length; i++) {
         final author = orders[i]['author']
             as Map<String, dynamic>? ?? {};
@@ -421,7 +543,7 @@ class OrderService {
     switch (status) {
       case 'Driver Assigned':
         return 'Driver has been assigned to your order';
-      case 'Driver Pending':
+      case 'Driver Accepted':
         return 'Driver is waiting for restaurant to prepare your order';
       case 'Order Shipped':
         return 'Your order is ready for pickup';
@@ -580,10 +702,17 @@ class OrderService {
     user.riderAvailability = availability;
     user.riderDisplayStatus = displayStatus;
 
-    await _firestore.collection('users').doc(uid).update({
+    final Map<String, dynamic> updateMap = {
       'riderAvailability': availability,
       'riderDisplayStatus': displayStatus,
-    });
+    };
+
+    if (availability == 'available') {
+      user.isActive = true;
+      updateMap['isActive'] = true;
+    }
+
+    await _firestore.collection('users').doc(uid).update(updateMap);
   }
 
   static Future<bool> _guardRemittanceStatus(
@@ -668,6 +797,163 @@ class OrderService {
         ],
       ),
     );
+  }
+
+  /// Removes [orderId] from the rider's inProgressOrderID array
+  /// and updates availability. Logs the before/after state for
+  /// debugging capacity calculations in the customer precheck.
+  static Future<void> completeOrder(String orderId) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      print('[ORDER_COMPLETE] No authenticated user');
+      return;
+    }
+
+    print('[ORDER_COMPLETE] '
+        '===== STARTING ORDER COMPLETION =====');
+    print('[ORDER_COMPLETE] Rider: $uid');
+    print('[ORDER_COMPLETE] Order: $orderId');
+    print('[ORDER_COMPLETE] Time: ${DateTime.now()}');
+
+    final beforeDoc = await _firestore
+        .collection('users')
+        .doc(uid)
+        .get();
+    final beforeData = beforeDoc.data();
+    final beforeOrders =
+        beforeData?['inProgressOrderID'] as List? ?? [];
+
+    print('[ORDER_COMPLETE] BEFORE: $beforeOrders '
+        '(${beforeOrders.length})');
+    print('[ORDER_COMPLETE]   avail='
+        '${beforeData?['riderAvailability']}, '
+        'active=${beforeData?['isActive']}, '
+        'checkedOut='
+        '${beforeData?['checkedOutToday']}');
+
+    // ── Retry loop with verification ──
+    const maxRetries = 3;
+    bool removed = !beforeOrders.contains(orderId);
+    if (removed) {
+      print('[ORDER_COMPLETE] Order already absent '
+          'from array');
+    }
+
+    List afterOrders = List.from(beforeOrders);
+
+    for (int attempt = 1;
+        !removed && attempt <= maxRetries;
+        attempt++) {
+      print('[ORDER_COMPLETE] arrayRemove attempt '
+          '#$attempt');
+      await _firestore
+          .collection('users')
+          .doc(uid)
+          .update({
+        'inProgressOrderID':
+            FieldValue.arrayRemove([orderId]),
+      });
+
+      await Future<void>.delayed(
+        const Duration(milliseconds: 300),
+      );
+
+      final verifyDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .get();
+      afterOrders = verifyDoc.data()?[
+              'inProgressOrderID'] as List? ??
+          [];
+
+      if (!afterOrders.contains(orderId)) {
+        removed = true;
+        print('[ORDER_COMPLETE] Removed on attempt '
+            '#$attempt');
+      } else {
+        print('[ORDER_COMPLETE] Still present after '
+            'attempt #$attempt');
+      }
+    }
+
+    // ── Fallback: overwrite the whole array ──
+    if (!removed) {
+      print('[ORDER_COMPLETE] FALLBACK: overwriting '
+          'array without $orderId');
+      final cleaned = beforeOrders
+          .where((id) => id != orderId)
+          .toList();
+      await _firestore
+          .collection('users')
+          .doc(uid)
+          .update({'inProgressOrderID': cleaned});
+      afterOrders = cleaned;
+      print('[ORDER_COMPLETE] Array set to: $cleaned');
+    }
+
+    print('[ORDER_COMPLETE] AFTER: $afterOrders '
+        '(${afterOrders.length})');
+
+    // ── Sync in-memory model ──
+    final user = MyAppState.currentUser;
+    if (user != null) {
+      user.inProgressOrderID =
+          List<dynamic>.from(afterOrders);
+      print('[ORDER_COMPLETE] In-memory synced');
+    }
+
+    // ── Cross-check restaurant_orders ──
+    print('[ORDER_COMPLETE] Cross-checking orders...');
+    final activeCheck = await _firestore
+        .collection('restaurant_orders')
+        .where('driverID', isEqualTo: uid)
+        .where('status', whereIn: [
+          'Driver Accepted',
+          'Order Shipped',
+          'In Transit',
+        ])
+        .get();
+    print('[ORDER_COMPLETE] Active in system: '
+        '${activeCheck.docs.length}');
+    for (final doc in activeCheck.docs) {
+      print('[ORDER_COMPLETE]   ${doc.id}: '
+          '${doc.data()['status']}');
+    }
+
+    if (afterOrders.isEmpty &&
+        activeCheck.docs.isNotEmpty) {
+      final orphanIds =
+          activeCheck.docs.map((d) => d.id).toList();
+      print('[ORDER_COMPLETE] Re-adding orphans: '
+          '$orphanIds');
+      await _firestore
+          .collection('users')
+          .doc(uid)
+          .update({
+        'inProgressOrderID':
+            FieldValue.arrayUnion(orphanIds),
+      });
+      if (user != null) {
+        user.inProgressOrderID = orphanIds;
+      }
+    }
+
+    await updateRiderStatus();
+    await FireStoreUtils.touchLastActivity(uid);
+
+    // ── Final state ──
+    final statusDoc = await _firestore
+        .collection('users')
+        .doc(uid)
+        .get();
+    final f = statusDoc.data();
+    print('[ORDER_COMPLETE] FINAL: '
+        '${f?['inProgressOrderID']} '
+        'avail=${f?['riderAvailability']} '
+        'display=${f?['riderDisplayStatus']} '
+        'active=${f?['isActive']}');
+    print('[ORDER_COMPLETE] '
+        '===== ORDER COMPLETION FINISHED =====');
   }
 
   /// Compute effective order capacity for the current rider using

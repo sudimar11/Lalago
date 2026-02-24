@@ -18,6 +18,7 @@ import 'package:foodie_driver/services/group_chat_service.dart';
 import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
 import 'package:foodie_driver/services/rider_preset_location_service.dart';
+import 'package:foodie_driver/services/food_ready_highlight_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -26,7 +27,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:foodie_driver/services/audio_service.dart';
 import 'package:foodie_driver/services/order_service.dart';
+import 'package:foodie_driver/services/array_validation_service.dart';
 
 class OrdersBlankScreen extends StatefulWidget {
   const OrdersBlankScreen({Key? key}) : super(key: key);
@@ -37,13 +40,12 @@ class OrdersBlankScreen extends StatefulWidget {
 
 class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
   static const List<String> _activeStatuses = [
-    'Driver Pending',
+    'Driver Assigned',
     'Driver Accepted',
     'Order Accepted',
     'Order Shipped',
     'In Transit',
     'Order Placed',
-    'Driver Assigned',
   ];
 
   int _refreshNonce = 0;
@@ -58,6 +60,11 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       FlutterLocalNotificationsPlugin();
   final Map<String, String> _previousOrderStatuses = <String, String>{};
   StreamSubscription<QuerySnapshot>? _orderStatusSubscription;
+
+  // New order badge: orders we haven't seen before
+  final Set<String> _newOrderIds = {};
+  final Set<String> _lastSeenOrderIds = {};
+  final Map<String, Timer> _newOrderTimers = {};
 
   @override
   void initState() {
@@ -92,6 +99,11 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
     _initializeLocalNotifications();
     _listenForOrderStatusChanges();
     _checkOfflineStatus();
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && uid.isNotEmpty) {
+      ArrayValidationService.validate(uid);
+    }
 
     // Request permissions after UI is built to avoid blocking
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -284,6 +296,29 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       );
       MyAppState.currentUser!.locationUpdatedAt = Timestamp.now();
       MyAppState.currentUser!.selectedPresetLocationId = selected.id;
+
+      await FirebaseFirestore.instance
+          .collection('service_areas')
+          .doc(selected.id)
+          .update({
+        'assignedDriverIds': FieldValue.arrayUnion(
+          [MyAppState.currentUser!.userID],
+        ),
+      });
+
+      if (savedId != null &&
+          savedId.isNotEmpty &&
+          savedId != selected.id) {
+        await FirebaseFirestore.instance
+            .collection('service_areas')
+            .doc(savedId)
+            .update({
+          'assignedDriverIds': FieldValue.arrayRemove(
+            [MyAppState.currentUser!.userID],
+          ),
+        });
+      }
+
       await _slideGoOnline();
     } catch (e) {
       if (mounted) {
@@ -352,6 +387,7 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
 
       await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
       await OrderService.updateRiderStatus();
+      await FireStoreUtils.touchLastActivity(MyAppState.currentUser!.userID);
       UserPreference.setLastCheckInDate(date: todayString);
 
       if (mounted) {
@@ -384,9 +420,37 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
     }
   }
 
+  void _updateNewOrderIds(List<QueryDocumentSnapshot> docs) {
+    final currentIds = docs.map((d) => d.id).toSet();
+    final newIds = currentIds.difference(_lastSeenOrderIds);
+    if (newIds.isNotEmpty && mounted) {
+      setState(() {
+        for (final id in newIds) {
+          _newOrderIds.add(id);
+          _newOrderTimers[id]?.cancel();
+          _newOrderTimers[id] = Timer(const Duration(seconds: 30), () {
+            if (mounted) {
+              setState(() {
+                _newOrderIds.remove(id);
+                _newOrderTimers.remove(id);
+              });
+            }
+          });
+        }
+        _lastSeenOrderIds.addAll(currentIds);
+      });
+    } else if (currentIds.isNotEmpty) {
+      _lastSeenOrderIds.addAll(currentIds);
+    }
+  }
+
   @override
   void dispose() {
     _orderStatusSubscription?.cancel();
+    for (final t in _newOrderTimers.values) {
+      t.cancel();
+    }
+    _newOrderTimers.clear();
     super.dispose();
   }
 
@@ -464,6 +528,9 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
     if (orderData == null) return;
 
     final orderId = doc.id;
+    if (newStatus == 'Order Shipped') {
+      AudioService.instance.playNewOrderSound(orderId: orderId);
+    }
     final author = (orderData['author'] ?? {}) as Map<String, dynamic>;
     final vendor = (orderData['vendor'] ?? {}) as Map<String, dynamic>;
     final customerName =
@@ -529,8 +596,6 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
         return '✅ Order Accepted by Restaurant';
       case 'Driver Assigned':
         return '🚗 Order Assigned to You';
-      case 'Driver Pending':
-        return '⏳ Waiting for Your Response';
       case 'Driver Accepted':
         return '✅ Order Accepted';
       case 'Driver Rejected':
@@ -944,11 +1009,8 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       return Scaffold(
         backgroundColor:
             isDarkMode(context) ? Color(DARK_VIEWBG_COLOR) : Colors.white,
-        body: Center(
-          child: Text(
-            'No current order',
-            style: const TextStyle(fontSize: 16),
-          ),
+        body: const Center(
+          child: CircularProgressIndicator.adaptive(),
         ),
       );
     }
@@ -1415,6 +1477,9 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                       }
 
                       final docs = snapshot.data?.docs ?? const [];
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _updateNewOrderIds(docs);
+                      });
                       if (docs.isEmpty) {
                         return Center(
                           child: Padding(
@@ -1452,10 +1517,25 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                         );
                       }
 
-                      return RefreshableOrderList(
-                        docs: docs,
-                        onRefresh: () {
-                          setState(() => _recreateOrdersStream());
+                      return ValueListenableBuilder<String?>(
+                        valueListenable:
+                            FoodReadyHighlightService.instance.highlightedOrderId,
+                        builder: (context, highlightedId, _) {
+                          final highlightedIds = highlightedId != null
+                              ? {highlightedId}
+                              : <String>{};
+                          return RefreshableOrderList(
+                            docs: docs,
+                            onRefresh: () {
+                              setState(() => _recreateOrdersStream());
+                            },
+                            newOrderIds: _newOrderIds,
+                            highlightedOrderIds: highlightedIds,
+                            onOrderViewed: (orderId) {
+                              FoodReadyHighlightService.instance
+                                  .clearHighlight(orderId);
+                            },
+                          );
                         },
                       );
                     },

@@ -546,17 +546,38 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         throw Exception("Delivery address is null");
       }
 
+      print('[CHECKOUT] ===== PLACE ORDER STARTED =====');
+      print('[CHECKOUT] Calling DispatchPrecheckService...');
+      print('[CHECKOUT] Address: '
+          '${widget.address?.getFullAddress()}');
+      print('[CHECKOUT] Location: '
+          'lat=${widget.address?.location?.latitude}, '
+          'lng=${widget.address?.location?.longitude}');
+      print('[CHECKOUT] Locality: '
+          '${widget.address?.locality}');
+
       final precheck = await _dispatchPrecheckService.runPrecheck(
         customerId: MyAppState.currentUser?.userID ?? '',
         vendorId: widget.products.first.vendorID,
+        deliveryLat: widget.address?.location?.latitude,
+        deliveryLng: widget.address?.location?.longitude,
+        deliveryLocality: widget.address?.locality,
       );
+
+      print('[CHECKOUT] Precheck result: '
+          'canCheckout=${precheck.canCheckout}, '
+          'orders=${precheck.activeOrders}, '
+          'riders=${precheck.activeRiders}');
+
       if (!precheck.canCheckout) {
+        print('[CHECKOUT] BLOCKED by capacity precheck');
         await _showCheckoutBlockedDialog(
           message: precheck.blockedMessage ??
             'We are unable to process checkout at the moment. Please try again shortly.',
         );
         return;
       }
+      print('[CHECKOUT] Proceeding with order...');
 
       log("Step 2: Fetching vendor details");
       final vendorModel = await fireStoreUtils

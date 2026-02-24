@@ -11,11 +11,13 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
+import 'package:foodie_customer/model/OrderModel.dart';
 import 'package:foodie_customer/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_customer/firebase_options.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/home/HomeScreen.dart';
+import 'package:foodie_customer/ui/orderDetailsScreen/OrderDetailsScreen.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 // #region agent log
@@ -98,6 +100,8 @@ class NotificationService {
   static const String _chatChannelName = 'Chat Messages';
   static const String _promoChannelId = 'promo_system';
   static const String _promoChannelName = 'Promo & System';
+  static const String _orderStatusChannelId = 'order_status';
+  static const String _orderStatusChannelName = 'Order Updates';
 
   static bool _notificationPermissionDialogShown = false;
 
@@ -274,9 +278,11 @@ class NotificationService {
       await _ensureAndroidDefaultChannel();
       await _ensureAndroidChatChannel();
       await _ensureAndroidPromoChannel();
+      await _ensureOrderStatusChannel();
       debugPrint(
           '[FCM_DEBUG] flutter_local_notifications initialized once '
-          '(channels: high_importance_channel, chat_messages, promo_system)');
+          '(channels: high_importance_channel, chat_messages, promo_system, '
+          'order_status)');
       setupInteractedMessage();
       _isInitialized = true;
       // #region agent log
@@ -349,6 +355,10 @@ class NotificationService {
     return data['type'] == 'happy_hour';
   }
 
+  static bool isOrderUpdateNotification(Map<String, dynamic> data) {
+    return data['type'] == 'order_update';
+  }
+
   static Future<void> showBackgroundNotification(
     RemoteMessage message,
   ) async {
@@ -367,10 +377,15 @@ class NotificationService {
     await service._ensureAndroidDefaultChannel();
     await service._ensureAndroidChatChannel();
     await service._ensureAndroidPromoChannel();
+    await service._ensureOrderStatusChannel();
 
     if (shouldShowPopupForMessage(message)) {
       log("Rider/displayable notification received in background");
-      await service._showChatNotification(message);
+      if (isOrderUpdateNotification(message.data)) {
+        await service._showOrderUpdateNotification(message);
+      } else {
+        await service._showChatNotification(message);
+      }
       return;
     }
     if (isHappyHourNotification(message.data) ||
@@ -386,11 +401,58 @@ class NotificationService {
       final Map<String, dynamic> data = jsonDecode(payload);
       if (isRiderChatNotification(data)) {
         _navigateToChat(data);
+      } else if (isOrderUpdateNotification(data)) {
+        _navigateToOrderDetails(data);
       } else if (data['type'] == 'happy_hour') {
         _navigateToHome();
       }
     } catch (e) {
       log('Error handling notification tap: $e');
+    }
+  }
+
+  Future<void> _navigateToOrderDetails(Map<String, dynamic> data) async {
+    try {
+      BuildContext? context = navigatorKey.currentContext;
+      if (context == null) {
+        await Future.delayed(const Duration(seconds: 1));
+        context = navigatorKey.currentContext;
+      }
+      if (context == null) {
+        log('No context for order details navigation');
+        return;
+      }
+
+      final orderId = data['orderId']?.toString();
+      final customerId = data['customerId']?.toString();
+      if (orderId == null || orderId.isEmpty) {
+        log('Missing orderId for order_update notification');
+        return;
+      }
+
+      if (MyAppState.currentUser != null &&
+          customerId != null &&
+          customerId != MyAppState.currentUser!.userID) {
+        log('Customer ID mismatch, ignoring order_update');
+        return;
+      }
+
+      final OrderModel? order =
+          await FireStoreUtils.getOrderByIdOnce(orderId);
+      if (order == null) {
+        log('Order not found: $orderId');
+        return;
+      }
+
+      push(
+        context,
+        OrderDetailsScreen(
+          orderModel: order,
+          fromNotification: true,
+        ),
+      );
+    } catch (e) {
+      log('Error navigating to order details: $e');
     }
   }
 
@@ -572,6 +634,22 @@ class NotificationService {
     await androidPlugin.createNotificationChannel(channel);
   }
 
+  Future<void> _ensureOrderStatusChannel() async {
+    final androidPlugin =
+        flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    if (androidPlugin == null) return;
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      _orderStatusChannelId,
+      _orderStatusChannelName,
+      description: 'Order status update notifications',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+    );
+    await androidPlugin.createNotificationChannel(channel);
+  }
+
   void _showAndroidChatSettingsPrompt() {
     if (_settingsPromptShown || !Platform.isAndroid) {
       return;
@@ -679,6 +757,16 @@ class NotificationService {
         _navigateToChat(message.data);
       } else if (message.data['type'] == 'happy_hour') {
         _navigateToHome();
+      } else if (isOrderUpdateNotification(message.data)) {
+        final customerId = message.data['customerId']?.toString();
+        final currentId = MyAppState.currentUser?.userID.toString();
+        if (MyAppState.currentUser != null &&
+            customerId != null &&
+            customerId != currentId) {
+          log('Order update customer ID mismatch, ignoring');
+          return;
+        }
+        _navigateToOrderDetails(message.data);
       } else if (message.notification != null) {
         log(message.notification.toString());
         display(message);
@@ -705,6 +793,18 @@ class NotificationService {
     } else if (message.data['type'] == 'happy_hour') {
       Future.delayed(const Duration(seconds: 1), () {
         _navigateToHome();
+      });
+    } else if (isOrderUpdateNotification(message.data)) {
+      final payloadCustomerId = message.data['customerId']?.toString();
+      final currentId = MyAppState.currentUser?.userID.toString();
+      if (MyAppState.currentUser != null &&
+          payloadCustomerId != null &&
+          payloadCustomerId != currentId) {
+        log('Order update initial message customer ID mismatch');
+        return;
+      }
+      Future.delayed(const Duration(seconds: 1), () {
+        _navigateToOrderDetails(message.data);
       });
     }
   }
@@ -774,6 +874,19 @@ class NotificationService {
       channelId: _chatChannelId,
       channelName: _chatChannelName,
       channelDescription: 'Notifications for driver messages',
+      title: title,
+      body: body,
+      payload: jsonEncode(message.data),
+    );
+  }
+
+  Future<void> _showOrderUpdateNotification(RemoteMessage message) async {
+    final title = _resolveTitle(message, 'Order Update');
+    final body = _resolveBody(message, 'Your order status has been updated.');
+    await _showLocalNotification(
+      channelId: _orderStatusChannelId,
+      channelName: _orderStatusChannelName,
+      channelDescription: 'Order status update notifications',
       title: title,
       body: body,
       payload: jsonEncode(message.data),
@@ -905,9 +1018,14 @@ class NotificationService {
         log('📨 Rider message notification (foreground) - '
             'Order: ${message.data['orderId']}, '
             'CustomerId: ${message.data['customerId']}');
+        await _showChatNotification(message);
+      } else if (isOrderUpdateNotification(message.data)) {
+        log('Order status update notification (foreground) - '
+            'Order: ${message.data['orderId']}');
+        await _showOrderUpdateNotification(message);
+      } else {
+        await _showChatNotification(message);
       }
-
-      await _showChatNotification(message);
     } on Exception catch (e) {
       debugPrint('[FCM_DEBUG] display() FAILED: $e');
       log('Notification display failed: $e');

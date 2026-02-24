@@ -5,9 +5,10 @@ import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:foodie_driver/ui/home/orderdetails.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:foodie_driver/services/driver_performance_service.dart';
+import 'package:foodie_driver/services/audio_service.dart';
 import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:lalago_shared/order_status.dart';
 
 class OrderPage extends StatefulWidget {
   const OrderPage({Key? key}) : super(key: key);
@@ -76,10 +77,9 @@ class _OrderPageState extends State<OrderPage> {
       final activeOrderSnapshot = await _firestore
           .collection('restaurant_orders')
           .where('status', whereIn: [
-        'Driver Pending',
-        'Driver Accepted',
-        'Order Shipped',
-        'In Transit'
+        ORDER_STATUS_DRIVER_ACCEPTED,
+        ORDER_STATUS_SHIPPED,
+        ORDER_STATUS_IN_TRANSIT,
       ]).get();
 
       final newOrdersList = newOrderSnapshot.docs
@@ -619,11 +619,11 @@ class _OrderPageState extends State<OrderPage> {
     }
 
     try {
-      // Update the order status to "Driver Pending"
+      // Update the order status to "Driver Accepted"
       await FirebaseFirestore.instance
           .collection('restaurant_orders')
           .doc(order['id'])
-          .update({'status': 'Driver Pending'});
+          .update({'status': ORDER_STATUS_DRIVER_ACCEPTED});
 
       // Display success message
       ScaffoldMessenger.of(context).showSnackBar(
@@ -632,6 +632,7 @@ class _OrderPageState extends State<OrderPage> {
           backgroundColor: Colors.green,
         ),
       );
+      AudioService.instance.markOrderAsNotified(order['id'] as String);
     } catch (e) {
       // Display error message
       ScaffoldMessenger.of(context).showSnackBar(
@@ -644,34 +645,13 @@ class _OrderPageState extends State<OrderPage> {
   }
 
   void _rejectOrder(Map<String, dynamic> order) async {
-    try {
-      // Update the order status to "Driver Rejected"
-      await FirebaseFirestore.instance
-          .collection('restaurant_orders')
-          .doc(order['id'])
-          .update({'status': 'Driver Rejected'});
-
-      // Apply performance penalty for driver-fault cancellation
-      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-      if (currentUserId != null && currentUserId.isNotEmpty) {
-        await DriverPerformanceService.applyCancellationPenalty(currentUserId);
-      }
-
-      // Display success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Order rejected successfully!'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      // Display error message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to reject order: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+    final ok = await OrderService.rejectOrderWithReason(
+      context,
+      order['id'] as String,
+      orderData: order,
+    );
+    if (ok && mounted) {
+      fetchOrders();
     }
   }
 

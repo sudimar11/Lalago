@@ -5,6 +5,8 @@ import 'package:brgy/driver_location_page.dart';
 import 'package:brgy/driver_wallet_details_page.dart';
 import 'package:brgy/driver_collection_details_page.dart';
 import 'package:intl/intl.dart';
+import 'package:firebase_auth/firebase_auth.dart' as auth;
+import 'package:brgy/pages/order_history_page.dart';
 
 class DriverInformationPage extends StatefulWidget {
   final String driverId;
@@ -19,6 +21,44 @@ class DriverInformationPage extends StatefulWidget {
 }
 
 class _DriverInformationPageState extends State<DriverInformationPage> {
+  bool? _multipleOrdersLocal;
+  bool _isUpdatingMultipleOrders = false;
+
+  Future<void> _updateMultipleOrders(bool newValue) async {
+    if (_isUpdatingMultipleOrders) return;
+    setState(() => _isUpdatingMultipleOrders = true);
+    try {
+      await FirebaseFirestore.instance
+          .collection(USERS)
+          .doc(widget.driverId)
+          .update({'multipleOrders': newValue});
+      setState(() {
+        _multipleOrdersLocal = newValue;
+        _isUpdatingMultipleOrders = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Multiple orders: ${newValue ? "allowed" : "single only"}',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isUpdatingMultipleOrders = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -153,8 +193,10 @@ class _DriverInformationPageState extends State<DriverInformationPage> {
                   isAvailable,
                   checkedInToday,
                   checkedOutToday,
-                  multipleOrders,
+                  _multipleOrdersLocal ?? multipleOrders,
                   activeOrdersCount,
+                  onMultipleOrdersChanged: _updateMultipleOrders,
+                  isUpdatingMultipleOrders: _isUpdatingMultipleOrders,
                 ),
                 const SizedBox(height: 16),
                 _buildWalletCard(walletAmount, walletCredit),
@@ -349,8 +391,10 @@ class _DriverInformationPageState extends State<DriverInformationPage> {
     bool checkedInToday,
     bool checkedOutToday,
     bool multipleOrders,
-    int activeOrdersCount,
-  ) {
+    int activeOrdersCount, {
+    Future<void> Function(bool)? onMultipleOrdersChanged,
+    bool isUpdatingMultipleOrders = false,
+  }) {
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(
@@ -392,11 +436,43 @@ class _DriverInformationPageState extends State<DriverInformationPage> {
               checkedOutToday ? 'Yes' : 'No',
             ),
             const SizedBox(height: 12),
-            _buildInfoRow(
-              Icons.reorder,
-              'Multiple orders allowed',
-              multipleOrders ? 'Yes' : 'No',
-            ),
+            if (onMultipleOrdersChanged != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.reorder, size: 20, color: Colors.grey[700]),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Multiple orders allowed',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.grey[800],
+                        ),
+                      ),
+                    ),
+                    if (isUpdatingMultipleOrders)
+                      const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    else
+                      Switch(
+                        value: multipleOrders,
+                        onChanged: onMultipleOrdersChanged,
+                        activeColor: Colors.orange,
+                      ),
+                  ],
+                ),
+              )
+            else
+              _buildInfoRow(
+                Icons.reorder,
+                'Multiple orders allowed',
+                multipleOrders ? 'Yes' : 'No',
+              ),
             const SizedBox(height: 12),
             _buildInfoRow(
               Icons.local_shipping,
@@ -529,12 +605,192 @@ class _DriverInformationPageState extends State<DriverInformationPage> {
                     foregroundColor: Colors.white,
                   ),
                 ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => OrderHistoryPage(
+                          initialRiderId: widget.driverId,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.receipt_long, size: 18),
+                  label: const Text('Order history'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+                ElevatedButton.icon(
+                  onPressed: _showCleanupConfirmationDialog,
+                  icon: const Icon(
+                    Icons.cleaning_services,
+                    size: 18,
+                  ),
+                  label: const Text('Cleanup stuck orders'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
               ],
             ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _showCleanupConfirmationDialog() async {
+    final riderDoc = await FirebaseFirestore.instance
+        .collection(USERS)
+        .doc(widget.driverId)
+        .get();
+
+    if (!mounted) return;
+
+    final data = riderDoc.data() ?? {};
+    final currentOrders =
+        data['inProgressOrderID'] as List? ?? [];
+    final currentAvailability =
+        data['riderAvailability'] ?? 'unknown';
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Cleanup Stuck Orders'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('This will reset the following rider data:'),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Rider ID: '
+                    '${widget.driverId.substring(0, 8)}...',
+                  ),
+                  Text(
+                    'Current orders in array: '
+                    '${currentOrders.length}',
+                  ),
+                  Text('Status: $currentAvailability'),
+                  if (currentOrders.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Orders: ${currentOrders.join(', ')}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'This will:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const _CleanupActionRow(
+              'Clear inProgressOrderID array',
+            ),
+            const _CleanupActionRow(
+              'Set riderAvailability to "available"',
+            ),
+            const _CleanupActionRow('Set isActive to true'),
+            const SizedBox(height: 16),
+            Text(
+              'Note: This only affects the rider document. '
+              'Order history remains intact.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('CANCEL'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('CLEANUP'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _performCleanup();
+    }
+  }
+
+  Future<void> _performCleanup() async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) =>
+          const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      await FirebaseFirestore.instance
+          .collection(USERS)
+          .doc(widget.driverId)
+          .update({
+        'inProgressOrderID': [],
+        'riderAvailability': 'available',
+        'isActive': true,
+        'lastCleanupAt': FieldValue.serverTimestamp(),
+        'lastCleanupBy':
+            'admin_${auth.FirebaseAuth.instance.currentUser?.uid ?? 'unknown'}',
+      });
+
+      if (!mounted) return;
+      Navigator.of(context).pop();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Rider cleaned up successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
   }
 
   Widget _buildInfoRow(
@@ -616,6 +872,29 @@ class _DriverInformationPageState extends State<DriverInformationPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _CleanupActionRow extends StatelessWidget {
+  final String text;
+  const _CleanupActionRow(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.check_circle,
+            color: Colors.green,
+            size: 16,
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text)),
+        ],
       ),
     );
   }

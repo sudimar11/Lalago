@@ -54,7 +54,6 @@ const GlobalURL = "Replace with your web";
 const ORDER_STATUS_PLACED = 'Order Placed';
 const ORDER_STATUS_ACCEPTED = 'Order Accepted';
 const ORDER_STATUS_REJECTED = 'Order Rejected';
-const ORDER_STATUS_DRIVER_PENDING = 'Driver Pending';
 const ORDER_STATUS_DRIVER_ACCEPTED = 'Driver Accepted';
 const ORDER_STATUS_DRIVER_REJECTED = 'Driver Rejected';
 const ORDER_STATUS_SHIPPED = 'Order Shipped';

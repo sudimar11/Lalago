@@ -37,6 +37,9 @@ class OrderModel {
   Map<String, dynamic>? specialDiscount;
   String? estimatedTimeToPrepare;
   Timestamp? scheduleTime;
+  Timestamp? acceptedAt;
+  Timestamp? readyAt;
+  Timestamp? shippedAt;
 
   OrderModel(
       {address,
@@ -64,6 +67,9 @@ class OrderModel {
       this.scheduleTime,
       this.driverAcceptedAt,
       this.preparationTimeInMinutes,
+      this.acceptedAt,
+      this.readyAt,
+      this.shippedAt,
       this.taxModel})
       : this.address = address ?? AddressModel(),
         this.author = author ?? User(),
@@ -137,6 +143,9 @@ class OrderModel {
       driverID: parsedJson["driverID"],
       driverAcceptedAt: parsedJson["driverAcceptedAt"],
       preparationTimeInMinutes: parsedJson["preparationTimeInMinutes"],
+      acceptedAt: parsedJson["acceptedAt"],
+      readyAt: parsedJson["readyAt"],
+      shippedAt: parsedJson["shippedAt"],
 
       taxModel: taxList,
     );
@@ -171,6 +180,9 @@ class OrderModel {
       "driverID": this.driverID,
       "driverAcceptedAt": this.driverAcceptedAt,
       "preparationTimeInMinutes": this.preparationTimeInMinutes,
+      "acceptedAt": this.acceptedAt,
+      "readyAt": this.readyAt,
+      "shippedAt": this.shippedAt,
     };
   }
 

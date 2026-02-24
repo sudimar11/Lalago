@@ -12,6 +12,45 @@ import 'package:brgy/services/dynamic_capacity_service.dart';
 /// Uses multi-factor scoring algorithm for optimal driver selection.
 class DriverAssignmentService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  static int? _cachedInactivityTimeoutMinutes;
+  static DateTime? _inactivityTimeoutCachedAt;
+  static const Duration _inactivityTimeoutCacheTtl = Duration(seconds: 60);
+
+  Future<int> _getRiderTimeoutSeconds() async {
+    try {
+      final w = await DispatchScoringService.loadWeights();
+      return w.riderTimeoutSeconds;
+    } catch (_) {
+      return 60;
+    }
+  }
+
+  Future<int> _getInactivityTimeoutMinutes() async {
+    final now = DateTime.now();
+    if (_cachedInactivityTimeoutMinutes != null &&
+        _inactivityTimeoutCachedAt != null &&
+        now.difference(_inactivityTimeoutCachedAt!) <
+            _inactivityTimeoutCacheTtl) {
+      return _cachedInactivityTimeoutMinutes!;
+    }
+    try {
+      final doc = await _firestore
+          .collection('config')
+          .doc('rider_time_settings')
+          .get()
+          .timeout(const Duration(seconds: 5));
+      final data = doc.data();
+      final v = data?['inactivityTimeoutMinutes'];
+      final mins = v is int ? v : (v is num ? v.toInt() : 15);
+      _cachedInactivityTimeoutMinutes = mins;
+      _inactivityTimeoutCachedAt = now;
+      return mins;
+    } catch (_) {
+      _cachedInactivityTimeoutMinutes ??= 15;
+      return _cachedInactivityTimeoutMinutes!;
+    }
+  }
   final OrderNotificationService _notificationService =
       OrderNotificationService();
   final ZoneCapacityService _capacityService =
@@ -144,6 +183,9 @@ class DriverAssignmentService {
       } else {
         driverDocs = driversQuery.docs;
       }
+
+      print('[Dispatch] After zone filter: ${driverDocs.length} drivers'
+          '${zoneDriverIds != null ? " (zone restricted to ${zoneDriverIds.length} IDs)" : ""}');
 
       if (driverDocs.isEmpty) {
         return {'success': false, 'reason': 'No drivers'};
@@ -280,7 +322,6 @@ class DriverAssignmentService {
     }) setupDriverResponseListener,
   }) async {
     await _assignDriverToOrder(orderId, driverId, distance);
-    await _updateDriverStatus(driverId, orderId);
     final assignmentLogRef =
         await _logAssignment(orderId, driverId, distance);
     setupDriverResponseListener(
@@ -520,19 +561,45 @@ class DriverAssignmentService {
   ) async {
     final List<Map<String, dynamic>> drivers = [];
     final isPeak = DispatchScoringService.isPeakHourNow(weights);
+    final inactivityTimeoutMinutes = await _getInactivityTimeoutMinutes();
+    final inactivityThreshold =
+        DateTime.now().subtract(Duration(minutes: inactivityTimeoutMinutes));
 
-    // Pass 1: collect eligible drivers with distances and order counts
+    // Pass 1: collect eligible drivers with distances and order counts.
+    // Stale riders (inactive) are tracked separately; used only when no other
+    // riders pass the inactivity check.
     final List<String> eligibleIds = [];
+    final List<String> staleButEligibleIds = [];
     final Map<String, double> distanceMap = {};
     final Map<String, int> orderCountMap = {};
     final Map<String, Map<String, dynamic>> candidateMap = {};
 
     for (final doc in docs) {
       if (excludeDriverId != null && doc.id == excludeDriverId) {
+        print('[Dispatch] Driver ${doc.id} EXCLUDED: excludeDriverId');
         continue;
       }
       final driverData = doc.data();
-      if (driverData['checkedOutToday'] == true) continue;
+      final rawOrders = driverData['inProgressOrderID'];
+      print('[Dispatch] Checking rider ${doc.id} - '
+          'inProgressOrderID: $rawOrders');
+      print('[Dispatch] Order count: '
+          '${(rawOrders is List) ? rawOrders.length : 0}, '
+          'availability: '
+          '${driverData['riderAvailability'] ?? "null"}');
+      if (driverData['checkedOutToday'] == true) {
+        print('[Dispatch] Driver ${doc.id} EXCLUDED: checkedOutToday');
+        continue;
+      }
+      final lastActTs = driverData['lastActivityTimestamp'] as Timestamp?;
+      final locTs = driverData['locationUpdatedAt'] as Timestamp?;
+      final lastAct = lastActTs ?? locTs;
+      final bool isStale = lastAct != null &&
+          lastAct.toDate().isBefore(inactivityThreshold);
+      if (isStale) {
+        print('[Dispatch] Driver ${doc.id} has stale activity - '
+            'will allow only if no other riders in zone');
+      }
       final currentOrders = _activeOrderCount(driverData);
       final effCap = DynamicCapacityService.calculateEffectiveCapacity(
         w: weights,
@@ -543,21 +610,45 @@ class DriverAssignmentService {
                 0,
         multipleOrders: driverData['multipleOrders'] == true,
       );
-      if (currentOrders >= effCap) continue;
+      if (currentOrders >= effCap) {
+        print('[Dispatch] Driver ${doc.id} EXCLUDED: '
+            'at capacity ($currentOrders/$effCap)');
+        continue;
+      }
 
       final location = driverData['location'];
-      if (location == null || location is! Map) continue;
+      if (location == null || location is! Map) {
+        print('[Dispatch] Driver ${doc.id} EXCLUDED: '
+            'location null or not a Map');
+        continue;
+      }
       final driverLat =
           _asDouble(location['latitude']) ?? 0.0;
       final driverLng =
           _asDouble(location['longitude']) ?? 0.0;
-      if (driverLat == 0.0 && driverLng == 0.0) continue;
+      if (driverLat == 0.0 && driverLng == 0.0) {
+        print('[Dispatch] Driver ${doc.id} EXCLUDED: '
+            'location is 0,0');
+        continue;
+      }
 
       final distance = _calculateDistance(
         vendorLat, vendorLng, driverLat, driverLng,
       );
 
-      eligibleIds.add(doc.id);
+      if (isStale) {
+        staleButEligibleIds.add(doc.id);
+        print('[Dispatch] Driver ${doc.id} STALE-BUT-ELIGIBLE: '
+            'orders=$currentOrders/$effCap, '
+            'dist=${distance.toStringAsFixed(1)}km - '
+            'will use if no active riders');
+      } else {
+        eligibleIds.add(doc.id);
+        print('[Dispatch] Driver ${doc.id} ELIGIBLE: '
+            'orders=$currentOrders/$effCap, '
+            'dist=${distance.toStringAsFixed(1)}km, '
+            'avail=${driverData['riderAvailability']}');
+      }
       distanceMap[doc.id] = distance;
       orderCountMap[doc.id] = currentOrders;
       candidateMap[doc.id] = {
@@ -569,6 +660,17 @@ class DriverAssignmentService {
         'effectiveCapacity': effCap,
       };
     }
+
+    // Allow stale riders when no other riders are available in the zone
+    if (eligibleIds.isEmpty && staleButEligibleIds.isNotEmpty) {
+      for (final id in staleButEligibleIds) {
+        eligibleIds.add(id);
+        print('[Dispatch] Driver $id ALLOWED: stale but ONLY rider in zone');
+      }
+    }
+
+    print('[Dispatch] Eligible: ${eligibleIds.length}/${docs.length} '
+        '(excluded=${docs.length - eligibleIds.length})');
 
     if (eligibleIds.isEmpty) return drivers;
 
@@ -752,6 +854,7 @@ class DriverAssignmentService {
         _firestore.collection('restaurant_orders').doc(orderId);
     final driverRef =
         _firestore.collection('users').doc(driverId);
+    final timeoutSec = await _getRiderTimeoutSeconds();
 
     await _firestore.runTransaction((tx) async {
       final orderSnap = await tx.get(orderRef);
@@ -794,11 +897,13 @@ class DriverAssignmentService {
       }
 
       final deadline = Timestamp(
-        Timestamp.now().seconds + 60,
+        Timestamp.now().seconds + timeoutSec.toInt(),
         0,
       );
+      print('[TIMER] Order $orderId assigned, deadline: $deadline, '
+          'timeoutSec: $timeoutSec');
       tx.update(orderRef, {
-        'status': 'Driver Pending',
+        'status': 'Driver Assigned',
         'driverID': driverId,
         'driverDistance': distance,
         'assignedAt': FieldValue.serverTimestamp(),
@@ -808,18 +913,13 @@ class DriverAssignmentService {
         'dispatch.attemptCount': FieldValue.increment(1),
       });
 
-      final newCount = count + 1;
-      final atCapacity = newCount >= txCap;
       tx.update(driverRef, {
-        'isActive': false,
-        'inProgressOrderID': FieldValue.arrayUnion([orderId]),
-        'riderAvailability': atCapacity ? 'on_delivery' : 'available',
-        'riderDisplayStatus': '🟡 On Delivery',
+        'orderRequestData': FieldValue.arrayUnion([orderId]),
       });
     });
 
-    print('[Driver Assignment] Assigned order $orderId '
-        'to driver $driverId (transaction)');
+    print('[Driver Assignment] Assigned order $orderId to driver $driverId: '
+        'status=Driver Assigned, orderRequestData updated');
   }
 
   /// Kept for backward compatibility with assignOrderToDriver
@@ -949,5 +1049,80 @@ class DriverAssignmentService {
     if (value is int) return value.toDouble();
     if (value is String) return double.tryParse(value);
     return null;
+  }
+
+  /// Remove completed/cancelled/non-existent orders that
+  /// are stuck in a rider's inProgressOrderID array.
+  static Future<int> cleanupStuckOrders(
+    String riderId,
+  ) async {
+    final fs = FirebaseFirestore.instance;
+    print('[CLEANUP] Checking rider $riderId');
+
+    final riderDoc =
+        await fs.collection('users').doc(riderId).get();
+    final orders =
+        riderDoc.data()?['inProgressOrderID'] as List? ??
+            [];
+
+    if (orders.isEmpty) {
+      print('[CLEANUP] Array already empty');
+      return 0;
+    }
+
+    print('[CLEANUP] Found ${orders.length} orders: '
+        '$orders');
+
+    final List<String> toRemove = [];
+    for (final orderId in orders) {
+      final orderDoc = await fs
+          .collection('restaurant_orders')
+          .doc(orderId as String)
+          .get();
+
+      if (!orderDoc.exists) {
+        print('[CLEANUP] $orderId: does not exist '
+            '-> remove');
+        toRemove.add(orderId);
+        continue;
+      }
+
+      final status =
+          orderDoc.data()?['status'] as String? ?? '';
+      const doneStatuses = [
+        'Order Completed',
+        'Order Cancelled',
+        'Order Rejected',
+        'Driver Rejected',
+      ];
+      if (doneStatuses.contains(status)) {
+        print('[CLEANUP] $orderId: $status -> remove');
+        toRemove.add(orderId);
+      } else {
+        print('[CLEANUP] $orderId: $status -> keep');
+      }
+    }
+
+    if (toRemove.isEmpty) {
+      print('[CLEANUP] Nothing to remove');
+      return 0;
+    }
+
+    print('[CLEANUP] Removing ${toRemove.length} '
+        'stuck orders');
+    await fs.collection('users').doc(riderId).update({
+      'inProgressOrderID':
+          FieldValue.arrayRemove(toRemove),
+    });
+
+    final afterDoc =
+        await fs.collection('users').doc(riderId).get();
+    final remaining =
+        afterDoc.data()?['inProgressOrderID'] as List? ??
+            [];
+    print('[CLEANUP] Remaining: $remaining '
+        '(${remaining.length})');
+
+    return toRemove.length;
   }
 }

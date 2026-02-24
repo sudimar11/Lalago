@@ -8,10 +8,10 @@ import 'package:brgy/pages/driver_information_page.dart';
 import 'package:brgy/services/delivery_zone_service.dart';
 import 'package:brgy/services/zone_capacity_service.dart';
 import 'package:brgy/widgets/capacity_dashboard_widget.dart';
+import 'package:brgy/pages/order_history_page.dart';
 
 const _activeStatuses = [
   'Driver Assigned',
-  'Driver Pending',
   'Driver Accepted',
   'Order Shipped',
   'In Transit',
@@ -353,6 +353,69 @@ class _RiderOverviewTable extends StatelessWidget {
     }).toList();
   }
 
+  Future<void> _quickCleanupRider(
+    BuildContext context,
+    String riderId,
+    String riderName,
+  ) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Quick Cleanup'),
+        content: Text(
+          'Reset stuck orders for $riderName?\n\n'
+          'This will clear inProgressOrderID, '
+          'set availability to "available", '
+          'and set isActive to true.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Cleanup'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection(USERS)
+          .doc(riderId)
+          .update({
+        'inProgressOrderID': [],
+        'riderAvailability': 'available',
+        'isActive': true,
+        'lastCleanupAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$riderName cleaned up'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final filteredRiders = _filteredRiders();
@@ -527,18 +590,54 @@ class _RiderOverviewTable extends StatelessWidget {
                       ),
               ),
               DataCell(
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) =>
-                            DriverInformationPage(
-                          driverId: riderId,
-                        ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                DriverInformationPage(
+                              driverId: riderId,
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text('View'),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.receipt_long,
+                        size: 18,
                       ),
-                    );
-                  },
-                  child: const Text('View'),
+                      tooltip: 'Order History',
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                OrderHistoryPage(
+                              initialRiderId: riderId,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.cleaning_services,
+                        size: 18,
+                        color: Colors.orange,
+                      ),
+                      tooltip: 'Quick Cleanup',
+                      onPressed: () =>
+                          _quickCleanupRider(
+                        context,
+                        riderId,
+                        displayName,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],

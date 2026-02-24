@@ -16,6 +16,7 @@ class User with ChangeNotifier {
 
   Timestamp? lastOnlineTimestamp;
   Timestamp? locationUpdatedAt;
+  Timestamp? lastActivityTimestamp;
   Timestamp? createdAt;
   String userID;
   String profilePictureURL;
@@ -77,6 +78,7 @@ class User with ChangeNotifier {
       this.active = true,
       lastOnlineTimestamp,
       this.locationUpdatedAt,
+      this.lastActivityTimestamp,
       settings,
       this.fcmToken = '',
       location,
@@ -248,6 +250,7 @@ class User with ChangeNotifier {
       active: parsedJson['active'] ?? false,
       lastOnlineTimestamp: parsedJson['lastOnlineTimestamp'],
       locationUpdatedAt: parsedJson['locationUpdatedAt'],
+      lastActivityTimestamp: parsedJson['lastActivityTimestamp'],
       settings: settings,
       phoneNumber: parsedJson['phoneNumber'] ?? '',
       userID: parsedJson['id'] ?? parsedJson['userID'] ?? '',
@@ -331,6 +334,7 @@ class User with ChangeNotifier {
       'active': this.active,
       'lastOnlineTimestamp': this.lastOnlineTimestamp,
       'locationUpdatedAt': this.locationUpdatedAt,
+      'lastActivityTimestamp': this.lastActivityTimestamp,
       'profilePictureURL': this.profilePictureURL,
       'appIdentifier': this.appIdentifier,
       'fcmToken': this.fcmToken,

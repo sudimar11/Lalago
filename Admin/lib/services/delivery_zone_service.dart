@@ -89,8 +89,6 @@ class DeliveryZoneService {
       });
 
     for (final area in sorted) {
-      if (area.assignedDriverIds.isEmpty) continue;
-
       if (area.boundaryType == 'fixed') {
         if (locality != null && locality.trim().isNotEmpty) {
           final norm = locality.trim().toLowerCase();

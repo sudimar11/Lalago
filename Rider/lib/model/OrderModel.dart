@@ -42,11 +42,16 @@ class OrderModel {
   String? deliveryCharge;
   Map<String, dynamic>? specialDiscount;
   Timestamp? triggerDelevery;
+  Timestamp? acceptedAt;
+  Timestamp? readyAt;
+  Timestamp? shippedAt;
   String? estimatedTimeToPrepare;
   Timestamp? scheduleTime;
   List<dynamic>? rejectedByDrivers = [];
   bool? restaurantArrivalConfirmed;
   bool? customerArrivalDetected;
+
+  Timestamp? riderAcceptDeadline;
 
   // Driver earnings fields (calculated when order is completed)
   String? originalDeliveryFee;
@@ -78,6 +83,9 @@ class OrderModel {
       this.specialDiscount,
       this.vendorID = '',
       this.triggerDelevery,
+      this.acceptedAt,
+      this.readyAt,
+      this.shippedAt,
       this.estimatedTimeToPrepare,
       this.scheduleTime,
       this.rejectedByDrivers,
@@ -87,7 +95,8 @@ class OrderModel {
       this.originalDeliveryFee,
       this.driverEarnings,
       this.discountAmount,
-      this.adminPromoCost})
+      this.adminPromoCost,
+      this.riderAcceptDeadline})
       : this.address = address ?? AddressModel(),
         this.author = author ?? User(),
         this.createdAt = createdAt ?? Timestamp.now(),
@@ -174,6 +183,9 @@ class OrderModel {
               : parsedJson["deliveryCharge"].toString())
           : null,
       paymentMethod: parsedJson["payment_method"] ?? '',
+      acceptedAt: parsedJson["acceptedAt"],
+      readyAt: parsedJson["readyAt"],
+      shippedAt: parsedJson["shippedAt"],
       estimatedTimeToPrepare: parsedJson["estimatedTimeToPrepare"] != null
           ? (parsedJson["estimatedTimeToPrepare"] is String
               ? parsedJson["estimatedTimeToPrepare"]
@@ -211,6 +223,8 @@ class OrderModel {
                       parsedJson["adminPromoCost"].toString()) ??
                   0.0)
           : null,
+      riderAcceptDeadline: (parsedJson['dispatch'] as Map<String, dynamic>?)?[
+          'riderAcceptDeadline'] as Timestamp?,
     );
   }
 
@@ -239,6 +253,9 @@ class OrderModel {
       "deliveryCharge": this.deliveryCharge,
       "specialDiscount": this.specialDiscount,
       "triggerDelevery": this.triggerDelevery,
+      "acceptedAt": this.acceptedAt,
+      "readyAt": this.readyAt,
+      "shippedAt": this.shippedAt,
       "driverID": this.driverID,
       "driver": driver != null ? this.driver!.toJson() : null,
       "estimatedTimeToPrepare": this.estimatedTimeToPrepare,

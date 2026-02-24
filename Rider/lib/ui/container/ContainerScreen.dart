@@ -17,6 +17,8 @@ import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/notification_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
 import 'package:foodie_driver/services/order_service.dart';
+import 'package:foodie_driver/services/array_validation_service.dart';
+import 'package:foodie_driver/services/rider_time_config_service.dart';
 import 'package:foodie_driver/services/user_listener_service.dart';
 import 'package:foodie_driver/services/health_telemetry_service.dart';
 import 'package:foodie_driver/ui/profile/ProfileScreen.dart';
@@ -62,6 +64,8 @@ class _ContainerScreen extends State<ContainerScreen> {
   bool isPop = false;
 
   Timer? _closingTimeCheckTimer;
+  Timer? _inactivityWarningTimer;
+  DateTime? _lastInactivityWarningAt;
   StreamSubscription? _locationSubscription;
   bool? _lastCheckedInStatus;
   bool _isSuspended = false;
@@ -97,16 +101,24 @@ class _ContainerScreen extends State<ContainerScreen> {
         _detectMissingAbsences();
       });
       _checkAttendanceStatus();
+      _startInactivityWarningTimer();
       // Start shared user document listener, health telemetry, then
       // remittance enforcement
       final userId = MyAppState.currentUser?.userID;
       if (userId != null && userId.isNotEmpty) {
+        UserListenerService.instance.addCallback('container', (data) {
+          if (!mounted) return;
+          final updatedUser = User.fromJson(data);
+          MyAppState.currentUser = updatedUser;
+          setState(() {});
+        });
         UserListenerService.instance.start(userId);
         HealthTelemetryService.instance.start(userId);
         final remittanceService =
             Provider.of<RemittanceEnforcementService>(
                 context, listen: false);
         remittanceService.startListening(userId);
+        ArrayValidationService.validate(userId);
       }
     });
   }
@@ -120,6 +132,60 @@ class _ContainerScreen extends State<ContainerScreen> {
           '⏰ Closing time passed during periodic check, performing automatic checkout...');
       await MyAppState.performAutomaticCheckout();
     }
+  }
+
+  void _startInactivityWarningTimer() {
+    _inactivityWarningTimer?.cancel();
+    _inactivityWarningTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => _checkInactivityWarning(),
+    );
+  }
+
+  Future<void> _checkInactivityWarning() async {
+    if (!mounted) return;
+    final user = MyAppState.currentUser;
+    if (user == null) return;
+
+    final avail = user.riderAvailability;
+    if (avail != 'available' && avail != 'on_delivery') return;
+
+    final lastActTs = user.lastActivityTimestamp ?? user.locationUpdatedAt;
+    if (lastActTs == null) return;
+
+    final lastAct = lastActTs.toDate();
+    final now = DateTime.now();
+    final inactiveMinutes = now.difference(lastAct).inMinutes;
+
+    int timeoutMinutes = 15;
+    try {
+      timeoutMinutes =
+          await RiderTimeConfigService.instance.getInactivityTimeoutMinutes();
+    } catch (_) {}
+
+    final warningThreshold = (timeoutMinutes - 5).clamp(1, 59);
+    if (inactiveMinutes < warningThreshold) return;
+    if (inactiveMinutes >= timeoutMinutes) return;
+
+    final minsLeft = timeoutMinutes - inactiveMinutes;
+    final throttle = Duration(minutes: 2);
+    if (_lastInactivityWarningAt != null &&
+        now.difference(_lastInactivityWarningAt!) < throttle) {
+      return;
+    }
+    _lastInactivityWarningAt = now;
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'You will be logged out due to inactivity in '
+          '${minsLeft > 0 ? minsLeft : 5} minutes',
+        ),
+        backgroundColor: Colors.orange,
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   void _updateClosingTimeTimer() {
@@ -196,6 +262,7 @@ class _ContainerScreen extends State<ContainerScreen> {
   @override
   void dispose() {
     _closingTimeCheckTimer?.cancel();
+    _inactivityWarningTimer?.cancel();
     _locationSubscription?.cancel();
     OrderLocationService.stopMonitoring();
     // Stop remittance enforcement listener
@@ -206,6 +273,7 @@ class _ContainerScreen extends State<ContainerScreen> {
       remittanceService.stopListening();
     } catch (_) {}
     HealthTelemetryService.instance.stop();
+    UserListenerService.instance.removeCallback('container');
     UserListenerService.instance.stop();
     super.dispose();
   }
@@ -219,6 +287,12 @@ class _ContainerScreen extends State<ContainerScreen> {
   setCurrency() async {
     _currentWidget = OrdersBlankScreen();
 
+    // Show content within 2s so slide button appears promptly for first-time riders
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted && isLoading) {
+        setState(() => isLoading = false);
+      }
+    });
     // Ensure screen shows even if network/location is very slow (max 12s)
     Future.delayed(const Duration(seconds: 12), () {
       if (mounted && isLoading) {
@@ -617,8 +691,16 @@ class _ContainerScreen extends State<ContainerScreen> {
         // NEW: Adjust thresholds based on fresh data (may differ from cached)
         _adjustLocationThresholds(hasActiveOrder);
         
-        if (!hasActiveOrder && !value.isActive) {
-          // Skip location processing when no active delivery
+        final isCheckedInAndOnline = value.isOnline == true &&
+            value.checkedInToday == true &&
+            value.checkedOutToday != true;
+        print('LOCATION CHECK - hasActiveOrder: $hasActiveOrder, '
+            'isActive: ${value.isActive}, isOnline: ${value.isOnline}, '
+            'checkedInToday: ${value.checkedInToday}, '
+            'checkedOutToday: ${value.checkedOutToday}');
+        if (!hasActiveOrder &&
+            !value.isActive &&
+            !isCheckedInAndOnline) {
           _skippedLocationUpdateCount++;
           OrderLocationService.stopMonitoring();
           return;
@@ -654,6 +736,12 @@ class _ContainerScreen extends State<ContainerScreen> {
         await FireStoreUtils.updateCurrentUser(value);
         _firestoreWriteCount++;
         _lastStoredLocation = newLocation;
+
+        try {
+          await FireStoreUtils.touchLastActivity(userId);
+        } catch (e) {
+          log('touchLastActivity failed (non-fatal): $e');
+        }
 
         log('📍 Location updated for user: $userId');
 
@@ -765,6 +853,9 @@ class _ContainerScreen extends State<ContainerScreen> {
 
     await FireStoreUtils.updateCurrentUser(user);
     await OrderService.updateRiderStatus();
+    if (user.checkedInToday == true && user.isOnline == true) {
+      await FireStoreUtils.touchLastActivity(user.userID);
+    }
     if (mounted) setState(() {});
   }
 
@@ -958,10 +1049,10 @@ class _RemittanceBlockingOverlay extends StatelessWidget {
                   SelectableText.rich(
                     TextSpan(
                       text:
-                          'You have an unremitted credit wallet balance from '
-                          'a previous day. Please remit your credit wallet '
-                          'before accepting orders. Go to Wallet to submit a '
-                          'transmit request.',
+                          'You have an unremitted credit wallet balance. '
+                          'Please remit your earnings from yesterday '
+                          'before accepting orders. Go to Wallet to '
+                          'submit a transmit request.',
                       style: TextStyle(
                         color: Colors.grey.shade700,
                         fontSize: 14,

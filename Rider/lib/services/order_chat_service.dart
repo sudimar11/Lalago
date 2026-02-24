@@ -17,7 +17,7 @@ class OrderChatService {
     switch (status) {
       case 'Driver Assigned':
         return 'Driver has been assigned to your order';
-      case 'Driver Pending':
+      case 'Driver Accepted':
         return 'Driver is waiting for restaurant to prepare your order';
       case 'Order Shipped':
         return 'Your order is ready for pickup';
@@ -323,7 +323,7 @@ class OrderChatService {
         });
       });
       _delayTimers[orderId] = timer;
-    } else if (status == 'Driver Pending') {
+    } else if (status == 'Driver Accepted') {
       // Check if order is pending longer than estimated time + 10 minutes
       int estimatedMinutes = 0;
       if (estimatedTime != null && estimatedTime.isNotEmpty) {
@@ -345,7 +345,7 @@ class OrderChatService {
             if (!doc.exists) return;
             final currentData = doc.data();
             final currentStatus = currentData?['status'] as String? ?? '';
-            if (currentStatus == 'Driver Pending') {
+            if (currentStatus == 'Driver Accepted') {
               sendDelayAlert(
                 orderId: orderId,
                 customerId: customerId,

@@ -10,8 +10,9 @@ import '../../services/connectivity_service.dart';
 import '../../services/offline_transaction_service.dart';
 import '../../services/background_sync_service.dart';
 import '../../widgets/pending_transactions_indicator.dart';
-import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
+import 'package:foodie_driver/ui/container/ContainerScreen.dart';
 import '../../constants.dart';
+import '../../main.dart';
 import '../../services/order_service.dart';
 import '../../services/performance_tier_helper.dart';
 
@@ -657,7 +658,7 @@ class _ConfirmDeliverySummaryPageState
       BackgroundSyncService.triggerImmediateSync();
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const OrdersBlankScreen()),
+        MaterialPageRoute(builder: (_) => ContainerScreen()),
         (route) => false, // Remove all previous routes
       );
       return;
@@ -792,12 +793,50 @@ class _ConfirmDeliverySummaryPageState
               'discountAmount': totalDiscountAmount,
               'adminPromoCost': totalDiscountAmount,
             });
+
+            // Atomically remove order from rider's array
+            // within the same transaction
+            tx.update(userRef, {
+              'inProgressOrderID':
+                  FieldValue.arrayRemove([widget.orderId]),
+            });
           });
         },
       );
 
       // 4. REMOVE FROM QUEUE if successful
       await offlineService.removePending(widget.orderId);
+
+      // 4b. Verify array removal and sync in-memory state
+      // (primary removal already happened inside the transaction)
+      final verifyDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      final updatedOrders =
+          verifyDoc.data()?['inProgressOrderID'] as List? ??
+              [];
+
+      if (updatedOrders.contains(widget.orderId)) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .update({
+          'inProgressOrderID':
+              FieldValue.arrayRemove([widget.orderId]),
+        });
+      }
+
+      final user = MyAppState.currentUser;
+      if (user != null) {
+        user.inProgressOrderID = List<dynamic>.from(
+          updatedOrders
+              .where((id) => id != widget.orderId)
+              .toList(),
+        );
+      }
+
+      await OrderService.updateRiderStatus();
 
       // 5. Send FCM notification to customer after successful order completion
       try {
@@ -824,7 +863,7 @@ class _ConfirmDeliverySummaryPageState
       );
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const OrdersBlankScreen()),
+        MaterialPageRoute(builder: (_) => ContainerScreen()),
         (route) => false, // Remove all previous routes
       );
     } catch (e) {

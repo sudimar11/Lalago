@@ -474,8 +474,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
         ],
       );
     }
-    // Driver Pending => "Order Prepared" button
-    else if (orderModel.status == "Driver Pending") {
+    // Driver Accepted => "Order Prepared" button (rider accepted, restaurant preparing)
+    else if (orderModel.status == "Driver Accepted") {
       return Row(
         children: [
           Expanded(

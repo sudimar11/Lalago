@@ -26,6 +26,10 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/ordertracknew.dart';
+import 'package:foodie_customer/ui/orderDetailsScreen/ReportIssueScreen.dart';
+import 'package:foodie_customer/utils/order_status_messages.dart';
+import 'package:foodie_customer/widget/order_eta_badge.dart';
+import 'package:foodie_customer/widget/order_status_progress_bar.dart';
 import 'package:foodie_customer/ui/ordersScreen/OrdersScreen.dart';
 import 'package:foodie_customer/ui/reviewScreen.dart/reviewScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
@@ -36,10 +40,29 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/localDatabase.dart';
 
+class OrderStatusStage {
+  final String status;
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  const OrderStatusStage({
+    required this.status,
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+}
+
 class OrderDetailsScreen extends StatefulWidget {
   final OrderModel orderModel;
+  final bool fromNotification;
 
-  OrderDetailsScreen({Key? key, required this.orderModel}) : super(key: key);
+  OrderDetailsScreen({
+    Key? key,
+    required this.orderModel,
+    this.fromNotification = false,
+  }) : super(key: key);
 
   @override
   _OrderDetailsScreenState createState() => _OrderDetailsScreenState();
@@ -77,8 +100,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   late String storeName;
 
   late String phoneNumberStore;
-
-  String currentEvent = '';
 
   double total = 0.0;
 
@@ -236,6 +257,253 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
     }
   }
 
+  static const List<OrderStatusStage> _orderStatusStages = [
+    OrderStatusStage(
+      status: 'Order Placed',
+      label: 'Order Placed',
+      icon: Icons.receipt_long_rounded,
+      color: Colors.blue,
+    ),
+    OrderStatusStage(
+      status: 'Order Accepted',
+      label: 'Order Accepted',
+      icon: Icons.check_circle_outline_rounded,
+      color: Colors.green,
+    ),
+    OrderStatusStage(
+      status: 'Driver Assigned',
+      label: 'Driver Assigned',
+      icon: Icons.person_pin_circle_rounded,
+      color: Colors.orange,
+    ),
+    OrderStatusStage(
+      status: 'Driver Accepted',
+      label: 'Driver Accepted',
+      icon: Icons.delivery_dining,
+      color: Colors.teal,
+    ),
+    OrderStatusStage(
+      status: 'Order Shipped',
+      label: 'Order Shipped',
+      icon: Icons.takeout_dining,
+      color: Colors.amber,
+    ),
+    OrderStatusStage(
+      status: 'In Transit',
+      label: 'In Transit',
+      icon: Icons.local_shipping_rounded,
+      color: Colors.deepOrange,
+    ),
+    OrderStatusStage(
+      status: 'Order Completed',
+      label: 'Order Completed',
+      icon: Icons.celebration,
+      color: Colors.green,
+    ),
+  ];
+
+  int _getCurrentStageIndex(OrderModel order) {
+    final s = order.status.toLowerCase();
+    if (s.contains('completed') || s.contains('delivered')) return 6;
+    if (s == 'in transit') return 5;
+    if (s.contains('shipped')) return 4;
+    if (s.contains('driver') && s.contains('accepted')) return 3;
+    if (s.contains('driver') && s.contains('assigned')) return 2;
+    if (s.contains('accepted') && !s.contains('driver')) return 1;
+    if (s.contains('placed') || s.contains('order placed')) return 0;
+    if (s.contains('rejected') || s.contains('cancelled')) {
+      if (s.contains('driver')) return 2;
+      return 1;
+    }
+    return 0;
+  }
+
+  Widget _buildStatusTimeline(OrderModel order) {
+    final currentIndex = _getCurrentStageIndex(order);
+    final displayStages = _orderStatusStages
+        .sublist(0, (currentIndex + 1).clamp(1, _orderStatusStages.length));
+    const green = Colors.green;
+    const gray = Colors.grey;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      elevation: 4,
+      shadowColor: Colors.black26,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      color: isDarkMode(context) ? const Color(DARK_BG_COLOR) : Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            for (int i = 0; i < displayStages.length; i++) ...[
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: i < currentIndex
+                            ? green.withOpacity(0.2)
+                            : gray.withOpacity(0.2),
+                        border: Border.all(
+                          color: i < currentIndex ? green : gray,
+                          width: 2,
+                        ),
+                      ),
+                      child: Icon(
+                        displayStages[i].icon,
+                        size: 22,
+                        color: i < currentIndex ? green : gray,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      displayStages[i].label,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        fontFamily: 'Poppinsm',
+                        color: isDarkMode(context)
+                            ? Colors.grey.shade300
+                            : Colors.grey.shade800,
+                      ),
+                    ),
+                    if (i == currentIndex)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          'Current',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'Poppinsm',
+                            color: Color(COLOR_PRIMARY),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (i < displayStages.length - 1)
+                Container(
+                  width: 24,
+                  height: 2,
+                  margin: const EdgeInsets.only(bottom: 32),
+                  color: i + 1 < currentIndex ? green : gray,
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusMessage(
+    BuildContext context,
+    Map<String, dynamic> orderData,
+    OrderModel orderModel,
+  ) {
+    final status = orderData['status'] as String? ?? '';
+    final dispatch = orderData['dispatch'] as Map<String, dynamic>?;
+    final rejectionCount = (dispatch?['rejectionCount'] as num?)?.toInt() ?? 0;
+
+    String message = '';
+    Color color = Colors.orange;
+    IconData icon = Icons.info;
+
+    switch (status) {
+      case ORDER_STATUS_PLACED:
+        message = 'Order placed successfully';
+        color = Colors.green;
+        icon = Icons.check_circle;
+        break;
+      case ORDER_STATUS_ACCEPTED:
+        if (rejectionCount == 0) {
+          message = 'Looking for a nearby rider...';
+        } else if (rejectionCount == 1) {
+          message =
+              'First rider was unavailable. Finding another rider...';
+        } else {
+          message =
+              'Still searching for an available rider. '
+              'Thank you for your patience.';
+        }
+        break;
+      case 'Driver Assigned':
+        message =
+            'Rider assigned! They are on the way to the restaurant.';
+        color = Colors.green;
+        icon = Icons.delivery_dining;
+        break;
+      case ORDER_STATUS_DRIVER_ACCEPTED:
+        message = 'Restaurant is preparing your order';
+        color = Colors.blue;
+        icon = Icons.restaurant;
+        break;
+      case ORDER_STATUS_SHIPPED:
+        message = 'Food is ready! Rider is picking up';
+        color = Colors.orange;
+        icon = Icons.takeout_dining;
+        break;
+      case ORDER_STATUS_IN_TRANSIT:
+        message = 'Your order is on the way!';
+        color = Colors.orange;
+        icon = Icons.delivery_dining;
+        break;
+      case ORDER_STATUS_COMPLETED:
+        message = 'Order delivered! Enjoy your meal!';
+        color = Colors.green;
+        icon = Icons.celebration;
+        break;
+      case ORDER_STATUS_DRIVER_REJECTED:
+        message = 'Looking for another rider...';
+        break;
+      case ORDER_STATUS_REJECTED:
+      case ORDER_STATUS_CANCELLED:
+        message = 'Your order was not successful';
+        color = Colors.red;
+        icon = Icons.cancel;
+        break;
+      default:
+        message = 'Processing your order';
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: color,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                fontFamily: 'Poppinsm',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<OrderModel?> getOrderById(String orderId) async {
     try {
       DocumentSnapshot<Map<String, dynamic>> doc = await FirebaseFirestore
@@ -366,54 +634,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
                   debugPrint('_PlaceOrderScreenState.initState $orderStatus');
 
-                  switch (orderStatus) {
-                    case ORDER_STATUS_PLACED:
-                      currentEvent = 'We sent your order to' +
-                          " (${orderModel.vendor.title})";
-
-                      break;
-
-                    case ORDER_STATUS_ACCEPTED:
-                      currentEvent = 'Preparing your order...';
-
-                      break;
-
-                    case ORDER_STATUS_REJECTED:
-                      currentEvent = 'Your order is not successfull';
-
-                      break;
-
-                    case ORDER_STATUS_CANCELLED:
-                      currentEvent = 'Your order is not successfull';
-
-                      break;
-
-                    case ORDER_STATUS_DRIVER_PENDING:
-                      currentEvent = 'Driver picking up your order...';
-
-                      break;
-
-                    case ORDER_STATUS_DRIVER_REJECTED:
-                      currentEvent = 'Looking for a driver...';
-
-                      break;
-
-                    case ORDER_STATUS_SHIPPED:
-                      currentEvent =
-                          '${orderModel.driver?.firstName ?? 'Our Driver'} has picked up your order.';
-
-                      break;
-
-                    case ORDER_STATUS_IN_TRANSIT:
-                      currentEvent = 'Your order is on the way';
-
-                      break;
-
-                    case ORDER_STATUS_COMPLETED:
-                      currentEvent = 'Your order is Deliver.';
-
-                      break;
-                  }
+                  final orderData = snapshot.data!.data()!;
 
                   return SingleChildScrollView(
                     child: Column(
@@ -468,37 +689,33 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                     ],
                                   ),
                                 ),
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                      right: 10, left: 10, bottom: 12),
-                                  child: RichText(
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    text: TextSpan(children: [
-                                      TextSpan(
-                                        text: currentEvent,
-                                        style: TextStyle(
-                                          letterSpacing: 0.5,
-
-                                          color: isDarkMode(context)
-                                              ? Colors.grey.shade200
-                                              : const Color(0XFF2A2A2A),
-
-                                          fontFamily: "Poppinsm",
-
-                                          // fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ]),
-                                  ),
+                                _buildStatusMessage(
+                                  context,
+                                  orderData,
+                                  orderModel,
                                 ),
                               ],
                             ),
                           ),
                         ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8.0, vertical: 8),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: OrderStatusProgressBar(
+                                    status: orderModel.status),
+                              ),
+                              OrderETABadge(order: orderModel),
+                            ],
+                          ),
+                        ),
+                        _buildStatusTimeline(orderModel),
                         orderModel.status == ORDER_STATUS_ACCEPTED ||
                                 orderModel.status ==
-                                    ORDER_STATUS_DRIVER_PENDING ||
+                                    ORDER_STATUS_DRIVER_ACCEPTED ||
                                 orderModel.status ==
                                     ORDER_STATUS_DRIVER_REJECTED
                             ? Padding(
@@ -602,7 +819,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                                     : Colors.grey.shade200)),
                                       ),
                                       child: Text(
-                                        'Go',
+                                        getButtonText(widget.orderModel.status),
                                         style: TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.bold,
@@ -634,6 +851,34 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                         buildDeliveryDetailsCard(),
                         const SizedBox(height: 16),
                         buildOrderSummaryCard(orderModel),
+                        const SizedBox(height: 16),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      ReportIssueScreen(order: orderModel),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.report_problem_outlined),
+                            label: const Text('Report an Issue'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.orange,
+                              side: const BorderSide(color: Colors.orange),
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
                       ],
                     ),
                   );

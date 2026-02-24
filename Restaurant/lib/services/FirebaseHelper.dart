@@ -162,6 +162,49 @@ class FireStoreUtils {
     });
   }
 
+  static const _uuid = Uuid();
+
+  /// Add system message to chat_driver for order status updates (e.g. Order Shipped).
+  static Future<void> addDriverChatSystemMessage({
+    required String orderId,
+    required String status,
+    required String customerId,
+    String? customerFcmToken,
+    String? restaurantId,
+  }) async {
+    try {
+      final messageId = _uuid.v4();
+      const statusMessages = {
+        'Order Shipped': 'Your order is ready for pickup',
+        'In Transit': 'Driver is on the way with your order',
+        'Order Completed': 'Your order has been delivered. Thank you!',
+      };
+      final messageText =
+          statusMessages[status] ?? 'Order status updated: $status';
+
+      await firestore
+          .collection("chat_driver")
+          .doc(orderId)
+          .collection("thread")
+          .doc(messageId)
+          .set({
+        'id': messageId,
+        'senderId': 'system',
+        'receiverId': customerId,
+        'orderId': orderId,
+        'message': messageText,
+        'messageType': 'system',
+        'senderType': 'system',
+        'orderStatus': status,
+        'createdAt': FieldValue.serverTimestamp(),
+        'isRead': false,
+        'readBy': <String, dynamic>{},
+      });
+    } catch (e) {
+      debugPrint('Error adding driver chat system message: $e');
+    }
+  }
+
   Future<RatingModel?> getOrderReviewsbyID(
       String ordertId, String productId) async {
     RatingModel? ratingproduct;
@@ -734,9 +777,9 @@ class FireStoreUtils {
           'Order Placed',
           'Order Accepted',
           'Driver Assigned',
+          'Driver Accepted',
           'Driver Rejected',
-          'Driver Pending'
-        ]) // ← either status
+        ])
         // ← only Order Placed
         .orderBy('createdAt', descending: true)
         .snapshots()
@@ -766,8 +809,8 @@ class FireStoreUtils {
           'Order Placed',
           'Driver Assigned',
           'Order Accepted',
-          'Driver Pending',
-        ]) // ← completed orders (exclude not completed statuses)
+          'Driver Accepted',
+        ])
         .orderBy('createdAt', descending: true)
         .snapshots()
         .listen((snapshot) {
@@ -806,7 +849,7 @@ class FireStoreUtils {
     print(
         '=== DEBUG: Looking for ALL completed orders for vendorID: $vendorID ===');
     print(
-        '=== DEBUG: Excluding statuses: Order Placed, Driver Assigned, Order Accepted, Driver Pending ===');
+        '=== DEBUG: Excluding statuses: Order Placed, Driver Assigned, Order Accepted, Driver Accepted ===');
 
     // Show all completed orders regardless of date
     firestore
@@ -816,7 +859,7 @@ class FireStoreUtils {
           'Order Placed',
           'Driver Assigned',
           'Order Accepted',
-          'Driver Pending',
+          'Driver Accepted',
         ])
         .orderBy('createdAt', descending: true)
         .snapshots()
@@ -842,7 +885,7 @@ class FireStoreUtils {
                 'Order Placed',
                 'Driver Assigned',
                 'Order Accepted',
-                'Driver Pending'
+                'Driver Accepted',
               ];
               if (status != null && excludedStatuses.contains(status)) {
                 print('  ❌ EXCLUDED: Status "$status" is in exclusion list');

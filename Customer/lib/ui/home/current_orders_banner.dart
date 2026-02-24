@@ -12,11 +12,19 @@ import 'package:foodie_customer/ui/orderDetailsScreen/OrderDetailsScreen.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/ordertracknew.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
+import 'package:foodie_customer/utils/order_status_messages.dart';
+import 'package:foodie_customer/widget/order_eta_badge.dart';
+import 'package:foodie_customer/widget/order_status_progress_bar.dart';
 import 'package:shimmer/shimmer.dart';
 
-class CurrentOrdersBanner extends StatelessWidget {
+class CurrentOrdersBanner extends StatefulWidget {
   const CurrentOrdersBanner({Key? key}) : super(key: key);
 
+  @override
+  State<CurrentOrdersBanner> createState() => _CurrentOrdersBannerState();
+}
+
+class _CurrentOrdersBannerState extends State<CurrentOrdersBanner> {
   bool _isActiveStatus(String status) {
     final s = status.toLowerCase();
     return !(s == 'order completed' ||
@@ -36,7 +44,21 @@ class CurrentOrdersBanner extends StatelessWidget {
         s == 'cancelled';
   }
 
-  // Helper method to check if order date matches today
+  /// Active = status from 'Order Placed' through 'In Transit' (inclusive).
+  bool _isActiveOrder(String status) {
+    final s = status.toLowerCase();
+    return s == ORDER_STATUS_PLACED.toLowerCase() ||
+        s == 'placed' ||
+        s == ORDER_STATUS_ACCEPTED.toLowerCase() ||
+        s == 'accepted' ||
+        (s.contains('driver') && s.contains('assigned')) ||
+        s == ORDER_STATUS_DRIVER_ACCEPTED.toLowerCase() ||
+        s == ORDER_STATUS_SHIPPED.toLowerCase() ||
+        s == 'shipped' ||
+        s == ORDER_STATUS_IN_TRANSIT.toLowerCase() ||
+        s == ORDER_STATUS_DRIVER_REJECTED.toLowerCase();
+  }
+
   bool _isOrderFromToday(OrderModel order) {
     final DateTime orderDate = order.createdAt.toDate();
     final DateTime today = DateTime.now();
@@ -45,6 +67,8 @@ class CurrentOrdersBanner extends StatelessWidget {
         orderDate.month == today.month &&
         orderDate.day == today.day;
   }
+
+  void _onCloseOrder() => setState(() {});
 
   @override
   Widget build(BuildContext context) {
@@ -57,72 +81,192 @@ class CurrentOrdersBanner extends StatelessWidget {
       stream: FireStoreUtils()
           .getOrders(MyAppState.currentUser!.userID)
           .map((orders) {
-        // Filter and limit orders to reduce processing
-        final activeOrders =
-            orders.where((o) => _isActiveStatus(o.status)).toList();
-        return activeOrders
-            .take(5)
-            .toList(); // Limit to 5 most recent active orders
+        final activeToday = orders
+            .where((o) =>
+                _isActiveOrder(o.status) && _isOrderFromToday(o))
+            .toList();
+        return activeToday.take(5).toList();
       }),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const SizedBox.shrink();
-        }
+        final bool isEmpty;
+        final Widget content;
+        final String bannerKey;
 
-        if (!snapshot.hasData || (snapshot.data?.isEmpty ?? true)) {
-          return const SizedBox.shrink();
-        }
+        if (snapshot.connectionState == ConnectionState.waiting ||
+            !snapshot.hasData ||
+            (snapshot.data?.isEmpty ?? true)) {
+          isEmpty = true;
+          content = const SizedBox.shrink();
+          bannerKey = 'empty';
+        } else {
+          final List<OrderModel> orders = snapshot.data!;
+          final String userId = MyAppState.currentUser!.userID;
+          final List<OrderModel> visibleOrders = <OrderModel>[];
 
-        final List<OrderModel> orders = snapshot.data!;
-        final List<OrderModel> activeOrders =
-            orders.where((o) => _isActiveStatus(o.status)).toList();
-        final bool hasMultipleActiveOrders = activeOrders.length > 1;
+          for (final order in orders) {
+            if (UserPreference.isOrderBannerPermanentlyHidden(
+                userId, order.id)) {
+              continue;
+            }
+            if (_isFinalStatus(order.status)) {
+              UserPreference.markOrderBannerAsPermanentlyHidden(
+                  userId, order.id);
+              continue;
+            }
+            if (UserPreference.isOrderBannerClosed(
+                userId, order.id, order.status)) {
+              continue;
+            }
+            final String statusLower = order.status.toLowerCase();
+            final bool isRejected =
+                statusLower == 'order rejected' || statusLower == 'rejected';
+            if (isRejected &&
+                UserPreference.isRejectedBannerViewed(userId, order.id)) {
+              continue;
+            }
+            visibleOrders.add(order);
+          }
 
-        final OrderModel activeOrder = orders.firstWhere(
-          (o) => _isActiveStatus(o.status),
-          orElse: () => OrderModel(status: '', id: ''),
-        );
-
-        if (activeOrder.id.isEmpty || !_isActiveStatus(activeOrder.status)) {
-          return const SizedBox.shrink();
-        }
-
-        // Check if order date matches today's date
-        if (!_isOrderFromToday(activeOrder)) {
-          return const SizedBox.shrink();
-        }
-
-        // Check if order is already marked as permanently hidden (first priority - overrides everything)
-        final bool isPermanentlyHidden =
-            UserPreference.isOrderBannerPermanentlyHidden(
-                MyAppState.currentUser!.userID, activeOrder.id);
-        if (isPermanentlyHidden) {
-          return const SizedBox.shrink();
-        }
-
-        // Check if order has final status and mark as permanently hidden
-        if (_isFinalStatus(activeOrder.status)) {
-          UserPreference.markOrderBannerAsPermanentlyHidden(
-              MyAppState.currentUser!.userID, activeOrder.id);
-          return const SizedBox.shrink();
-        }
-
-        // Check if rejected banner has already been viewed
-        final String statusLower = activeOrder.status.toLowerCase();
-        final bool isRejected =
-            statusLower == 'order rejected' || statusLower == 'rejected';
-        if (isRejected) {
-          final bool alreadyViewed = UserPreference.isRejectedBannerViewed(
-              MyAppState.currentUser!.userID, activeOrder.id);
-          if (alreadyViewed) {
-            return const SizedBox.shrink();
+          if (visibleOrders.isEmpty) {
+            isEmpty = true;
+            content = const SizedBox.shrink();
+            bannerKey = 'empty';
+          } else {
+            isEmpty = false;
+            content = visibleOrders.length == 1
+                ? _buildSingleOrderBanner(
+                    visibleOrders.first, _onCloseOrder)
+                : _buildMultipleOrdersBanner(
+                    visibleOrders, _onCloseOrder);
+            if (visibleOrders.length == 1) {
+              bannerKey = 'single_${visibleOrders.first.id}';
+            } else {
+              final ids = visibleOrders.map((o) => o.id).toList()..sort();
+              bannerKey = 'multiple_${visibleOrders.length}_${ids.join(",")}';
+            }
           }
         }
 
-        return _BannerContent(
-            order: activeOrder,
-            hasMultipleActiveOrders: hasMultipleActiveOrders);
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 300),
+          switchInCurve: Curves.easeOut,
+          switchOutCurve: Curves.easeIn,
+          transitionBuilder: (Widget child, Animation<double> animation) {
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, -1),
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            );
+          },
+          child: KeyedSubtree(
+            key: ValueKey<String>(bannerKey),
+            child: content,
+          ),
+        );
       },
+    );
+  }
+
+  Widget _buildSingleOrderBanner(
+      OrderModel order, VoidCallback onCloseOrder) {
+    return _BannerContent(
+      order: order,
+      hasMultipleActiveOrders: false,
+      onCloseOrder: onCloseOrder,
+    );
+  }
+
+  Widget _buildMultipleOrdersBanner(
+      List<OrderModel> orders, VoidCallback onCloseOrder) {
+    return _MultipleOrdersBannerContent(
+      orders: orders,
+      onCloseOrder: onCloseOrder,
+    );
+  }
+}
+
+class _MultipleOrdersBannerContent extends StatefulWidget {
+  final List<OrderModel> orders;
+  final VoidCallback? onCloseOrder;
+
+  const _MultipleOrdersBannerContent({
+    Key? key,
+    required this.orders,
+    this.onCloseOrder,
+  }) : super(key: key);
+
+  @override
+  State<_MultipleOrdersBannerContent> createState() =>
+      _MultipleOrdersBannerContentState();
+}
+
+class _MultipleOrdersBannerContentState
+    extends State<_MultipleOrdersBannerContent> {
+  late PageController _pageController;
+  int _currentPage = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int count = widget.orders.length;
+    return SafeArea(
+      top: false,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Text(
+              'Order ${_currentPage + 1} of $count',
+              style: TextStyle(
+                fontFamily: 'Poppinsm',
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isDarkMode(context)
+                    ? Colors.white70
+                    : const Color(0xFF666666),
+              ),
+            ),
+          ),
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: 300,
+              maxHeight: MediaQuery.of(context).size.height * 0.6,
+            ),
+            child: PageView.builder(
+              controller: _pageController,
+              onPageChanged: (int index) {
+                setState(() => _currentPage = index);
+              },
+              itemCount: count,
+              itemBuilder: (BuildContext context, int index) {
+                return _BannerContent(
+                  order: widget.orders[index],
+                  hasMultipleActiveOrders: true,
+                  onCloseOrder: widget.onCloseOrder,
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -130,10 +274,13 @@ class CurrentOrdersBanner extends StatelessWidget {
 class _BannerContent extends StatefulWidget {
   final OrderModel order;
   final bool hasMultipleActiveOrders;
+  final VoidCallback? onCloseOrder;
+
   const _BannerContent({
     Key? key,
     required this.order,
     this.hasMultipleActiveOrders = false,
+    this.onCloseOrder,
   }) : super(key: key);
 
   @override
@@ -454,12 +601,23 @@ class _BannerContentState extends State<_BannerContent> {
     });
   }
 
-  void _closeBanner() {
+  void _closeOrder() {
     _markBannerAsViewed();
     _logBannerDismissed();
     setState(() {
       _isBannerClosed = true;
     });
+
+    final String? userId = MyAppState.currentUser?.userID;
+    if (userId == null ||
+        userId.isEmpty ||
+        widget.order.id.isEmpty) return;
+
+    UserPreference.markOrderBannerClosed(
+      userId,
+      widget.order.id,
+      widget.order.status,
+    ).then((_) => widget.onCloseOrder?.call());
   }
 
   void _markBannerAsViewed() {
@@ -1366,19 +1524,23 @@ class _BannerContentState extends State<_BannerContent> {
                                 ),
                                 const SizedBox(height: 2),
                               ],
-                              if (!isRejected && !isDriverPending)
-                                Text(
-                                  widget.order.status,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontFamily: 'Poppinsm',
-                                    fontSize: 12,
-                                    color: isDarkMode(context)
-                                        ? Colors.white70
-                                        : const Color(0xFF666666),
-                                  ),
+                              if (!isRejected) ...[
+                                Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.center,
+                                  children: [
+                                    Expanded(
+                                      child: OrderStatusProgressBar(
+                                          status: widget.order.status),
+                                    ),
+                                    if (isInTransit) ...[
+                                      const SizedBox(width: 8),
+                                      OrderETABadge(order: widget.order),
+                                    ],
+                                  ],
                                 ),
+                                const SizedBox(height: 4),
+                              ],
                               if (!isRejected)
                                 Padding(
                                   padding: const EdgeInsets.only(top: 2),
@@ -1425,7 +1587,7 @@ class _BannerContentState extends State<_BannerContent> {
                                             : Colors.grey.shade200)),
                               ),
                               child: Text(
-                                'Go',
+                                getButtonText(widget.order.status),
                                 style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold,
@@ -1525,7 +1687,7 @@ class _BannerContentState extends State<_BannerContent> {
                   top: 8,
                   right: 8,
                   child: GestureDetector(
-                    onTap: _closeBanner,
+                    onTap: _closeOrder,
                     child: Container(
                       width: 32,
                       height: 32,

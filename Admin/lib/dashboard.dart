@@ -35,6 +35,7 @@ import 'package:brgy/payout.dart';
 import 'package:brgy/confirmed_payouts.dart';
 import 'package:brgy/payout_remittance_page.dart';
 import 'package:brgy/driver_suspension.dart';
+import 'package:brgy/driverlist.dart';
 import 'package:brgy/attendance_page.dart';
 import 'package:brgy/pages/ads_management_page.dart';
 import 'package:brgy/pages/happy_hour_settings_page.dart';
@@ -47,6 +48,7 @@ import 'package:brgy/pages/delivery_zone_settings_page.dart';
 import 'package:brgy/pages/rider_overview_page.dart';
 import 'package:brgy/pages/dispatch_analytics_page.dart';
 import 'package:brgy/pages/dispatch_config_page.dart';
+import 'package:brgy/pages/rider_time_settings_page.dart';
 import 'package:brgy/driver_wallet_page.dart';
 import 'package:brgy/driver_collection_page.dart';
 import 'package:brgy/pages/customer_suggestions_page.dart';
@@ -548,6 +550,11 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             icon: Icons.event_note,
             label: 'Attendance',
             onTap: () => push(const AttendancePage()),
+          ),
+          _DashboardNavItem(
+            icon: Icons.list_alt,
+            label: 'Driver list (manage multiple orders)',
+            onTap: () => push(DriverListPage()),
           ),
         ];
 
@@ -1063,7 +1070,7 @@ class _AtAGlanceSection extends StatelessWidget {
                 int completedToday = 0;
                 int pendingToday = 0;
                 int unassignedNearReady = 0;
-                int stuckDriverPending = 0;
+                int stuckDriverAssigned = 0;
                 int waitingAccept = 0;
                 final deliveredRiders = <String>{};
                 final ordersByHour = <int, int>{};
@@ -1099,13 +1106,14 @@ class _AtAGlanceSection extends StatelessWidget {
                     case 'confirm':
                     case 'order accepted':
                       return 'Order Accepted';
-                    case 'driver pending':
-                      return 'Driver Pending';
                     case 'driver assigned':
                       return 'Driver Assigned';
+                    case 'driver accepted':
+                      return 'Driver Accepted';
+                    case 'order shipped':
+                      return 'Order Shipped';
                     case 'released':
                     case 'in transit':
-                    case 'order shipped':
                       return 'In Transit';
                     case 'completed':
                     case 'order completed':
@@ -1186,15 +1194,15 @@ class _AtAGlanceSection extends StatelessWidget {
                       }
                     }
 
-                    if (normalizedStatus == 'Driver Pending') {
+                    if (normalizedStatus == 'Driver Assigned') {
                       final assignedAt = asDateTime(data['assignedAt']);
                       if (assignedAt != null) {
                         final minutesPending =
                             now.difference(assignedAt).inMinutes;
                         if (minutesPending >= 5) {
-                          stuckDriverPending++;
+                          stuckDriverAssigned++;
                           atRiskItems.add(
-                            _AtRiskOrderItem.stuckDriverPending(
+                            _AtRiskOrderItem.stuckDriverAssigned(
                               orderId: doc.id,
                               vendorName: _vendorNameFromOrder(data),
                               assignedAt: assignedAt,
@@ -1460,10 +1468,10 @@ class _AtAGlanceSection extends StatelessWidget {
                           ),
                           _KpiCard(
                             icon: Icons.hourglass_bottom,
-                            label: 'Stuck pending',
-                            value: stuckDriverPending.toString(),
-                            helper: 'Driver pending ≥5m',
-                            tone: stuckDriverPending > 0
+                            label: 'Stuck assigned',
+                            value: stuckDriverAssigned.toString(),
+                            helper: 'Driver assigned ≥5m',
+                            tone: stuckDriverAssigned > 0
                                 ? _KpiTone.warning
                                 : _KpiTone.neutral,
                             onTap: () => onNavigate(AssignmentsLogPage()),
@@ -1552,7 +1560,7 @@ class _AtAGlanceSection extends StatelessWidget {
                                   QueryDocumentSnapshot<Map<String, dynamic>>>(),
                               waitingAccept: waitingAccept,
                               unassignedNearReady: unassignedNearReady,
-                              stuckDriverPending: stuckDriverPending,
+                              stuckDriverAssigned: stuckDriverAssigned,
                               onNavigate: onNavigate,
                               onNavigateToOrders: onNavigateToOrders,
                               asDateTime: asDateTime,
@@ -1656,7 +1664,7 @@ int _itemCountFromOrderData(Map<String, dynamic> data) {
   return count;
 }
 
-enum _AtRiskOrderType { unassignedNearReady, stuckDriverPending }
+enum _AtRiskOrderType { unassignedNearReady, stuckDriverAssigned }
 
 class _AtRiskOrderItem {
   final _AtRiskOrderType type;
@@ -1696,14 +1704,14 @@ class _AtRiskOrderItem {
     );
   }
 
-  factory _AtRiskOrderItem.stuckDriverPending({
+  factory _AtRiskOrderItem.stuckDriverAssigned({
     required String orderId,
     required String vendorName,
     required DateTime assignedAt,
     required int minutesPending,
   }) {
     return _AtRiskOrderItem._(
-      type: _AtRiskOrderType.stuckDriverPending,
+      type: _AtRiskOrderType.stuckDriverAssigned,
       orderId: orderId,
       vendorName: vendorName,
       readyAt: null,
@@ -1721,7 +1729,7 @@ class _AtRiskOrderItem {
 
   String get statusText => switch (type) {
         _AtRiskOrderType.unassignedNearReady => 'Unassigned',
-        _AtRiskOrderType.stuckDriverPending => 'Driver Pending',
+        _AtRiskOrderType.stuckDriverAssigned => 'Driver Assigned',
       };
 
   String get timingText {
@@ -1730,7 +1738,7 @@ class _AtRiskOrderItem {
         final m = minutesToReady ?? 0;
         if (m < 0) return 'Overdue ${-m}m';
         return 'Ready in ${m}m';
-      case _AtRiskOrderType.stuckDriverPending:
+      case _AtRiskOrderType.stuckDriverAssigned:
         final m = minutesPending ?? 0;
         return 'Pending ${m}m';
     }
@@ -1742,7 +1750,7 @@ class _AtRiskOrderItem {
         final m = minutesToReady ?? 999;
         if (m <= 0) return 1000 + (-m).clamp(0, 120);
         return 900 + (10 - m).clamp(0, 10);
-      case _AtRiskOrderType.stuckDriverPending:
+      case _AtRiskOrderType.stuckDriverAssigned:
         final m = minutesPending ?? 0;
         return 700 + m.clamp(0, 120);
     }
@@ -1852,7 +1860,7 @@ class _DeliveryPipelineCard extends StatelessWidget {
     required this.ordersToday,
     required this.waitingAccept,
     required this.unassignedNearReady,
-    required this.stuckDriverPending,
+    required this.stuckDriverAssigned,
     required this.onNavigate,
     required this.asDateTime,
     this.onNavigateToOrders,
@@ -1861,7 +1869,7 @@ class _DeliveryPipelineCard extends StatelessWidget {
   final List<QueryDocumentSnapshot<Map<String, dynamic>>> ordersToday;
   final int waitingAccept;
   final int unassignedNearReady;
-  final int stuckDriverPending;
+  final int stuckDriverAssigned;
   final void Function(Widget page) onNavigate;
   final DateTime? Function(dynamic) asDateTime;
   final VoidCallback? onNavigateToOrders;
@@ -1972,7 +1980,7 @@ class _DeliveryPipelineCard extends StatelessWidget {
                   child: Text(
                     '$waitingAccept waiting accept · '
                     '$unassignedNearReady unassigned · '
-                    '$stuckDriverPending stuck',
+                    '$stuckDriverAssigned stuck',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
                     ),
@@ -2073,7 +2081,7 @@ class _AtRiskOrdersCard extends StatelessWidget {
                         case _AtRiskOrderType.unassignedNearReady:
                           onNavigate(const OrderDispatcherPage(initialTabIndex: 1));
                           return;
-                        case _AtRiskOrderType.stuckDriverPending:
+                        case _AtRiskOrderType.stuckDriverAssigned:
                           onNavigate(AssignmentsLogPage());
                           return;
                       }
@@ -2961,7 +2969,7 @@ class SettingsPage extends StatelessWidget {
       ),
       body: ListView.separated(
         padding: EdgeInsets.all(12),
-        itemCount: _docIds.length + 12,
+        itemCount: _docIds.length + 13,
         separatorBuilder: (_, __) => SizedBox(height: 8),
         itemBuilder: (context, index) {
           if (index == 0) {
@@ -2998,9 +3006,12 @@ class SettingsPage extends StatelessWidget {
             return _DeliveryZoneSettingsTile();
           }
           if (index == 11) {
+            return const _RiderTimeSettingsTile();
+          }
+          if (index == 12) {
             return const _DispatchConfigTile();
           }
-          final String docId = _docIds[index - 12];
+          final String docId = _docIds[index - 13];
           return _SettingsDocTile(collection: 'settings', docId: docId);
         },
       ),
@@ -3397,6 +3408,32 @@ class _DeliveryZoneSettingsTile extends StatelessWidget {
             context,
             MaterialPageRoute(
               builder: (context) => const DeliveryZoneSettingsPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _RiderTimeSettingsTile extends StatelessWidget {
+  const _RiderTimeSettingsTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.timer, color: Colors.teal),
+        title: const Text('Rider Time Settings'),
+        subtitle: const Text(
+          'Inactivity timeout, auto-logout, and rider session',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const RiderTimeSettingsPage(),
             ),
           );
         },
