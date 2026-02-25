@@ -5,10 +5,13 @@ import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
+import 'package:foodie_customer/model/bundle_model.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/SearchHistoryService.dart';
 import 'package:foodie_customer/model/PopularSearchItem.dart';
+import 'package:foodie_customer/ui/bundle/bundle_card.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
@@ -52,9 +55,12 @@ class SearchScreenState extends State<SearchScreen> {
   late List<ProductModel> productList = [];
   late List<ProductModel> productSearchList = [];
 
+  late List<BundleModel> bundleSearchList = [];
+
   // Cached lists for optimized search performance
   late List<CachedVendor> _cachedVendors = [];
   late List<CachedProduct> _cachedProducts = [];
+  List<BundleModel> _cachedBundles = [];
 
   final FireStoreUtils fireStoreUtils = FireStoreUtils();
   final FocusNode _searchFocusNode = FocusNode(); // Add FocusNode
@@ -108,6 +114,9 @@ class SearchScreenState extends State<SearchScreen> {
         _cachedProducts = productList.map((p) => CachedProduct(p)).toList();
         isLoadingProducts = false;
       });
+    });
+    BundleService.getActiveBundles(limit: 100).then((value) {
+      if (mounted) setState(() => _cachedBundles = value);
     });
   }
 
@@ -195,11 +204,18 @@ class SearchScreenState extends State<SearchScreen> {
             // Food results
             if (productSearchList.isNotEmpty) _buildFoodSection(),
 
+            if (productSearchList.isNotEmpty && bundleSearchList.isNotEmpty)
+              const SizedBox(height: 20),
+
+            // Bundle results
+            if (bundleSearchList.isNotEmpty) _buildBundleSection(),
+
             // No results message
             if (!_isFiltering &&
                 _searchController.text.length >= _minSearchLength &&
                 vendorSearchList.isEmpty &&
-                productSearchList.isEmpty)
+                productSearchList.isEmpty &&
+                bundleSearchList.isEmpty)
               _buildNoResultsMessage(),
           ],
         ),
@@ -693,6 +709,7 @@ class SearchScreenState extends State<SearchScreen> {
     setState(() {
       vendorSearchList.clear();
       productSearchList.clear();
+      bundleSearchList.clear();
       _isFiltering = false;
     });
   }
@@ -711,6 +728,10 @@ class SearchScreenState extends State<SearchScreen> {
       setState(() {
         vendorSearchList = cachedResults[0] as List<VendorModel>;
         productSearchList = cachedResults[1] as List<ProductModel>;
+        bundleSearchList =
+            cachedResults.length > 2
+                ? cachedResults[2] as List<BundleModel>
+                : <BundleModel>[];
         _isFiltering = false;
       });
       _trackSearch(text);
@@ -724,11 +745,16 @@ class SearchScreenState extends State<SearchScreen> {
       setState(() {
         vendorSearchList = results['vendors'] as List<VendorModel>;
         productSearchList = results['products'] as List<ProductModel>;
+        bundleSearchList = results['bundles'] as List<BundleModel>;
         _isFiltering = false;
       });
 
       // Cache the results
-      _searchCache[cacheKey] = [vendorSearchList, productSearchList];
+      _searchCache[cacheKey] = [
+        vendorSearchList,
+        productSearchList,
+        bundleSearchList,
+      ];
 
       // Clean old cache entries (keep only last 10 searches)
       if (_searchCache.length > 10) {
@@ -766,10 +792,64 @@ class SearchScreenState extends State<SearchScreen> {
       }
     }
 
+    // Filter bundles by name/description
+    final List<BundleModel> filteredBundles = [];
+    for (final b in _cachedBundles) {
+      if (b.name.toLowerCase().contains(lowerText) ||
+          b.description.toLowerCase().contains(lowerText)) {
+        filteredBundles.add(b);
+        if (filteredBundles.length >= _maxResultsPerCategory) break;
+      }
+    }
+
     return {
       'vendors': filteredVendors,
       'products': filteredProducts,
+      'bundles': filteredBundles,
     };
+  }
+
+  Widget _buildBundleSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Bundle Deals",
+          style: TextStyle(
+            color: Colors.black,
+            fontWeight: FontWeight.w600,
+            fontSize: 16,
+          ),
+        ),
+        const SizedBox(height: 10),
+        ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: bundleSearchList.length,
+          itemBuilder: (context, index) {
+            final bundle = bundleSearchList[index];
+            final vendor = vendorList.cast<VendorModel?>().firstWhere(
+                  (v) => v?.id == bundle.restaurantId,
+                  orElse: () => null,
+                );
+            return InkWell(
+              onTap: () {
+                if (vendor != null) {
+                  push(
+                    context,
+                    NewVendorProductsScreen(vendorModel: vendor),
+                  );
+                }
+              },
+              child: BundleCard(
+                bundle: bundle,
+                onAddToCart: null,
+              ),
+            );
+          },
+        ),
+      ],
+    );
   }
 
   void _trackSearch(String query) async {

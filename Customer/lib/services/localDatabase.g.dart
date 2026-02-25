@@ -21,6 +21,10 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
   late final String? extras_price;
   late dynamic extras;
   late dynamic variant_info;
+  final String? bundleId;
+  final String? bundleName;
+  final String? addonPromoId;
+  final String? addonPromoName;
 
   CartProduct({
     required this.id,
@@ -34,6 +38,10 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
     this.extras_price,
     this.extras,
     this.variant_info,
+    this.bundleId,
+    this.bundleName,
+    this.addonPromoId,
+    this.addonPromoName,
   });
 
   factory CartProduct.fromData(Map<String, dynamic> data, GeneratedDatabase db, {String? prefix}) {
@@ -50,6 +58,10 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
       extras_price: const StringType().mapFromDatabaseResponse(data['${effectivePrefix}extras_price']),
       extras: const StringType().mapFromDatabaseResponse(data['${effectivePrefix}extras']),
       variant_info: const StringType().mapFromDatabaseResponse(data['${effectivePrefix}variant_info']),
+      bundleId: const StringType().mapFromDatabaseResponse(data['${effectivePrefix}bundle_id']),
+      bundleName: const StringType().mapFromDatabaseResponse(data['${effectivePrefix}bundle_name']),
+      addonPromoId: const StringType().mapFromDatabaseResponse(data['${effectivePrefix}addon_promo_id']),
+      addonPromoName: const StringType().mapFromDatabaseResponse(data['${effectivePrefix}addon_promo_name']),
     );
   }
 
@@ -75,6 +87,18 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
     if (!nullToAbsent || variant_info != null) {
       map['variant_info'] = Variable<String?>(jsonEncode(variant_info));
     }
+    if (!nullToAbsent || bundleId != null) {
+      map['bundle_id'] = Variable<String?>(bundleId);
+    }
+    if (!nullToAbsent || bundleName != null) {
+      map['bundle_name'] = Variable<String?>(bundleName);
+    }
+    if (!nullToAbsent || addonPromoId != null) {
+      map['addon_promo_id'] = Variable<String?>(addonPromoId);
+    }
+    if (!nullToAbsent || addonPromoName != null) {
+      map['addon_promo_name'] = Variable<String?>(addonPromoName);
+    }
     return map;
   }
 
@@ -91,6 +115,10 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
       extras_price: extras_price == null && nullToAbsent ? const Value.absent() : Value(extras_price),
       extras: extras == null && nullToAbsent ? const Value.absent() : Value(extras),
       variant_info: variant_info == null && nullToAbsent ? const Value.absent() : Value(variant_info),
+      bundleId: bundleId == null && nullToAbsent ? const Value.absent() : Value(bundleId),
+      bundleName: bundleName == null && nullToAbsent ? const Value.absent() : Value(bundleName),
+      addonPromoId: addonPromoId == null && nullToAbsent ? const Value.absent() : Value(addonPromoId),
+      addonPromoName: addonPromoName == null && nullToAbsent ? const Value.absent() : Value(addonPromoName),
     );
   }
 
@@ -131,6 +159,10 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
       variant_info: json['variant_info'] != null
           ? serializer.fromJson<VariantInfo>((json.containsKey('variant_info') && json['variant_info'] != null) ? VariantInfo.fromJson(json['variant_info']) : null)
           : null,
+      bundleId: serializer.fromJson<String?>(json['bundleId']),
+      bundleName: serializer.fromJson<String?>(json['bundleName']),
+      addonPromoId: serializer.fromJson<String?>(json['addonPromoId']),
+      addonPromoName: serializer.fromJson<String?>(json['addonPromoName']),
     );
   }
 
@@ -175,6 +207,10 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
       'extras_price': serializer.toJson<String?>(extras_price),
       'extras': serializer.toJson<List<dynamic>>(extras),
       'variant_info': variant_info != null ? serializer.toJson<Map<String, dynamic>>(VariantInfo.fromJson(jsonDecode(variant_info)).toJson()) : null,
+      'bundleId': serializer.toJson<String?>(bundleId),
+      'bundleName': serializer.toJson<String?>(bundleName),
+      'addonPromoId': serializer.toJson<String?>(addonPromoId),
+      'addonPromoName': serializer.toJson<String?>(addonPromoName),
     };
   }
 
@@ -189,7 +225,11 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
           int? quantity,
           String? extras_price,
           String? extras,
-          String? variant_info}) =>
+          String? variant_info,
+          String? bundleId,
+          String? bundleName,
+          String? addonPromoId,
+          String? addonPromoName}) =>
       CartProduct(
         id: id ?? this.id,
         category_id: category_id ?? this.category_id,
@@ -202,6 +242,10 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
         extras_price: extras_price ?? this.extras_price,
         extras: extras ?? this.extras,
         variant_info: variant_info ?? this.variant_info.toJson(),
+        bundleId: bundleId ?? this.bundleId,
+        bundleName: bundleName ?? this.bundleName,
+        addonPromoId: addonPromoId ?? this.addonPromoId,
+        addonPromoName: addonPromoName ?? this.addonPromoName,
       );
 
   @override
@@ -218,12 +262,16 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
           ..write('extras_price: $extras_price, ')
           ..write('extras: $extras, ')
           ..write('variant_info: $variant_info, ')
+          ..write('bundleId: $bundleId, ')
+          ..write('bundleName: $bundleName, ')
+          ..write('addonPromoId: $addonPromoId, ')
+          ..write('addonPromoName: $addonPromoName, ')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, category_id, name, photo, price, discountPrice, vendorID, quantity, extras_price, extras, variant_info);
+  int get hashCode => Object.hash(id, category_id, name, photo, price, discountPrice, vendorID, quantity, extras_price, extras, variant_info, bundleId, bundleName, addonPromoId, addonPromoName);
 
   @override
   bool operator ==(Object other) =>
@@ -239,7 +287,11 @@ class CartProduct extends DataClass implements Insertable<CartProduct> {
           other.quantity == this.quantity &&
           other.extras_price == this.extras_price &&
           other.extras == this.extras &&
-          other.variant_info == this.variant_info);
+          other.variant_info == this.variant_info &&
+          other.bundleId == this.bundleId &&
+          other.bundleName == this.bundleName &&
+          other.addonPromoId == this.addonPromoId &&
+          other.addonPromoName == this.addonPromoName);
 }
 
 class CartProductsCompanion extends UpdateCompanion<CartProduct> {
@@ -254,6 +306,10 @@ class CartProductsCompanion extends UpdateCompanion<CartProduct> {
   final Value<String?> extras_price;
   final Value<String?> extras;
   final Value<String?> variant_info;
+  final Value<String?> bundleId;
+  final Value<String?> bundleName;
+  final Value<String?> addonPromoId;
+  final Value<String?> addonPromoName;
 
   const CartProductsCompanion({
     this.id = const Value.absent(),
@@ -267,6 +323,10 @@ class CartProductsCompanion extends UpdateCompanion<CartProduct> {
     this.extras_price = const Value.absent(),
     this.extras = const Value.absent(),
     this.variant_info = const Value.absent(),
+    this.bundleId = const Value.absent(),
+    this.bundleName = const Value.absent(),
+    this.addonPromoId = const Value.absent(),
+    this.addonPromoName = const Value.absent(),
   });
 
   CartProductsCompanion.insert({
@@ -281,6 +341,10 @@ class CartProductsCompanion extends UpdateCompanion<CartProduct> {
     this.extras_price = const Value.absent(),
     this.extras = const Value.absent(),
     this.variant_info = const Value.absent(),
+    this.bundleId = const Value.absent(),
+    this.bundleName = const Value.absent(),
+    this.addonPromoId = const Value.absent(),
+    this.addonPromoName = const Value.absent(),
   })  : id = Value(id),
         category_id = Value(category_id),
         name = Value(name),
@@ -301,6 +365,10 @@ class CartProductsCompanion extends UpdateCompanion<CartProduct> {
     Expression<String?>? extras_price,
     Expression<String?>? extras,
     Expression<String?>? variant_info,
+    Expression<String?>? bundleId,
+    Expression<String?>? bundleName,
+    Expression<String?>? addonPromoId,
+    Expression<String?>? addonPromoName,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -314,6 +382,10 @@ class CartProductsCompanion extends UpdateCompanion<CartProduct> {
       if (extras_price != null) 'extras_price': extras_price,
       if (extras != null) 'extras': extras,
       if (variant_info != null) 'variant_info': variant_info,
+      if (bundleId != null) 'bundle_id': bundleId,
+      if (bundleName != null) 'bundle_name': bundleName,
+      if (addonPromoId != null) 'addon_promo_id': addonPromoId,
+      if (addonPromoName != null) 'addon_promo_name': addonPromoName,
     });
   }
 
@@ -328,7 +400,11 @@ class CartProductsCompanion extends UpdateCompanion<CartProduct> {
       Value<int>? quantity,
       Value<String?>? extras_price,
       Value<String?>? extras,
-      Value<String?>? variant_info}) {
+      Value<String?>? variant_info,
+      Value<String?>? bundleId,
+      Value<String?>? bundleName,
+      Value<String?>? addonPromoId,
+      Value<String?>? addonPromoName}) {
     return CartProductsCompanion(
       id: id ?? this.id,
       category_id: category_id ?? this.category_id,
@@ -341,6 +417,10 @@ class CartProductsCompanion extends UpdateCompanion<CartProduct> {
       extras_price: extras_price ?? this.extras_price,
       extras: extras ?? this.extras,
       variant_info: variant_info ?? this.variant_info,
+      bundleId: bundleId ?? this.bundleId,
+      bundleName: bundleName ?? this.bundleName,
+      addonPromoId: addonPromoId ?? this.addonPromoId,
+      addonPromoName: addonPromoName ?? this.addonPromoName,
     );
   }
 
@@ -380,6 +460,18 @@ class CartProductsCompanion extends UpdateCompanion<CartProduct> {
     if (variant_info.present) {
       map['variant_info'] = Variable<String?>(variant_info.value);
     }
+    if (bundleId.present) {
+      map['bundle_id'] = Variable<String?>(bundleId.value);
+    }
+    if (bundleName.present) {
+      map['bundle_name'] = Variable<String?>(bundleName.value);
+    }
+    if (addonPromoId.present) {
+      map['addon_promo_id'] = Variable<String?>(addonPromoId.value);
+    }
+    if (addonPromoName.present) {
+      map['addon_promo_name'] = Variable<String?>(addonPromoName.value);
+    }
     return map;
   }
 
@@ -397,6 +489,10 @@ class CartProductsCompanion extends UpdateCompanion<CartProduct> {
           ..write('extras_price: $extras_price, ')
           ..write('extras: $extras, ')
           ..write('variant_info: $variant_info, ')
+          ..write('bundleId: $bundleId, ')
+          ..write('bundleName: $bundleName, ')
+          ..write('addonPromoId: $addonPromoId, ')
+          ..write('addonPromoName: $addonPromoName, ')
           ..write(')'))
         .toString();
   }
@@ -452,8 +548,20 @@ class $CartProductsTable extends CartProducts with TableInfo<$CartProductsTable,
   final VerificationMeta _veriant_infoMeta = const VerificationMeta('variant_info');
   late final GeneratedColumn<String?> variant_info = GeneratedColumn<String?>('variant_info', aliasedName, true, type: const StringType(), requiredDuringInsert: false);
 
+  final VerificationMeta _bundleIdMeta = const VerificationMeta('bundleId');
+  late final GeneratedColumn<String?> bundleId = GeneratedColumn<String?>('bundle_id', aliasedName, true, type: const StringType(), requiredDuringInsert: false);
+
+  final VerificationMeta _bundleNameMeta = const VerificationMeta('bundleName');
+  late final GeneratedColumn<String?> bundleName = GeneratedColumn<String?>('bundle_name', aliasedName, true, type: const StringType(), requiredDuringInsert: false);
+
+  final VerificationMeta _addonPromoIdMeta = const VerificationMeta('addonPromoId');
+  late final GeneratedColumn<String?> addonPromoId = GeneratedColumn<String?>('addon_promo_id', aliasedName, true, type: const StringType(), requiredDuringInsert: false);
+
+  final VerificationMeta _addonPromoNameMeta = const VerificationMeta('addonPromoName');
+  late final GeneratedColumn<String?> addonPromoName = GeneratedColumn<String?>('addon_promo_name', aliasedName, true, type: const StringType(), requiredDuringInsert: false);
+
   @override
-  List<GeneratedColumn> get $columns => [id, categoryId, name, photo, price, discountPrice, vendorID, quantity, extras_price, extras, variant_info];
+  List<GeneratedColumn> get $columns => [id, categoryId, name, photo, price, discountPrice, vendorID, quantity, extras_price, extras, variant_info, bundleId, bundleName, addonPromoId, addonPromoName];
 
   @override
   String get aliasedName => _alias ?? 'cart_products';
@@ -511,6 +619,18 @@ class $CartProductsTable extends CartProducts with TableInfo<$CartProductsTable,
     }
     if (data.containsKey('variant_info')) {
       context.handle(_veriant_infoMeta, variant_info.isAcceptableOrUnknown(data['variant_info']!, _veriant_infoMeta));
+    }
+    if (data.containsKey('bundle_id')) {
+      context.handle(_bundleIdMeta, bundleId.isAcceptableOrUnknown(data['bundle_id']!, _bundleIdMeta));
+    }
+    if (data.containsKey('bundle_name')) {
+      context.handle(_bundleNameMeta, bundleName.isAcceptableOrUnknown(data['bundle_name']!, _bundleNameMeta));
+    }
+    if (data.containsKey('addon_promo_id')) {
+      context.handle(_addonPromoIdMeta, addonPromoId.isAcceptableOrUnknown(data['addon_promo_id']!, _addonPromoIdMeta));
+    }
+    if (data.containsKey('addon_promo_name')) {
+      context.handle(_addonPromoNameMeta, addonPromoName.isAcceptableOrUnknown(data['addon_promo_name']!, _addonPromoNameMeta));
     }
     return context;
   }

@@ -18,6 +18,7 @@ import 'package:brgy/widgets/orders/order_rejection_dialog.dart';
 import 'package:brgy/widgets/orders/change_driver_dialog.dart';
 import 'package:brgy/widgets/orders/order_info_section.dart';
 import 'package:brgy/utils/order_ready_time_helper.dart';
+import 'package:brgy/pages/change_order_status_page.dart';
 import 'package:brgy/services/sms_service.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -558,8 +559,16 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                             IconButton(
                               tooltip: 'Change Status',
                               icon: const Icon(Icons.edit, size: 18),
-                              onPressed: () =>
-                                  _showChangeStatusDialog(context, id, status),
+                              onPressed: () async {
+                                final ok = await _showChangeStatusDialog(
+                                  context,
+                                  id,
+                                  data,
+                                );
+                                if (ok == true && context.mounted) {
+                                  setState(() {});
+                                }
+                              },
                             ),
                             IconButton(
                               tooltip: 'Delete order',
@@ -2331,108 +2340,20 @@ Future<void> _showDeleteOrderDialog(
   }
 }
 
-// Change Order Status dialog and update helper
-Future<void> _showChangeStatusDialog(
-    BuildContext context, String orderId, String currentStatus) async {
-  String? selectedStatus = currentStatus;
-  final List<String> statuses = <String>[
-    'Order Placed',
-    'Order Accepted',
-    'Driver Assigned',
-    'Driver Accepted',
-    'Order Shipped',
-    'In Transit',
-    'Order Completed',
-    'Order Rejected',
-  ];
-
-  final String? result = await showDialog<String>(
-    context: context,
-    builder: (context) {
-      return AlertDialog(
-        title: const Text('Change Order Status'),
-        content: StatefulBuilder(
-          builder: (context, setState) {
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Select a new status:'),
-                const SizedBox(height: 12),
-                DropdownButton<String>(
-                  isExpanded: true,
-                  value: selectedStatus,
-                  items: statuses.map((s) {
-                    return DropdownMenuItem<String>(
-                      value: s,
-                      child: Text(s),
-                    );
-                  }).toList(),
-                  onChanged: (v) => setState(() => selectedStatus = v),
-                ),
-              ],
-            );
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(selectedStatus),
-            child: const Text('Update'),
-          ),
-        ],
-      );
-    },
+// Change Order Status - navigates to page (fixes Driver Rejected dropdown error)
+Future<bool?> _showChangeStatusDialog(
+  BuildContext context,
+  String orderId,
+  Map<String, dynamic> order,
+) async {
+  return Navigator.of(context).push<bool>(
+    MaterialPageRoute<bool>(
+      builder: (_) => ChangeOrderStatusPage(
+        order: order,
+        orderId: orderId,
+      ),
+    ),
   );
-
-  if (result == null || result.isEmpty || result == currentStatus) return;
-
-  try {
-    await _updateOrderStatus(orderId, result);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.green,
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white),
-              const SizedBox(width: 8),
-              Expanded(child: Text('Status updated to "$result"')),
-            ],
-          ),
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
-  } catch (e) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.red,
-          content: Row(
-            children: [
-              const Icon(Icons.error_outline, color: Colors.white),
-              const SizedBox(width: 8),
-              Expanded(child: Text('Failed to update status: $e')),
-            ],
-          ),
-          duration: const Duration(seconds: 4),
-        ),
-      );
-    }
-  }
-}
-
-Future<void> _updateOrderStatus(String orderId, String newStatus) async {
-  await FirebaseFirestore.instance
-      .collection('restaurant_orders')
-      .doc(orderId)
-      .update({
-    'status': newStatus,
-    'statusChangedAt': FieldValue.serverTimestamp(),
-  });
 }
 
 // Calculate distance between two coordinates using Haversine formula
@@ -3022,8 +2943,16 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                             IconButton(
                               tooltip: 'Change Status',
                               icon: const Icon(Icons.edit, size: 18),
-                              onPressed: () =>
-                                  _showChangeStatusDialog(context, id, status),
+                              onPressed: () async {
+                                final ok = await _showChangeStatusDialog(
+                                  context,
+                                  id,
+                                  data,
+                                );
+                                if (ok == true && context.mounted) {
+                                  setState(() {});
+                                }
+                              },
                             ),
                             IconButton(
                               tooltip: 'Delete order',

@@ -12,8 +12,11 @@ import 'package:foodie_customer/model/VendorCategoryModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/offer_model.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/model/bundle_model.dart';
+import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
+import 'package:foodie_customer/ui/bundle/bundle_card.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
@@ -274,7 +277,7 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
       setState(() {
         vendorCateoryModel.addAll(validCategories);
         tabController =
-            TabController(length: vendorCateoryModel.length + 1, vsync: this);
+            TabController(length: vendorCateoryModel.length + 2, vsync: this);
         offerList = offers;
       });
     }
@@ -523,6 +526,20 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
                     ),
                   ),
                   ...vendorCateoryModel.map((e) => Tab(text: e.title)),
+                  Tab(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.inventory_2,
+                          size: 16,
+                          color: CustomColors.primary,
+                        ),
+                        const SizedBox(width: 4),
+                        const Text("Bundles"),
+                      ],
+                    ),
+                  ),
                 ],
                 onTap: animateAndScrollTo,
               ),
@@ -656,18 +673,139 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
         ),
       );
     } else {
-      // Show normal category-based view
+      // Show normal category-based view (Popular + categories + Bundles)
       return SliverList(
         delegate: SliverChildBuilderDelegate(
           (context, index) {
             if (index == 0) {
               return buildPopularSection();
-            } else {
+            } else if (index <= vendorCateoryModel.length) {
               return buildCategoryItem(index - 1);
+            } else {
+              return buildBundlesSection();
             }
           },
-          childCount: vendorCateoryModel.length + 1,
+          childCount: vendorCateoryModel.length + 2,
         ),
+      );
+    }
+  }
+
+  Widget buildBundlesSection() {
+    final bundleIndex = vendorCateoryModel.length + 1;
+    itemKeys[bundleIndex] = RectGetter.createGlobalKey();
+    return RectGetter(
+      key: itemKeys[bundleIndex],
+      child: AutoScrollTag(
+        key: ValueKey(bundleIndex),
+        index: bundleIndex,
+        controller: scrollController,
+        child: StreamBuilder<List<BundleModel>>(
+          stream: BundleService.getActiveBundlesStream(
+            restaurantId: widget.vendorModel.id,
+            limit: 20,
+          ),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Center(
+                  child: Text(
+                    snapshot.hasError ? 'Failed to load bundles' : 'No bundles',
+                    style: TextStyle(color: Colors.grey.shade600),
+                  ),
+                ),
+              );
+            }
+            final bundles = snapshot.data!;
+            return Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.inventory_2,
+                        size: 20,
+                        color: CustomColors.primary,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        "Bundles",
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: bundles.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final bundle = bundles[index];
+                      return BundleCard(
+                        bundle: bundle,
+                        onAddToCart: () => _addBundleToCart(context, bundle),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addBundleToCart(BuildContext context, BundleModel bundle) async {
+    final cartDb = Provider.of<CartDatabase>(context, listen: false);
+    final products = await cartDb.allCartProducts;
+    if (products.isNotEmpty &&
+        products.first.vendorID != bundle.restaurantId) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Different restaurant'),
+          content: const Text(
+            'Your cart has items from another restaurant. '
+            'Clear cart and add this bundle?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Clear and Add'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      await cartDb.deleteAllProducts();
+    }
+    final itemsWithPhotos = await BundleService.itemsWithPhotos(
+      bundle.restaurantId,
+      bundle.items,
+    );
+    await cartDb.addBundleToCart(
+      bundleId: bundle.bundleId,
+      bundleName: bundle.name,
+      vendorID: bundle.restaurantId,
+      bundlePrice: bundle.bundlePrice,
+      items: itemsWithPhotos,
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${bundle.name} added to cart')),
       );
     }
   }

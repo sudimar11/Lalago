@@ -212,6 +212,27 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
     }
   }
 
+  /// Builds a list of entries for the order items list: bundle header or item map.
+  List<Map<String, dynamic>> _orderItemsWithBundleHeaders(
+      List<dynamic> items) {
+    final List<Map<String, dynamic>> result = [];
+    for (int i = 0; i < items.length; i++) {
+      final item = items[i];
+      if (item is! Map<String, dynamic>) continue;
+      final bid = item['bundleId']?.toString();
+      final bname = item['bundleName']?.toString();
+      if (bid != null &&
+          bid.isNotEmpty &&
+          (i == 0 ||
+              (items[i - 1] is Map &&
+                  (items[i - 1] as Map)['bundleId']?.toString() != bid))) {
+        result.add({'isHeader': true, 'bundleName': bname ?? 'Bundle'});
+      }
+      result.add({'isHeader': false, 'item': item});
+    }
+    return result;
+  }
+
   String _readFoodName(Map<String, dynamic> data) {
     final value = (data['name'] ??
             data['title'] ??
@@ -696,10 +717,24 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
               child: ListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                itemCount: orderedItems.length,
+                itemCount: _orderItemsWithBundleHeaders(orderedItems).length,
                 itemBuilder: (context, index) {
-                final item = orderedItems[index];
-                if (item is! Map) return const SizedBox.shrink();
+                final entries = _orderItemsWithBundleHeaders(orderedItems);
+                final entry = entries[index];
+                if (entry['isHeader'] == true) {
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 6),
+                    child: Text(
+                      '— Bundle: ${entry['bundleName'] ?? 'Value Meal'} —',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  );
+                }
+                final item = entry['item'] as Map<String, dynamic>;
                 final productId = item['id']?.toString() ?? '';
                 final name = item['name']?.toString() ?? 'Unknown Item';
                 final qty = item['quantity']?.toString() ?? '0';
@@ -711,6 +746,8 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
                 final isUnavailable = status == 'unavailable';
 
                 final canRemove = orderedItems.length > 1;
+                final isAddon = item['addonPromoId'] != null &&
+                    item['addonPromoId'].toString().isNotEmpty;
                 return Container(
                   margin: const EdgeInsets.only(bottom: 10),
                   padding: const EdgeInsets.all(12),
@@ -721,12 +758,37 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '$qty × $name',
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '$qty × $name',
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          if (isAddon)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade100,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Add-on',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.green.shade800,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                       if (isUnavailable)
                         Padding(

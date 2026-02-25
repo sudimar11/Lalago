@@ -5,6 +5,8 @@ import 'package:brgy/order_dispatcher.dart';
 import 'package:brgy/main.dart';
 import 'package:brgy/restaurants_page.dart';
 import 'package:brgy/foods_page.dart';
+import 'package:brgy/pages/bundles_page.dart';
+import 'package:brgy/pages/addons_page.dart';
 import 'package:brgy/analytics_today.dart';
 import 'package:brgy/analytics_weekly.dart';
 import 'package:brgy/riders_orders_today_page.dart';
@@ -591,6 +593,16 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             icon: Icons.fastfood,
             label: 'Total foods',
             onTap: () => push(const FoodsPage()),
+          ),
+          _DashboardNavItem(
+            icon: Icons.inventory_2,
+            label: 'Bundle Deals',
+            onTap: () => push(const BundlesPage()),
+          ),
+          _DashboardNavItem(
+            icon: Icons.add_circle_outline,
+            label: 'Add-on Promos',
+            onTap: () => push(const AddonsPage()),
           ),
           _DashboardNavItem(
             icon: Icons.storefront,

@@ -81,6 +81,30 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Bundle Deals: read for all (Customer/Rider), write for authenticated (Admin)
+    match /bundles/{bundleId} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null;
+    }
+
+    // Bundle analytics: read for authenticated (reporting), write only via Cloud Functions
+    match /bundle_analytics/{docId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // Add-on Promos: read for all (Customer/Rider), write for authenticated (Admin)
+    match /addon_promos/{promoId} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null;
+    }
+
+    // Add-on promo analytics: write only via Cloud Functions
+    match /addon_promo_analytics/{docId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
     // TODO: Replace with proper security rules before production deployment
     // Example of proper rules:
     // match /users/{userId} {

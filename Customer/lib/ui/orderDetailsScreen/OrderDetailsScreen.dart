@@ -21,6 +21,8 @@ import 'package:foodie_customer/model/TaxModel.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/variant_info.dart';
+import 'package:foodie_customer/model/bundle_model.dart';
+import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/chat_screen/chat_screen.dart';
@@ -39,6 +41,37 @@ import 'package:provider/provider.dart';
 // import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/localDatabase.dart';
+
+/// Entry for order product list: either a bundle header or a product.
+class _OrderListEntry {
+  final bool isBundleHeader;
+  final String? bundleName;
+  final CartProduct? product;
+
+  _OrderListEntry.bundleHeader(this.bundleName)
+      : isBundleHeader = true,
+        product = null;
+
+  _OrderListEntry.item(this.product)
+      : isBundleHeader = false,
+        bundleName = null;
+}
+
+List<_OrderListEntry> _orderProductEntries(List<CartProduct> products) {
+  final List<_OrderListEntry> entries = [];
+  for (int i = 0; i < products.length; i++) {
+    final p = products[i];
+    final bid = p.bundleId;
+    final bname = p.bundleName;
+    if (bid != null &&
+        bid.isNotEmpty &&
+        (i == 0 || products[i - 1].bundleId != bid)) {
+      entries.add(_OrderListEntry.bundleHeader(bname ?? 'Bundle'));
+    }
+    entries.add(_OrderListEntry.item(p));
+  }
+  return entries;
+}
 
 class OrderStatusStage {
   final String status;
@@ -1058,13 +1091,31 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
               ListView.builder(
                   physics: const NeverScrollableScrollPhysics(),
                   shrinkWrap: true,
-                  itemCount: widget.orderModel.products.length,
+                  itemCount:
+                      _orderProductEntries(widget.orderModel.products).length,
                   itemBuilder: (context, index) {
-                    VariantInfo? variantIno =
-                        widget.orderModel.products[index].variant_info;
+                    final entries =
+                        _orderProductEntries(widget.orderModel.products);
+                    final entry = entries[index];
+                    if (entry.isBundleHeader) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          'Bundle: ${entry.bundleName ?? "Value Meal"}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                            color: isDarkMode(context)
+                                ? Colors.grey.shade300
+                                : Colors.grey.shade700,
+                          ),
+                        ),
+                      );
+                    }
+                    final product = entry.product!;
+                    VariantInfo? variantIno = product.variant_info;
 
-                    List<dynamic>? addon =
-                        widget.orderModel.products[index].extras;
+                    List<dynamic>? addon = product.extras;
 
                     String extrasDisVal = '';
 
@@ -1087,8 +1138,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
                                 // width: 50,
 
-                                imageUrl: getImageVAlidUrl(
-                                    widget.orderModel.products[index].photo),
+                                imageUrl: getImageVAlidUrl(product.photo),
                                 imageBuilder: (context, imageProvider) =>
                                     Container(
                                       decoration: BoxDecoration(
@@ -1118,8 +1168,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                       children: [
                                         Expanded(
                                           child: Text(
-                                            widget.orderModel.products[index]
-                                                .name,
+                                            product.name,
                                             maxLines: 2,
                                             overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
@@ -1133,7 +1182,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                           ),
                                         ),
                                         Text(
-                                          ' x ${widget.orderModel.products[index].quantity}',
+                                          ' x ${product.quantity}',
                                           style: TextStyle(
                                               fontFamily: 'Poppinsr',
                                               letterSpacing: 0.5,
@@ -1145,8 +1194,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                       ],
                                     ),
                                     const SizedBox(height: 5),
-                                    getPriceTotalText(
-                                        widget.orderModel.products[index]),
+                                    getPriceTotalText(product),
                                   ],
                                 ),
                               ),
@@ -1257,42 +1305,81 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                       int failCount = 0;
                                       List<String> failedProducts = [];
 
-                                      // Re-add each ordered product into cart with validation
+                                      // Group products by bundleId for reorder
+                                      final Map<String?, List<CartProduct>>
+                                          byBundle = {};
                                       for (final CartProduct p
                                           in widget.orderModel.products) {
-                                        try {
-                                          debugPrint(
-                                              "Processing product: ${p.name}, id: ${p.id}");
-                                          // Validate and transform CartProduct
-                                          final validatedProduct =
-                                              _validateAndTransformCartProduct(
-                                                  p);
+                                        final bid =
+                                            p.bundleId?.isEmpty == true
+                                                ? null
+                                                : p.bundleId;
+                                        byBundle.putIfAbsent(
+                                            bid, () => []).add(p);
+                                      }
 
-                                          if (validatedProduct != null) {
-                                            debugPrint(
-                                                "Product validated, adding to cart: ${p.name}");
-                                            // Add timeout to prevent hanging
-                                            await cartDatabase
-                                                .reAddProduct(validatedProduct)
-                                                .timeout(Duration(seconds: 5),
-                                                    onTimeout: () {
-                                              throw TimeoutException(
-                                                  'Product add operation timed out');
-                                            });
-                                            successCount++;
-                                            debugPrint(
-                                                "Product added successfully: ${p.name}, successCount: $successCount");
-                                          } else {
-                                            failCount++;
-                                            failedProducts.add(p.name);
-                                            debugPrint(
-                                                "Failed to validate product: ${p.name}");
+                                      for (final entry in byBundle.entries) {
+                                        final bundleId = entry.key;
+                                        final group = entry.value;
+                                        if (bundleId != null &&
+                                            bundleId.isNotEmpty) {
+                                          try {
+                                            final bundle = await BundleService
+                                                .getBundle(bundleId);
+                                            if (bundle != null &&
+                                                bundle.isActive) {
+                                              final itemsWithPhotos =
+                                                  await BundleService
+                                                      .itemsWithPhotos(
+                                                bundle.restaurantId,
+                                                bundle.items,
+                                              );
+                                              await cartDatabase.addBundleToCart(
+                                                bundleId: bundle.bundleId,
+                                                bundleName: bundle.name,
+                                                vendorID: bundle.restaurantId,
+                                                bundlePrice: bundle.bundlePrice,
+                                                items: itemsWithPhotos,
+                                              );
+                                              successCount += group.length;
+                                            } else {
+                                              for (final p in group) {
+                                                final validated =
+                                                    _validateAndTransformCartProduct(p);
+                                                if (validated != null) {
+                                                  await cartDatabase
+                                                      .reAddProduct(validated);
+                                                  successCount++;
+                                                } else {
+                                                  failCount++;
+                                                  failedProducts.add(p.name);
+                                                }
+                                              }
+                                            }
+                                          } catch (e) {
+                                            failCount += group.length;
+                                            failedProducts
+                                                .addAll(group.map((p) => p.name));
                                           }
-                                        } catch (e) {
-                                          failCount++;
-                                          failedProducts.add(p.name);
-                                          debugPrint(
-                                              "Error adding product ${p.name}: $e");
+                                        } else {
+                                          for (final CartProduct p in group) {
+                                            try {
+                                              final validatedProduct =
+                                                  _validateAndTransformCartProduct(p);
+                                              if (validatedProduct != null) {
+                                                await cartDatabase
+                                                    .reAddProduct(
+                                                        validatedProduct);
+                                                successCount++;
+                                              } else {
+                                                failCount++;
+                                                failedProducts.add(p.name);
+                                              }
+                                            } catch (e) {
+                                              failCount++;
+                                              failedProducts.add(p.name);
+                                            }
+                                          }
                                         }
                                       }
 
@@ -1391,8 +1478,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                   push(
                                       context,
                                       ReviewScreen(
-                                        product:
-                                            widget.orderModel.products[index],
+                                        product: product,
                                         orderId: widget.orderModel.id,
                                       ));
                                 },

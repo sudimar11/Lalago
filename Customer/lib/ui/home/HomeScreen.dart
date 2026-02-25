@@ -83,8 +83,11 @@ import 'package:foodie_customer/ui/home/sections/home_nearby_foods_section.dart'
 import 'package:foodie_customer/ui/home/sections/home_popular_today_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_header_section.dart';
 import 'package:foodie_customer/ui/home/sections/banner_section.dart';
+import 'package:foodie_customer/ui/home/sections/bundle_deals_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 
+import 'package:foodie_customer/model/bundle_model.dart';
+import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 
 import 'package:foodie_customer/ui/searchScreen/SearchScreen.dart';
@@ -1677,6 +1680,53 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Advertisement slider shown above Stories
 
+  Future<void> _onBundleAddToCart(
+      BuildContext context, BundleModel bundle) async {
+    final cartDb = Provider.of<CartDatabase>(context, listen: false);
+    final products = await cartDb.allCartProducts;
+    if (products.isNotEmpty &&
+        products.first.vendorID != bundle.restaurantId) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Different restaurant'),
+          content: const Text(
+            'Your cart has items from another restaurant. '
+            'Clear cart and add this bundle?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Clear and Add'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      await cartDb.deleteAllProducts();
+    }
+    final itemsWithPhotos = await BundleService.itemsWithPhotos(
+      bundle.restaurantId,
+      bundle.items,
+    );
+    await cartDb.addBundleToCart(
+      bundleId: bundle.bundleId,
+      bundleName: bundle.name,
+      vendorID: bundle.restaurantId,
+      bundlePrice: bundle.bundlePrice,
+      items: itemsWithPhotos,
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${bundle.name} added to cart')),
+      );
+    }
+  }
+
   void _handleOrderTypeChanged(String? newValue) async {
     if (newValue == null) return;
 
@@ -2069,6 +2119,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                         ),
                                 ],
                               ),
+
+                            RepaintBoundary(
+                              child: BundleDealsSection(
+                                onAddToCart: _onBundleAddToCart,
+                              ),
+                            ),
 
                             //storyWidget(),
 

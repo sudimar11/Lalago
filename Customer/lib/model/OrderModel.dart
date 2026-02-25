@@ -155,6 +155,10 @@ class OrderModel {
       'extras_price': vOpt(p['extras_price']),
       'extras': p['extras'],
       if (p['variant_info'] != null) 'variant_info': p['variant_info'],
+      'bundleId': vOpt(p['bundleId']),
+      'bundleName': vOpt(p['bundleName']),
+      'addonPromoId': vOpt(p['addonPromoId']),
+      'addonPromoName': vOpt(p['addonPromoName']),
     };
   }
 

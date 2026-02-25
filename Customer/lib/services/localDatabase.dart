@@ -29,6 +29,14 @@ class CartProducts extends Table {
 
   TextColumn get extras => text().nullable()();
 
+  TextColumn get bundleId => text().nullable()();
+
+  TextColumn get bundleName => text().nullable()();
+
+  TextColumn get addonPromoId => text().nullable()();
+
+  TextColumn get addonPromoName => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -105,7 +113,11 @@ class CartDatabase extends _$CartDatabase {
             category_id: element.category_id,
             extras_price: extrasPrice.toString(),
             extras: joinTitleString,
-            discountPrice: element.discountPrice!));
+            discountPrice: element.discountPrice!,
+            bundleId: element.bundleId,
+            bundleName: element.bundleName,
+            addonPromoId: element.addonPromoId,
+            addonPromoName: element.addonPromoName));
       } else {
         CartProduct entity = CartProduct(
             id: model.id +
@@ -157,6 +169,8 @@ class CartDatabase extends _$CartDatabase {
           extras_price: cartProduct.extras_price,
           extras: cartProduct.extras,
           variant_info: cartProduct.variant_info,
+          addonPromoId: cartProduct.addonPromoId,
+          addonPromoName: cartProduct.addonPromoName,
         ));
       } else {
         // Ensure category_id is set before inserting
@@ -174,6 +188,8 @@ class CartDatabase extends _$CartDatabase {
           extras_price: cartProduct.extras_price,
           extras: cartProduct.extras,
           variant_info: cartProduct.variant_info,
+          addonPromoId: cartProduct.addonPromoId,
+          addonPromoName: cartProduct.addonPromoName,
         );
         await into(cartProducts).insert(productToInsert);
       }
@@ -196,6 +212,8 @@ class CartDatabase extends _$CartDatabase {
           extras_price: cartProduct.extras_price,
           extras: cartProduct.extras,
           variant_info: cartProduct.variant_info,
+          addonPromoId: cartProduct.addonPromoId,
+          addonPromoName: cartProduct.addonPromoName,
         ));
       } catch (updateError) {
         debugPrint("Update also failed: $updateError");
@@ -214,8 +232,165 @@ class CartDatabase extends _$CartDatabase {
       (update(cartProducts)..where((product) => product.id.equals(entity.id)))
           .write(entity);
 
+  /// Adds all items of a bundle as separate cart lines with the same bundleId/bundleName.
+  /// [items] each has productId, productName, photo, quantity. [bundlePrice] is split
+  /// so that the sum of line totals equals bundlePrice.
+  Future<void> addBundleToCart({
+    required String bundleId,
+    required String bundleName,
+    required String vendorID,
+    required double bundlePrice,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    if (items.isEmpty) return;
+    int totalQty = 0;
+    for (final item in items) {
+      totalQty += (item['quantity'] is int)
+          ? item['quantity'] as int
+          : (int.tryParse(item['quantity']?.toString() ?? '1') ?? 1);
+    }
+    if (totalQty <= 0) return;
+    final unitPrice = bundlePrice / totalQty;
+    final categoryId = items.first['category_id']?.toString() ?? '';
+
+    for (final item in items) {
+      final productId = (item['productId'] ?? item['id'] ?? '').toString();
+      if (productId.isEmpty) continue;
+      final productName =
+          (item['productName'] ?? item['name'] ?? 'Item').toString();
+      final photo = (item['photo'] ?? item['imageUrl'] ?? '').toString();
+      final qty = (item['quantity'] is int)
+          ? item['quantity'] as int
+          : (int.tryParse(item['quantity']?.toString() ?? '1') ?? 1);
+      if (qty <= 0) continue;
+      final priceStr = unitPrice.toStringAsFixed(2);
+      // id format productId~bundle_bundleId so order toJson (id.split('~').first) sends productId
+      final cartLineId = '${productId}~bundle_$bundleId';
+
+      final cp = CartProduct(
+        id: cartLineId,
+        category_id: categoryId,
+        name: productName,
+        photo: photo,
+        price: priceStr,
+        discountPrice: '',
+        vendorID: vendorID,
+        quantity: qty,
+        extras_price: null,
+        extras: null,
+        variant_info: null,
+        bundleId: bundleId,
+        bundleName: bundleName,
+      );
+      final existing = await allCartProducts;
+      final match = existing
+          .where((p) => p.id == cartLineId && p.bundleId == bundleId)
+          .toList();
+      if (match.isNotEmpty) {
+        final e = match.first;
+        await updateProduct(CartProduct(
+          id: e.id,
+          category_id: e.category_id ?? categoryId,
+          name: e.name,
+          photo: e.photo,
+          price: e.price,
+          discountPrice: e.discountPrice,
+          vendorID: e.vendorID,
+          quantity: e.quantity + qty,
+          extras_price: e.extras_price,
+          extras: e.extras,
+          variant_info: e.variant_info,
+          bundleId: e.bundleId,
+          bundleName: e.bundleName,
+        ));
+      } else {
+        await into(cartProducts).insert(cp);
+      }
+    }
+  }
+
+  /// Adds a single add-on product to cart at addon price with promo tracking.
+  /// Cart line id: productId~addon_addonPromoId so same addon can be merged.
+  Future<void> addAddonToCart({
+    required String addonPromoId,
+    required String addonPromoName,
+    required String productId,
+    required String productName,
+    required String photo,
+    required double addonPrice,
+    required String vendorID,
+    int quantity = 1,
+  }) async {
+    if (quantity < 1) return;
+    final categoryId = productId;
+    final priceStr = addonPrice.toStringAsFixed(2);
+    final cartLineId = '${productId}~addon_$addonPromoId';
+
+    final cp = CartProduct(
+      id: cartLineId,
+      category_id: categoryId,
+      name: productName,
+      photo: photo,
+      price: priceStr,
+      discountPrice: '',
+      vendorID: vendorID,
+      quantity: quantity,
+      extras_price: null,
+      extras: null,
+      variant_info: null,
+      bundleId: null,
+      bundleName: null,
+      addonPromoId: addonPromoId,
+      addonPromoName: addonPromoName,
+    );
+    final existing = await allCartProducts;
+    final match = existing
+        .where((p) => p.id == cartLineId && p.addonPromoId == addonPromoId)
+        .toList();
+    if (match.isNotEmpty) {
+      final e = match.first;
+      await updateProduct(CartProduct(
+        id: e.id,
+        category_id: e.category_id ?? categoryId,
+        name: e.name,
+        photo: e.photo,
+        price: e.price,
+        discountPrice: e.discountPrice,
+        vendorID: e.vendorID,
+        quantity: e.quantity + quantity,
+        extras_price: e.extras_price,
+        extras: e.extras,
+        variant_info: e.variant_info,
+        bundleId: e.bundleId,
+        bundleName: e.bundleName,
+        addonPromoId: e.addonPromoId,
+        addonPromoName: e.addonPromoName,
+      ));
+    } else {
+      await into(cartProducts).insert(cp);
+    }
+  }
+
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 3;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onUpgrade: (migrator, from, to) async {
+          if (from < 2) {
+            await migrator.addColumn(
+                cartProducts, cartProducts.bundleId);
+            await migrator.addColumn(
+                cartProducts, cartProducts.bundleName);
+          }
+          if (from < 3) {
+            await migrator.addColumn(
+                cartProducts, cartProducts.addonPromoId);
+            await migrator.addColumn(
+                cartProducts, cartProducts.addonPromoName);
+          }
+        },
+      );
 
   Future<List<CartProduct>> get allCartProducts => select(cartProducts).get();
 

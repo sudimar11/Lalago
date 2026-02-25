@@ -61,6 +61,9 @@ import '../../resources/colors.dart';
 import '../../widget/shimmer_widgets.dart';
 import '../../widgets/add_icon_button.dart';
 import '../home/sections/widgets/restaurant_eta_fee_row.dart';
+import 'package:foodie_customer/model/addon_promo_model.dart';
+import 'package:foodie_customer/services/addon_promo_service.dart';
+import 'package:foodie_customer/ui/addon/addon_promo_card.dart';
 
 class ProductDetailsScreen extends StatefulWidget {
   final ProductModel productModel;
@@ -977,6 +980,12 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                             ),
                           ],
                         ),
+                  _CompleteYourMealSection(
+                    productId: widget.productModel.id,
+                    vendorId: widget.vendorModel.id,
+                    cartDatabase: cartDatabase,
+                    onAdded: updatePrice,
+                  ),
                   if (widget.productModel.calories != 0 &&
                       widget.productModel.grams != 0 &&
                       widget.productModel.proteins != 0 &&
@@ -2792,6 +2801,94 @@ class AddAddonsDemo {
       'isCheck': isCheck,
       'categoryID': categoryID
     };
+  }
+}
+
+class _CompleteYourMealSection extends StatelessWidget {
+  final String productId;
+  final String vendorId;
+  final CartDatabase cartDatabase;
+  final VoidCallback? onAdded;
+
+  const _CompleteYourMealSection({
+    required this.productId,
+    required this.vendorId,
+    required this.cartDatabase,
+    this.onAdded,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<AddonPromoModel>>(
+      future: AddonPromoService.getPromosByTriggerProduct(
+        productId: productId,
+        restaurantId: vendorId,
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SizedBox(
+            height: 180,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final promos = snapshot.data ?? [];
+        if (promos.isEmpty) return const SizedBox.shrink();
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Complete your meal',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 200,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: promos.length,
+                  itemBuilder: (context, index) {
+                    final promo = promos[index];
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: AddonPromoCard(
+                        promo: promo,
+                        onAdd: () async {
+                          await cartDatabase.addAddonToCart(
+                            addonPromoId: promo.addonPromoId,
+                            addonPromoName: promo.addonName,
+                            productId: promo.addonProductId,
+                            productName: promo.addonProductName,
+                            photo: promo.imageUrl ?? '',
+                            addonPrice: promo.addonPrice,
+                            vendorID: vendorId,
+                            quantity: 1,
+                          );
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  '${promo.addonName} added to cart',
+                                ),
+                              ),
+                            );
+                            onAdded?.call();
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 

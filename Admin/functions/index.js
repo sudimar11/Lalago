@@ -5849,3 +5849,286 @@ exports.migrateDriverPendingToAccepted = functions
     }
   });
 
+// --- Bundle Deals ---
+
+/**
+ * On restaurant_orders create: validate bundle lines (active bundle, correct price).
+ * Reject order if any bundle is invalid; otherwise update bundle analytics.
+ */
+exports.validateBundleOrder = functions
+  .region('us-central1')
+  .firestore.document('restaurant_orders/{orderId}')
+  .onCreate(async (snap, context) => {
+    const orderId = context.params.orderId;
+    const data = snap.data() || {};
+    const products = data.products || [];
+    if (!Array.isArray(products) || products.length === 0) return null;
+
+    const db = getDb();
+    const orderRef = snap.ref;
+    const bundleIds = [...new Set(
+      products
+        .map((p) => (p && p.bundleId) ? p.bundleId : null)
+        .filter(Boolean)
+    )];
+
+    for (const bundleId of bundleIds) {
+      const bundleSnap = await db.collection('bundles').doc(bundleId).get();
+      if (!bundleSnap.exists) {
+        await orderRef.update({
+          status: 'Order Rejected',
+          rejectionReason: 'Bundle no longer available',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[validateBundleOrder] Order ${orderId} rejected: bundle ${bundleId} not found`);
+        return null;
+      }
+      const bundle = bundleSnap.data() || {};
+      if (bundle.status !== 'active') {
+        await orderRef.update({
+          status: 'Order Rejected',
+          rejectionReason: 'Bundle is no longer active',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[validateBundleOrder] Order ${orderId} rejected: bundle ${bundleId} not active`);
+        return null;
+      }
+
+      const bundleItems = bundle.items || [];
+      const bundlePrice = Number(bundle.bundlePrice) || 0;
+      const linesWithBundle = products.filter((p) => p && p.bundleId === bundleId);
+      let linesTotal = 0;
+      for (const line of linesWithBundle) {
+        const qty = typeof line.quantity === 'number' ? line.quantity : parseInt(line.quantity, 10) || 0;
+        const price = typeof line.price === 'number' ? line.price : parseFloat(String(line.price || 0)) || 0;
+        linesTotal += qty * price;
+      }
+      const tolerance = 0.02;
+      if (Math.abs(linesTotal - bundlePrice) > tolerance) {
+        await orderRef.update({
+          status: 'Order Rejected',
+          rejectionReason: 'Bundle price mismatch',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[validateBundleOrder] Order ${orderId} rejected: bundle ${bundleId} price mismatch ${linesTotal} vs ${bundlePrice}`);
+        return null;
+      }
+    }
+
+    // Update analytics for each bundle in the order
+    for (const bundleId of bundleIds) {
+      try {
+        const linesWithBundle = products.filter((p) => p && p.bundleId === bundleId);
+        let revenue = 0;
+        for (const line of linesWithBundle) {
+          const qty = typeof line.quantity === 'number' ? line.quantity : parseInt(line.quantity, 10) || 0;
+          const price = typeof line.price === 'number' ? line.price : parseFloat(String(line.price || 0)) || 0;
+          revenue += qty * price;
+        }
+        const batch = db.batch();
+        const analyticsRef = db.collection('bundle_analytics').doc(bundleId);
+        const bundleRef = db.collection('bundles').doc(bundleId);
+        batch.set(analyticsRef, {
+          purchaseCount: admin.firestore.FieldValue.increment(1),
+          revenue: admin.firestore.FieldValue.increment(revenue),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        batch.update(bundleRef, {
+          totalPurchasesCount: admin.firestore.FieldValue.increment(1),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        await batch.commit();
+      } catch (e) {
+        console.warn(`[validateBundleOrder] Analytics update failed for bundle ${bundleId}:`, e);
+      }
+    }
+    return null;
+  });
+
+/**
+ * Scheduled: set status to 'inactive' for bundles whose endDate has passed.
+ */
+exports.deactivateExpiredBundles = functions
+  .region('us-central1')
+  .pubsub.schedule('every 1 hours')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = new Date();
+    const snap = await db
+      .collection('bundles')
+      .where('status', '==', 'active')
+      .get();
+    let count = 0;
+    for (const doc of snap.docs) {
+      const endDate = doc.get('endDate');
+      if (!endDate) continue;
+      const end = endDate.toDate ? endDate.toDate() : new Date(endDate.seconds * 1000);
+      if (end < now) {
+        await doc.ref.update({
+          status: 'inactive',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        count++;
+      }
+    }
+    if (count > 0) {
+      console.log(`[deactivateExpiredBundles] Deactivated ${count} expired bundles`);
+    }
+    return null;
+  });
+
+// --- Add-on Promos ---
+
+/**
+ * On restaurant_orders create: validate add-on promo lines (active promo, correct price, same restaurant, max qty).
+ * Reject order if any addon line is invalid; otherwise update addon analytics.
+ */
+exports.validateAddonOrder = functions
+  .region('us-central1')
+  .firestore.document('restaurant_orders/{orderId}')
+  .onCreate(async (snap, context) => {
+    const orderId = context.params.orderId;
+    const data = snap.data() || {};
+    if (data.status === 'Order Rejected') return null;
+    const products = data.products || [];
+    if (!Array.isArray(products) || products.length === 0) return null;
+
+    const addonPromoIds = [...new Set(
+      products
+        .map((p) => (p && p.addonPromoId) ? p.addonPromoId : null)
+        .filter(Boolean)
+    )];
+    if (addonPromoIds.length === 0) return null;
+
+    const db = getDb();
+    const orderRef = snap.ref;
+    const orderVendorID = data.vendorID || data.vendorId || '';
+
+    for (const addonPromoId of addonPromoIds) {
+      const promoSnap = await db.collection('addon_promos').doc(addonPromoId).get();
+      if (!promoSnap.exists) {
+        await orderRef.update({
+          status: 'Order Rejected',
+          rejectionReason: 'Add-on promo no longer available',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[validateAddonOrder] Order ${orderId} rejected: addon promo ${addonPromoId} not found`);
+        return null;
+      }
+      const promo = promoSnap.data() || {};
+      if (promo.status !== 'active') {
+        await orderRef.update({
+          status: 'Order Rejected',
+          rejectionReason: 'Add-on promo is no longer active',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[validateAddonOrder] Order ${orderId} rejected: addon promo ${addonPromoId} not active`);
+        return null;
+      }
+      if (promo.restaurantId !== orderVendorID) {
+        await orderRef.update({
+          status: 'Order Rejected',
+          rejectionReason: 'Add-on promo restaurant mismatch',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[validateAddonOrder] Order ${orderId} rejected: addon promo ${addonPromoId} wrong restaurant`);
+        return null;
+      }
+
+      const expectedAddonPrice = Number(promo.addonPrice) || 0;
+      const maxQty = Number(promo.maxQuantityPerOrder) || 1;
+      const linesWithAddon = products.filter((p) => p && p.addonPromoId === addonPromoId);
+      let totalQty = 0;
+      let linesTotal = 0;
+      for (const line of linesWithAddon) {
+        const qty = typeof line.quantity === 'number' ? line.quantity : parseInt(line.quantity, 10) || 0;
+        const price = typeof line.price === 'number' ? line.price : parseFloat(String(line.price || 0)) || 0;
+        totalQty += qty;
+        linesTotal += qty * price;
+      }
+      if (totalQty > maxQty) {
+        await orderRef.update({
+          status: 'Order Rejected',
+          rejectionReason: 'Add-on quantity exceeds maximum allowed',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[validateAddonOrder] Order ${orderId} rejected: addon promo ${addonPromoId} qty ${totalQty} > max ${maxQty}`);
+        return null;
+      }
+      const expectedTotal = expectedAddonPrice * totalQty;
+      const tolerance = 0.02;
+      if (totalQty > 0 && Math.abs(linesTotal - expectedTotal) > tolerance) {
+        await orderRef.update({
+          status: 'Order Rejected',
+          rejectionReason: 'Add-on price mismatch',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[validateAddonOrder] Order ${orderId} rejected: addon promo ${addonPromoId} price mismatch ${linesTotal} vs ${expectedTotal}`);
+        return null;
+      }
+    }
+
+    // Update analytics for each addon promo in the order
+    for (const addonPromoId of addonPromoIds) {
+      try {
+        const linesWithAddon = products.filter((p) => p && p.addonPromoId === addonPromoId);
+        let revenue = 0;
+        for (const line of linesWithAddon) {
+          const qty = typeof line.quantity === 'number' ? line.quantity : parseInt(line.quantity, 10) || 0;
+          const price = typeof line.price === 'number' ? line.price : parseFloat(String(line.price || 0)) || 0;
+          revenue += qty * price;
+        }
+        const batch = db.batch();
+        const analyticsRef = db.collection('addon_promo_analytics').doc(addonPromoId);
+        const promoRef = db.collection('addon_promos').doc(addonPromoId);
+        batch.set(analyticsRef, {
+          purchaseCount: admin.firestore.FieldValue.increment(1),
+          revenue: admin.firestore.FieldValue.increment(revenue),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        batch.update(promoRef, {
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        await batch.commit();
+      } catch (e) {
+        console.warn(`[validateAddonOrder] Analytics update failed for addon promo ${addonPromoId}:`, e);
+      }
+    }
+    return null;
+  });
+
+/**
+ * Scheduled: set status to 'inactive' for addon promos whose endDate has passed.
+ * Skips docs without endDate.
+ */
+exports.deactivateExpiredAddonPromos = functions
+  .region('us-central1')
+  .pubsub.schedule('every 1 hours')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = new Date();
+    const snap = await db
+      .collection('addon_promos')
+      .where('status', '==', 'active')
+      .get();
+    let count = 0;
+    for (const doc of snap.docs) {
+      const endDate = doc.get('endDate');
+      if (!endDate) continue;
+      const end = endDate.toDate ? endDate.toDate() : new Date(endDate.seconds * 1000);
+      if (end < now) {
+        await doc.ref.update({
+          status: 'inactive',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        count++;
+      }
+    }
+    if (count > 0) {
+      console.log(`[deactivateExpiredAddonPromos] Deactivated ${count} expired addon promos`);
+    }
+    return null;
+  });
+

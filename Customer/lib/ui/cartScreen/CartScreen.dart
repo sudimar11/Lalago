@@ -43,9 +43,27 @@ import 'package:foodie_customer/ui/home/view_all_restaurant.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/ui/cartScreen/estimated_delivery_time_card.dart';
 import 'package:foodie_customer/model/User.dart';
+import 'package:foodie_customer/model/addon_promo_model.dart';
+import 'package:foodie_customer/services/addon_promo_service.dart';
+import 'package:foodie_customer/ui/addon/addon_promo_card.dart';
 
 /// Temporarily set to false to silence cart debug logs while tracing FCM.
 const bool _kShowCartLogs = false;
+
+/// One entry in the cart list: either a bundle header or a product row.
+class _CartEntry {
+  final bool isBundleHeader;
+  final String? bundleName;
+  final CartProduct? product;
+
+  _CartEntry.bundleHeader(this.bundleName)
+      : isBundleHeader = true,
+        product = null;
+
+  _CartEntry.item(this.product)
+      : isBundleHeader = false,
+        bundleName = null;
+}
 
 class CartScreen extends StatefulWidget {
   final bool fromContainer;
@@ -2160,8 +2178,32 @@ class _CartScreenState extends State<CartScreen> {
                           ListView.builder(
                             shrinkWrap: true,
                             physics: const ClampingScrollPhysics(),
-                            itemCount: cartProducts.length,
+                            itemCount: _buildCartEntries(cartProducts).length,
                             itemBuilder: (context, index) {
+                              final entries =
+                                  _buildCartEntries(cartProducts);
+                              final entry = entries[index];
+                              if (entry.isBundleHeader) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: 13,
+                                    top: 16,
+                                    right: 13,
+                                    bottom: 4,
+                                  ),
+                                  child: Text(
+                                    'Bundle: ${entry.bundleName ?? "Value Meal"}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
+                                      color: isDarkMode(context)
+                                          ? Colors.grey.shade300
+                                          : Colors.grey.shade700,
+                                    ),
+                                  ),
+                                );
+                              }
+                              final product = entry.product!;
                               return Container(
                                 margin: const EdgeInsets.only(
                                     left: 13, top: 13, right: 13, bottom: 5),
@@ -2188,12 +2230,17 @@ class _CartScreenState extends State<CartScreen> {
                                 ),
                                 child: Column(
                                   children: [
-                                    buildCartRow(
-                                        cartProducts[index], lstExtras),
+                                    buildCartRow(product, lstExtras),
                                   ],
                                 ),
                               );
                             },
+                          ),
+                        if (cartProducts.isNotEmpty && currentVendorID.isNotEmpty)
+                          _CartCompleteYourMealSection(
+                            cartProducts: cartProducts,
+                            vendorID: currentVendorID,
+                            cartDatabase: cartDatabase,
                           ),
                         buildTotalRow(
                             (snapshot.hasData &&
@@ -2560,6 +2607,22 @@ class _CartScreenState extends State<CartScreen> {
         },
       ),
     );
+  }
+
+  static List<_CartEntry> _buildCartEntries(List<CartProduct> products) {
+    final List<_CartEntry> entries = [];
+    for (int i = 0; i < products.length; i++) {
+      final p = products[i];
+      final bid = p.bundleId;
+      final bname = p.bundleName;
+      if (bid != null &&
+          bid.isNotEmpty &&
+          (i == 0 || products[i - 1].bundleId != bid)) {
+        entries.add(_CartEntry.bundleHeader(bname ?? 'Bundle'));
+      }
+      entries.add(_CartEntry.item(p));
+    }
+    return entries;
   }
 
   buildCartRow(CartProduct cartProduct, List<AddAddonsDemo> addons) {
@@ -5451,6 +5514,104 @@ class _ManualCouponSection extends StatelessWidget {
           const SizedBox(height: 8),
         ],
       ),
+    );
+  }
+}
+
+class _CartCompleteYourMealSection extends StatelessWidget {
+  final List<CartProduct> cartProducts;
+  final String vendorID;
+  final CartDatabase cartDatabase;
+
+  const _CartCompleteYourMealSection({
+    required this.cartProducts,
+    required this.vendorID,
+    required this.cartDatabase,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<AddonPromoModel>>(
+      future: AddonPromoService.getActiveAddonPromos(
+        restaurantId: vendorID,
+        limit: 50,
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done ||
+            !snapshot.hasData) {
+          return const SizedBox.shrink();
+        }
+        final allPromos = snapshot.data!;
+        final cartProductIds =
+            cartProducts.map((p) => p.id.split('~').first).toSet();
+        final addonCountByPromo = <String, int>{};
+        for (final p in cartProducts) {
+          if (p.addonPromoId != null && p.addonPromoId!.isNotEmpty) {
+            addonCountByPromo[p.addonPromoId!] =
+                (addonCountByPromo[p.addonPromoId!] ?? 0) + p.quantity;
+          }
+        }
+        final promos = allPromos.where((promo) {
+          if (promo.triggerType != 'product') return false;
+          if (!cartProductIds.contains(promo.triggerProductId)) return false;
+          final count = addonCountByPromo[promo.addonPromoId] ?? 0;
+          return count < promo.maxQuantityPerOrder;
+        }).toList();
+        if (promos.isEmpty) return const SizedBox.shrink();
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(13, 16, 13, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Complete your meal',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 200,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: promos.length,
+                  itemBuilder: (context, index) {
+                    final promo = promos[index];
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: AddonPromoCard(
+                        promo: promo,
+                        onAdd: () async {
+                          await cartDatabase.addAddonToCart(
+                            addonPromoId: promo.addonPromoId,
+                            addonPromoName: promo.addonName,
+                            productId: promo.addonProductId,
+                            productName: promo.addonProductName,
+                            photo: promo.imageUrl ?? '',
+                            addonPrice: promo.addonPrice,
+                            vendorID: vendorID,
+                            quantity: 1,
+                          );
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  '${promo.addonName} added to cart',
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
