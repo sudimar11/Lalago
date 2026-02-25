@@ -38,7 +38,7 @@ class CategoriesHorizontalSection extends StatelessWidget {
                 left: 10,
                 bottom: 0,
               ),
-              height: 100,
+              height: 110,
               child: ShimmerWidgets.categoryListShimmer(),
             );
           }
@@ -50,7 +50,7 @@ class CategoriesHorizontalSection extends StatelessWidget {
                 left: 10,
                 bottom: 0,
               ),
-              height: 100,
+              height: 110,
               child: ListView.builder(
                 scrollDirection: Axis.horizontal,
                 itemCount:

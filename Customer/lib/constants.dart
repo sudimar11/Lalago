@@ -32,6 +32,19 @@ const DarkContainerBorderColor = 0xff515151;
 
 double radiusValue = 0.0;
 
+// Default location for guests without location set (Jolo, Sulu, Philippines)
+const double DEFAULT_LATITUDE = 6.0522;
+const double DEFAULT_LONGITUDE = 121.0022;
+const String DEFAULT_ADDRESS = "Jolo, Sulu";
+
+/// Returns true if the given coordinates match the default Jolo, Sulu location.
+bool isDefaultLocation(double? lat, double? lng) {
+  if (lat == null || lng == null) return false;
+  const epsilon = 0.0001;
+  return (lat - DEFAULT_LATITUDE).abs() < epsilon &&
+      (lng - DEFAULT_LONGITUDE).abs() < epsilon;
+}
+
 const STORY = 'story';
 const MENU_ITEM = 'menu_items';
 const USERS = 'users';

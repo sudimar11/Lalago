@@ -22,7 +22,6 @@ import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/signUp/SignUpScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 import 'package:foodie_customer/ui/home/HomeScreen.dart';
-import 'package:foodie_customer/ui/location_permission_screen.dart';
 import 'package:foodie_customer/ui/onBoarding/OnBoardingScreen.dart';
 
 import 'package:foodie_customer/ui/profile/ProfileScreen.dart';
@@ -168,47 +167,17 @@ if (fbUser == null) {
         final loc = MyAppState.selectedPosotion.location;
         final hasValidGuestLocation = loc != null &&
             !(loc.latitude == 0 && loc.longitude == 0);
-        if (hasValidGuestLocation) {
-          debugPrint('[AUTH_INIT] Guest mode with valid location');
-          await _initializeAfterUserSet();
-          if (mounted) {
-            setState(() {
-              _isInitializing = false;
-            });
-          }
-          return;
+        if (!hasValidGuestLocation) {
+          debugPrint(
+              '[AUTH_INIT] Guest mode, setting default Jolo, Sulu location');
+          MyAppState.selectedPosotion = AddressModel.defaultJoloLocation();
         }
-        debugPrint(
-            '[AUTH_INIT] No user, no location; redirecting to location pick');
-        if (mounted) {
-          pushReplacement(context, LocationPermissionScreen());
-        }
-        return;
-      }
-      if (fbUser == null) {
-        MyAppState.currentUser = null;
-        user = null;
-        final loc = MyAppState.selectedPosotion.location;
-        final hasValidGuestLocation = loc != null &&
-            !(loc.latitude == 0 && loc.longitude == 0);
-        if (hasValidGuestLocation) {
-          debugPrint('[AUTH_INIT] Guest mode with valid location');
-          await _initializeAfterUserSet();
-          if (mounted) {
-            setState(() {
-              _isInitializing = false;
-            });
-          }
-          return;
-        }
-        debugPrint(
-            '[AUTH_INIT] No user, no location; redirecting to location pick');
+        debugPrint('[AUTH_INIT] Guest mode with valid location');
+        await _initializeAfterUserSet();
         if (mounted) {
           setState(() {
-            _cancelLoadingTimers();
             _isInitializing = false;
           });
-          pushReplacement(context, LocationPermissionScreen());
         }
         return;
       }
@@ -256,8 +225,9 @@ if (fbUser == null) {
           );
           MyAppState.selectedPosotion = defaultAddr;
         } else {
-          pushAndRemoveUntil(context, LocationPermissionScreen(), false);
-          return;
+          debugPrint(
+              '[AUTH_INIT] User has no shipping address; using default Jolo');
+          MyAppState.selectedPosotion = AddressModel.defaultJoloLocation();
         }
       }
 

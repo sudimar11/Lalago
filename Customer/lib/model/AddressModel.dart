@@ -1,3 +1,4 @@
+import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/User.dart';
 
 class AddressModel {
@@ -47,4 +48,20 @@ class AddressModel {
   String getFullAddress() {
     return '${address == null || address!.isEmpty ? "" : address} $locality ${landmark == null || landmark!.isEmpty ? "" : landmark.toString()}';
   }
+
+  /// Returns an AddressModel with default Jolo, Sulu location.
+  static AddressModel defaultJoloLocation() {
+    return AddressModel(
+      locality: DEFAULT_ADDRESS,
+      location: UserLocation(
+        latitude: DEFAULT_LATITUDE,
+        longitude: DEFAULT_LONGITUDE,
+      ),
+    );
+  }
+
+  /// Returns true if this address uses the default Jolo, Sulu fallback.
+  bool get usesDefaultLocation =>
+      location != null &&
+      isDefaultLocation(location!.latitude, location!.longitude);
 }

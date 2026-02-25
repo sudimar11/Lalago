@@ -118,6 +118,8 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_place_picker_mb/google_maps_place_picker.dart';
 import 'package:foodie_customer/ui/home/food_varieties.dart';
 import 'package:foodie_customer/ui/home/home_content_stack.dart';
+import 'package:foodie_customer/widget/default_location_banner.dart';
+import 'package:foodie_customer/widget/location_options_bottom_sheet.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/widget/lazy_loading_widget.dart';
 import 'package:foodie_customer/ui/home/more_stories_screen.dart';
@@ -2022,6 +2024,11 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            if (MyAppState.selectedPosotion.usesDefaultLocation)
+                              DefaultLocationBanner(
+                                onSetLocationTap: () =>
+                                    showLocationOptionsBottomSheet(context),
+                              ),
                             HomeHeaderSection(
                               selctedOrderTypeValue: selctedOrderTypeValue,
                               rotatingHints: rotatingHints,

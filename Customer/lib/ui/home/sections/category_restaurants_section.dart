@@ -104,7 +104,7 @@ class CategoryRestaurantsSection extends StatelessWidget {
                         ),
                         SizedBox(
                           width: MediaQuery.of(context).size.width,
-                          height: MediaQuery.of(context).size.height * 0.28,
+                          height: MediaQuery.of(context).size.height * 0.29,
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                             child: RepaintBoundary(
@@ -383,115 +383,126 @@ class _CategoryRestaurantCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          vendorModel.title,
-                          maxLines: 1,
-                          style: TextStyle(
-                            fontFamily: "Poppinsb",
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.2,
-                            color: isDarkMode(context)
-                                ? Colors.white
-                                : Colors.black87,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Color(COLOR_PRIMARY).withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Icon(
-                                Icons.location_on_rounded,
-                                color: Color(COLOR_PRIMARY),
-                                size: 16,
-                              ),
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            vendorModel.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: "Poppinsb",
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.2,
+                              color: isDarkMode(context)
+                                  ? Colors.white
+                                  : Colors.black87,
                             ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                vendorModel.location,
-                                maxLines: 1,
-                                style: TextStyle(
-                                  fontFamily: "Poppinsr",
-                                  fontSize: 13,
-                                  color: isDarkMode(context)
-                                      ? Colors.white70
-                                      : Colors.grey.shade600,
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Color(COLOR_PRIMARY).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Icon(
+                                  Icons.location_on_rounded,
+                                  color: Color(COLOR_PRIMARY),
+                                  size: 16,
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                        RestaurantEtaFeeRow(
-                          vendorModel: vendorModel,
-                          currencyModel: currencyModel,
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Color(COLOR_PRIMARY).withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(6),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  vendorModel.location,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontFamily: "Poppinsr",
+                                    fontSize: 13,
+                                    color: isDarkMode(context)
+                                        ? Colors.white70
+                                        : Colors.grey.shade600,
+                                  ),
+                                ),
                               ),
-                              child: Icon(
-                                Icons.access_time_rounded,
-                                color: Color(COLOR_PRIMARY),
-                                size: 16,
+                            ],
+                          ),
+                          RestaurantEtaFeeRow(
+                            vendorModel: vendorModel,
+                            currencyModel: currencyModel,
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Color(COLOR_PRIMARY).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Icon(
+                                  Icons.access_time_rounded,
+                                  color: Color(COLOR_PRIMARY),
+                                  size: 16,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${hour.toString().padLeft(2, "0")}h ${minute.toStringAsFixed(0).padLeft(2, "0")}m',
-                              style: TextStyle(
-                                fontFamily: "Poppinssb",
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: isDarkMode(context)
-                                    ? Colors.white70
-                                    : Colors.grey.shade700,
+                              const SizedBox(width: 8),
+                              Text(
+                                '${hour.toString().padLeft(2, "0")}h ${minute.toStringAsFixed(0).padLeft(2, "0")}m',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontFamily: "Poppinssb",
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: isDarkMode(context)
+                                      ? Colors.white70
+                                      : Colors.grey.shade700,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Color(COLOR_PRIMARY).withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(6),
+                              const SizedBox(width: 12),
+                              Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Color(COLOR_PRIMARY).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Icon(
+                                  Icons.directions_car_rounded,
+                                  color: Color(COLOR_PRIMARY),
+                                  size: 16,
+                                ),
                               ),
-                              child: Icon(
-                                Icons.directions_car_rounded,
-                                color: Color(COLOR_PRIMARY),
-                                size: 16,
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  "${kilometer.toDouble().toStringAsFixed(currencyModel?.decimal ?? 1)} km",
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontFamily: "Poppinssb",
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: isDarkMode(context)
+                                        ? Colors.white70
+                                        : Colors.grey.shade700,
+                                  ),
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              "${kilometer.toDouble().toStringAsFixed(currencyModel?.decimal ?? 1)} km",
-                              style: TextStyle(
-                                fontFamily: "Poppinssb",
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: isDarkMode(context)
-                                    ? Colors.white70
-                                    : Colors.grey.shade700,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                      ],
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                      ),
                     ),
                   ),
                 ],

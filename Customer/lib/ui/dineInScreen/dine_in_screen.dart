@@ -22,8 +22,6 @@ import 'package:foodie_customer/ui/home/view_all_popular_restaurant_screen.dart'
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:location/location.dart' as loc;
-import 'package:location/location.dart';
 import 'package:google_maps_place_picker_mb/google_maps_place_picker.dart';
 
 class DineInScreen extends StatefulWidget {
@@ -36,7 +34,6 @@ class DineInScreen extends StatefulWidget {
 }
 
 class _DineInScreenState extends State<DineInScreen> {
-  loc.Location location = new loc.Location();
   String? currentLocation = "", name = "";
   final fireStoreUtils = FireStoreUtils();
 
@@ -54,58 +51,39 @@ class _DineInScreenState extends State<DineInScreen> {
   @override
   void initState() {
     super.initState();
-    getLocationData();
+    _initializeLocation();
     cuisinesFuture = fireStoreUtils.getCuisines();
   }
 
   bool isLoading = true;
 
-  getLocationData() async {
-    await getCurrentLocation().then((value) {
-      setState(() {
-        AddressModel addressModel = AddressModel();
-        addressModel.location =
-            UserLocation(latitude: value.latitude, longitude: value.longitude);
-        MyAppState.selectedPosotion = addressModel;
-      });
-      getData();
-    }).onError((error, stackTrace) {
-      getPermission();
-    });
+  /// Uses existing location from MyAppState. Does NOT auto-request location.
+  /// If no valid location, shows empty state; user taps "Select" for PlacePicker.
+  Future<void> _initializeLocation() async {
+    final loc = MyAppState.selectedPosotion.location;
+    final hasValidLocation = loc != null &&
+        !(loc.latitude == 0 && loc.longitude == 0);
 
-    await placemarkFromCoordinates(
-            MyAppState.selectedPosotion.location!.latitude,
-            MyAppState.selectedPosotion.location!.longitude)
-        .then((value) {
-      Placemark placeMark = value[0];
-
-      setState(() {
-        currentLocation =
-            "${placeMark.name}, ${placeMark.subLocality}, ${placeMark.locality}, ${placeMark.administrativeArea}, ${placeMark.postalCode}, ${placeMark.country}";
-      });
-    }).catchError((error) {
-      debugPrint("------>${error.toString()}");
-    });
-
-    setState(() {
-      isLoading = false;
-    });
-  }
-
-  getPermission() async {
-    setState(() {
-      isLoading = false;
-    });
-    PermissionStatus _permissionGranted = await location.hasPermission();
-    if (_permissionGranted == PermissionStatus.denied) {
-      _permissionGranted = await location.requestPermission();
-      if (_permissionGranted != PermissionStatus.granted) {
+    if (hasValidLocation) {
+      try {
+        final placeMarks =
+            await placemarkFromCoordinates(loc.latitude, loc.longitude);
+        if (placeMarks.isNotEmpty && mounted) {
+          final pm = placeMarks.first;
+          setState(() {
+            currentLocation =
+                "${pm.name}, ${pm.subLocality}, ${pm.locality}, "
+                "${pm.administrativeArea}, ${pm.postalCode}, ${pm.country}";
+          });
+        }
+        getData();
+      } catch (e) {
+        debugPrint("placemarkFromCoordinates error: $e");
         getData();
       }
     }
-    setState(() {
-      isLoading = false;
-    });
+
+    if (mounted) setState(() => isLoading = false);
   }
 
   void dispose() {
