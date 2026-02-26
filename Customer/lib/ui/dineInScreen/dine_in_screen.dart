@@ -60,7 +60,7 @@ class _DineInScreenState extends State<DineInScreen> {
   /// Uses existing location from MyAppState. Does NOT auto-request location.
   /// If no valid location, shows empty state; user taps "Select" for PlacePicker.
   Future<void> _initializeLocation() async {
-    final loc = MyAppState.selectedPosotion.location;
+    final loc = MyAppState.selectedPosition.location;
     final hasValidLocation = loc != null &&
         !(loc.latitude == 0 && loc.longitude == 0);
 
@@ -198,8 +198,8 @@ class _DineInScreenState extends State<DineInScreen> {
           isDarkMode(context) ? Color(DARK_COLOR) : Color(0xffFFFFFF),
       body: isLoading == true
           ? Center(child: CircularProgressIndicator())
-          : (MyAppState.selectedPosotion.location!.latitude == 0 &&
-                  MyAppState.selectedPosotion.location!.longitude == 0)
+          : (MyAppState.selectedPosition.location!.latitude == 0 &&
+                  MyAppState.selectedPosition.location!.longitude == 0)
               ? Center(
                   child: showEmptyState(
                       "We don't have your location.", context,
@@ -217,7 +217,7 @@ class _DineInScreenState extends State<DineInScreen> {
                               addressModel.location = UserLocation(
                                   latitude: result.geometry!.location.lat,
                                   longitude: result.geometry!.location.lng);
-                              MyAppState.selectedPosotion = addressModel;
+                              MyAppState.selectedPosition = addressModel;
 
                               currentLocation = result.formattedAddress;
                               getData();
@@ -285,11 +285,11 @@ class _DineInScreenState extends State<DineInScreen> {
                                       final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
                                           MyAppState.currentUser!.shippingAddress);
                                       if (resolvedDefaultAddress != null) {
-                                        MyAppState.selectedPosotion = resolvedDefaultAddress;
+                                        MyAppState.selectedPosition = resolvedDefaultAddress;
                                         currentLocation = resolvedDefaultAddress.getFullAddress();
                                       } else {
                                         // Fallback to returned address if no default found
-                                        MyAppState.selectedPosotion = value;
+                                        MyAppState.selectedPosition = value;
                                         currentLocation = value.getFullAddress();
                                       }
                                     } else {
@@ -297,7 +297,7 @@ class _DineInScreenState extends State<DineInScreen> {
                                       final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
                                           MyAppState.currentUser!.shippingAddress);
                                       if (resolvedDefaultAddress != null) {
-                                        MyAppState.selectedPosotion = resolvedDefaultAddress;
+                                        MyAppState.selectedPosition = resolvedDefaultAddress;
                                         currentLocation = resolvedDefaultAddress.getFullAddress();
                                       }
                                     }
@@ -978,8 +978,8 @@ class _DineInScreenState extends State<DineInScreen> {
     double distanceInMeters = Geolocator.distanceBetween(
         latitude,
         longitude,
-        MyAppState.selectedPosotion.location!.latitude,
-        MyAppState.selectedPosotion.location!.longitude);
+        MyAppState.selectedPosition.location!.latitude,
+        MyAppState.selectedPosition.location!.longitude);
     double kilometer = distanceInMeters / 1000;
 
     return kilometer.toStringAsFixed(2).toString();

@@ -489,10 +489,10 @@ class _CurrentAddressChangeScreenState
           final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
               MyAppState.currentUser!.shippingAddress);
           if (resolvedDefaultAddress != null) {
-            MyAppState.selectedPosotion = resolvedDefaultAddress;
+            MyAppState.selectedPosition = resolvedDefaultAddress;
           } else {
-            // Fallback: Update selectedPosotion with the new address model
-            MyAppState.selectedPosotion = userAddress;
+            // Fallback: Update selectedPosition with the new address model
+            MyAppState.selectedPosition = userAddress;
           }
 
           hideProgress();
@@ -540,7 +540,7 @@ class _CurrentAddressChangeScreenState
           await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
 
           // Update selected position
-          MyAppState.selectedPosotion = newAddress;
+          MyAppState.selectedPosition = newAddress;
 
           hideProgress();
         } catch (e) {

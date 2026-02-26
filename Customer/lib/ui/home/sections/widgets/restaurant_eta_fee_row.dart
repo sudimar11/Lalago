@@ -29,7 +29,7 @@ class RestaurantEtaFeeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final userLocation = MyAppState.selectedPosotion.location;
+    final userLocation = MyAppState.selectedPosition.location;
     if (userLocation == null ||
         (userLocation.latitude == 0 && userLocation.longitude == 0)) {
       return const SizedBox.shrink();

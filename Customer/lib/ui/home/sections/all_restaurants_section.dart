@@ -24,6 +24,7 @@ import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/FavouriteModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 
 class AllRestaurantsSection extends StatefulWidget {
   final List<OfferModel> offerList;
@@ -608,10 +609,14 @@ class _AllRestaurantCardState extends State<_AllRestaurantCard> {
     bool hasOfferBadge = discountAmountTempList.isNotEmpty;
 
     return GestureDetector(
-      onTap: () => push(
-        context,
-        NewVendorProductsScreen(vendorModel: widget.vendorModel),
-      ),
+      onTap: () {
+        ClickTrackingService.logClick(
+          userId: MyAppState.currentUser?.userID ?? 'guest',
+          restaurantId: widget.vendorModel.id,
+          source: 'all_restaurants',
+        );
+        push(context, NewVendorProductsScreen(vendorModel: widget.vendorModel));
+      },
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         child: Stack(

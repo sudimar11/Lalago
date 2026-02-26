@@ -12,6 +12,7 @@ import 'package:foodie_customer/model/FavouriteModel.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
@@ -22,6 +23,7 @@ class NewArrivalCard extends StatefulWidget {
   final List<ProductModel> allProducts;
   final List<String> lstFav;
   final VoidCallback? onFavoriteChanged;
+  final String? clickSource;
 
   const NewArrivalCard({
     Key? key,
@@ -29,6 +31,7 @@ class NewArrivalCard extends StatefulWidget {
     required this.allProducts,
     required this.lstFav,
     this.onFavoriteChanged,
+    this.clickSource,
   }) : super(key: key);
 
   @override
@@ -65,10 +68,14 @@ class _NewArrivalCardState extends State<NewArrivalCard> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: GestureDetector(
-        onTap: () => push(
-          context,
-          NewVendorProductsScreen(vendorModel: widget.vendorModel),
-        ),
+        onTap: () {
+          ClickTrackingService.logClick(
+            userId: MyAppState.currentUser?.userID ?? 'guest',
+            restaurantId: widget.vendorModel.id,
+            source: widget.clickSource ?? 'new_arrivals',
+          );
+          push(context, NewVendorProductsScreen(vendorModel: widget.vendorModel));
+        },
         child: SizedBox(
           width: MediaQuery.of(context).size.width * 0.75,
           child: Stack(
@@ -412,9 +419,9 @@ class _NewArrivalCardState extends State<NewArrivalCard> {
                                     widget.vendorModel.latitude,
                                     widget.vendorModel.longitude,
                                     MyAppState
-                                        .selectedPosotion.location!.latitude,
+                                        .selectedPosition.location!.latitude,
                                     MyAppState
-                                        .selectedPosotion.location!.longitude);
+                                        .selectedPosition.location!.longitude);
                             double kilometer = distanceInMeters / 1000;
 
                             return Container(

@@ -69,7 +69,7 @@ void showLocationOptionsBottomSheet(BuildContext context) {
                   ),
                 ).then((value) {
                   if (context.mounted && value != null) {
-                    MyAppState.selectedPosotion = value as AddressModel;
+                    MyAppState.selectedPosition = value as AddressModel;
                     pushAndRemoveUntil(
                       context,
                       ContainerScreen(user: MyAppState.currentUser),
@@ -93,7 +93,7 @@ Future<void> _openPlacePicker(BuildContext context) async {
       builder: (ctx) => PlacePicker(
         apiKey: GOOGLE_API_KEY,
         onPlacePicked: (result) {
-          MyAppState.selectedPosotion = AddressModel(
+          MyAppState.selectedPosition = AddressModel(
             locality: result.formattedAddress,
             location: UserLocation(
               latitude: result.geometry!.location.lat,

@@ -57,6 +57,9 @@ import 'package:brgy/driver_collection_page.dart';
 import 'package:brgy/pages/customer_suggestions_page.dart';
 import 'package:brgy/pages/customer_feedback_page.dart';
 import 'package:brgy/pages/search_history_page.dart';
+import 'package:brgy/pages/search_analytics_dashboard.dart';
+import 'package:brgy/pages/click_analytics_dashboard.dart';
+import 'package:brgy/pages/recommendation_performance.dart';
 import 'package:brgy/map_page.dart';
 import 'package:brgy/constants.dart';
 import 'package:brgy/services/order_sound_service.dart';
@@ -515,6 +518,21 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             icon: Icons.search,
             label: 'Search history',
             onTap: () => push(const SearchHistoryPage()),
+          ),
+          _DashboardNavItem(
+            icon: Icons.analytics,
+            label: 'Search Analytics',
+            onTap: () => push(const SearchAnalyticsDashboard()),
+          ),
+          _DashboardNavItem(
+            icon: Icons.touch_app,
+            label: 'Click Analytics',
+            onTap: () => push(const ClickAnalyticsDashboard()),
+          ),
+          _DashboardNavItem(
+            icon: Icons.insights,
+            label: 'Recommendation Performance',
+            onTap: () => push(const RecommendationPerformance()),
           ),
         ];
 

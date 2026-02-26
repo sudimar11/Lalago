@@ -133,7 +133,7 @@ class HomeHeaderSection extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const SizedBox(width: 140),
+                      const Spacer(),
                       // Message icon
                       GestureDetector(
                         onTap: onMessageTap,
@@ -431,7 +431,7 @@ class HomeHeaderSection extends StatelessWidget {
                         child: GestureDetector(
                           onTap: onLocationTap,
                           child: Text(
-                            MyAppState.selectedPosotion
+                            MyAppState.selectedPosition
                                 .getFullAddress()
                                 .toString(),
                             maxLines: 1,

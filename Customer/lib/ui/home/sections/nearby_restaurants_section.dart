@@ -121,7 +121,7 @@ class _NearbyRestaurantsSectionState extends State<NearbyRestaurantsSection> {
                   ? List<VendorModel>.from(nearbyAll)
                   : List<VendorModel>.from(fallbackAll);
               // Sort by distance so nearest shows first
-              final loc = MyAppState.selectedPosotion.location;
+              final loc = MyAppState.selectedPosition.location;
               if (loc != null && displayList.length > 1) {
                 displayList.sort((VendorModel a, VendorModel b) {
                   final distA = Geolocator.distanceBetween(

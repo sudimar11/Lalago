@@ -262,7 +262,7 @@ class _ViewAllNewArrivalRestaurantScreenState extends State<ViewAllNewArrivalRes
 
   void _getUserLocation() async {
     setState(() {
-      position = LatLng(MyAppState.selectedPosotion.location!.latitude, MyAppState.selectedPosotion.location!.longitude);
+      position = LatLng(MyAppState.selectedPosition.location!.latitude, MyAppState.selectedPosition.location!.longitude);
     });
   }
 

@@ -850,7 +850,7 @@ class _DeliveryAddressScreenState extends State<DeliveryAddressScreen> {
                       final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
                           MyAppState.currentUser!.shippingAddress);
                       if (resolvedDefaultAddress != null) {
-                        MyAppState.selectedPosotion = resolvedDefaultAddress;
+                        MyAppState.selectedPosition = resolvedDefaultAddress;
                       }
                       
                       hideProgress();
@@ -1004,7 +1004,7 @@ class _DeliveryAddressScreenState extends State<DeliveryAddressScreen> {
               final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
                   MyAppState.currentUser!.shippingAddress);
               if (resolvedDefaultAddress != null) {
-                MyAppState.selectedPosotion = resolvedDefaultAddress;
+                MyAppState.selectedPosition = resolvedDefaultAddress;
               }
               
               hideProgress();
@@ -1042,7 +1042,7 @@ class _DeliveryAddressScreenState extends State<DeliveryAddressScreen> {
                 final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
                     MyAppState.currentUser!.shippingAddress);
                 if (resolvedDefaultAddress != null) {
-                  MyAppState.selectedPosotion = resolvedDefaultAddress;
+                  MyAppState.selectedPosition = resolvedDefaultAddress;
                 }
               }
               

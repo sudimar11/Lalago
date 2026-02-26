@@ -7,6 +7,7 @@ import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/bundle_model.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/SearchHistoryService.dart';
@@ -85,6 +86,8 @@ class SearchScreenState extends State<SearchScreen> {
   static const int _minSearchLength = 2;
   static const int _maxResultsPerCategory = 50;
   static const int _maxSuggestions = 6;
+
+  String? _currentSearchDocId;
 
   @override
   void initState() {
@@ -711,6 +714,7 @@ class SearchScreenState extends State<SearchScreen> {
       productSearchList.clear();
       bundleSearchList.clear();
       _isFiltering = false;
+      _currentSearchDocId = null;
     });
   }
 
@@ -891,7 +895,7 @@ class SearchScreenState extends State<SearchScreen> {
         );
 
         // Track in Firestore for analytics
-        await fireStoreUtils.trackSearchQuery(
+        final docId = await fireStoreUtils.trackSearchQuery(
           userId: MyAppState.currentUser?.userID ?? '',
           searchQuery: query.trim(),
           searchType: searchType,
@@ -900,6 +904,7 @@ class SearchScreenState extends State<SearchScreen> {
               ? '${MyAppState.currentUser!.location.latitude},${MyAppState.currentUser!.location.longitude}'
               : null,
         );
+        if (mounted) _currentSearchDocId = docId;
       } catch (e) {
         debugPrint('Error tracking search: $e');
       }
@@ -920,14 +925,23 @@ class SearchScreenState extends State<SearchScreen> {
     super.dispose();
   }
 
+  void _onRestaurantTapFromSearch(VendorModel vendorModel) {
+    if (_currentSearchDocId != null) {
+      fireStoreUtils.updateSearchClick(_currentSearchDocId!, vendorModel.id);
+      _currentSearchDocId = null;
+    }
+    ClickTrackingService.logClick(
+      userId: MyAppState.currentUser?.userID ?? 'guest',
+      restaurantId: vendorModel.id,
+      source: 'search_results',
+    );
+    push(context, NewVendorProductsScreen(vendorModel: vendorModel));
+  }
+
   Widget _buildVendorCard(VendorModel vendorModel) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onTap: () => push(
-          context,
-          NewVendorProductsScreen(
-            vendorModel: vendorModel,
-          )),
+      onTap: () => _onRestaurantTapFromSearch(vendorModel),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(

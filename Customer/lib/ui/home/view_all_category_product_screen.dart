@@ -89,7 +89,7 @@ class _ViewAllCategoryProductScreenState extends State<ViewAllCategoryProductScr
   }
 
   Widget buildVendorItemData(BuildContext context, VendorModel vendorModel) {
-    double distanceInMeters = Geolocator.distanceBetween(vendorModel.latitude, vendorModel.longitude, MyAppState.selectedPosotion.location!.latitude, MyAppState.selectedPosotion.location!.longitude);
+    double distanceInMeters = Geolocator.distanceBetween(vendorModel.latitude, vendorModel.longitude, MyAppState.selectedPosition.location!.latitude, MyAppState.selectedPosition.location!.longitude);
     double kilometer = distanceInMeters / 1000;
     double minutes = 1.2;
     double value = minutes * kilometer;

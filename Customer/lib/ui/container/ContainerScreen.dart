@@ -164,13 +164,13 @@ class _ContainerScreen extends State<ContainerScreen> {
 if (fbUser == null) {
         MyAppState.currentUser = null;
         user = null;
-        final loc = MyAppState.selectedPosotion.location;
+        final loc = MyAppState.selectedPosition.location;
         final hasValidGuestLocation = loc != null &&
             !(loc.latitude == 0 && loc.longitude == 0);
         if (!hasValidGuestLocation) {
           debugPrint(
               '[AUTH_INIT] Guest mode, setting default Jolo, Sulu location');
-          MyAppState.selectedPosotion = AddressModel.defaultJoloLocation();
+          MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
         }
         debugPrint('[AUTH_INIT] Guest mode with valid location');
         await _initializeAfterUserSet();
@@ -223,11 +223,11 @@ if (fbUser == null) {
             (a) => a.isDefault == true,
             orElse: () => addrs.first,
           );
-          MyAppState.selectedPosotion = defaultAddr;
+          MyAppState.selectedPosition = defaultAddr;
         } else {
           debugPrint(
               '[AUTH_INIT] User has no shipping address; using default Jolo');
-          MyAppState.selectedPosotion = AddressModel.defaultJoloLocation();
+          MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
         }
       }
 
@@ -376,11 +376,11 @@ if (fbUser == null) {
     });
 
     // Only get country if location is available
-    if (MyAppState.selectedPosotion.location != null) {
+    if (MyAppState.selectedPosition.location != null) {
       try {
         List<Placemark> placeMarks = await placemarkFromCoordinates(
-            MyAppState.selectedPosotion.location!.latitude,
-            MyAppState.selectedPosotion.location!.longitude);
+            MyAppState.selectedPosition.location!.latitude,
+            MyAppState.selectedPosition.location!.longitude);
 
         if (placeMarks.isNotEmpty) {
           country = placeMarks.first.country;

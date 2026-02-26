@@ -6972,3 +6972,9 @@ exports.deactivateExpiredAddonPromos = functions
     return null;
   });
 
+// Personalized discovery (GrabFood-style)
+const { computeItemSimilarities } = require('./computeItemSimilarities');
+const { computeUserPreferences } = require('./computeUserPreferences');
+exports.computeItemSimilarities = computeItemSimilarities;
+exports.computeUserPreferences = computeUserPreferences;
+

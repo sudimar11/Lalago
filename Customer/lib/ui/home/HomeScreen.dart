@@ -78,6 +78,9 @@ import 'package:foodie_customer/ui/home/sections/populars_card.dart';
 import 'package:foodie_customer/ui/home/sections/meal_for_one_section.dart';
 import 'package:foodie_customer/ui/home/sections/nearby_restaurants_section.dart';
 import 'package:foodie_customer/ui/home/sections/new_restaurants_section.dart';
+import 'package:foodie_customer/ui/home/sections/trending_now_section.dart';
+import 'package:foodie_customer/ui/home/sections/time_based_section.dart';
+import 'package:foodie_customer/ui/home/sections/personalized_recommendations_section.dart';
 import 'package:foodie_customer/ui/home/sections/categories_horizontal_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_nearby_foods_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_popular_today_section.dart';
@@ -97,8 +100,6 @@ import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.
 import 'package:foodie_customer/widget/permission_dialog.dart';
 import 'package:foodie_customer/widget/product_status_badge.dart';
 import 'package:foodie_customer/widget/category_card.dart';
-import 'package:foodie_customer/widget/recommended_section.dart';
-
 import 'package:geocoding/geocoding.dart';
 
 import 'package:geolocator/geolocator.dart';
@@ -139,7 +140,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   //String lastSearch = '';
   late List<ProductModel> allProducts = [];
-  List<ProductModel> recommendedProducts = [];
   final fireStoreUtils = FireStoreUtils();
 
   // Safety flag to prevent setState after navigation
@@ -163,7 +163,6 @@ class _HomeScreenState extends State<HomeScreen> {
   //     PageController(viewportFraction: 0.8, keepPage: true);
 
   List<VendorModel> vendors = [];
-  List<VendorModel> recommendedVendors = [];
   List<VendorModel> mostRatedRestaurantsFallback = [];
   List<VendorModel> nearbyFoodVendors = [];
   List<VendorModel> popularTodayVendors = [];
@@ -189,8 +188,6 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<List<OrderModel>>? orderAgainStreamSubscription;
 
   bool _didRunNearbyFallback = false;
-  bool _didRunRecommendedFallback = false;
-  bool _didLogRecommendedVendorEmpty = false;
   bool _didRunPopularTodayFallback = false;
   bool _isLoadingPopularToday = false;
   bool _popularTodayError = false;
@@ -862,11 +859,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _loadActivePromos(); // Don't await - let it run independently
     }
 
-    // Phase 6: Recommendations (depends on products)
-    if (mounted && !_isLeavingHome) {
-      fetchLastSearchAndUpdateRecommendations();
-    }
-
     // Initialize cuisine future once
     _cachedCuisinesFuture = fireStoreUtils.getCuisines();
 
@@ -963,20 +955,20 @@ class _HomeScreenState extends State<HomeScreen> {
         defaultAddress = MyAppState.currentUser!.shippingAddress!.first;
       }
 
-      // Only update if selectedPosotion is empty or different
+      // Only update if selectedPosition is empty or different
       bool shouldUpdate = false;
-      if (MyAppState.selectedPosotion.location == null ||
-          (MyAppState.selectedPosotion.location!.latitude == 0 &&
-              MyAppState.selectedPosotion.location!.longitude == 0)) {
+      if (MyAppState.selectedPosition.location == null ||
+          (MyAppState.selectedPosition.location!.latitude == 0 &&
+              MyAppState.selectedPosition.location!.longitude == 0)) {
         shouldUpdate = true;
       } else if (defaultAddress.id != null &&
-          MyAppState.selectedPosotion.id != null &&
-          defaultAddress.id != MyAppState.selectedPosotion.id) {
+          MyAppState.selectedPosition.id != null &&
+          defaultAddress.id != MyAppState.selectedPosition.id) {
         shouldUpdate = true;
       }
 
       if (shouldUpdate) {
-        MyAppState.selectedPosotion = defaultAddress;
+        MyAppState.selectedPosition = defaultAddress;
         if (mounted && !_isLeavingHome) {
           _updateState();
         }
@@ -1018,9 +1010,6 @@ class _HomeScreenState extends State<HomeScreen> {
         fetchAllProducts(), // Already calls fetchOrderAgainProducts & fetchMealForOneProducts internally
         getData(),
       ]);
-
-      // Run dependent operation after parallel fetch completes
-      fetchLastSearchAndUpdateRecommendations();
     } catch (e) {
       if (mounted && !_isLeavingHome) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1105,104 +1094,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _updateState(callback: () {
       allProducts = products; // Populate global product list
     });
-    generateRecommendations(); // Generate initial recommendations
     fetchOrderAgainProducts(); // Fetch order again products after load
     fetchMealForOneProducts(); // Fetch meal for one products after load
-  }
-
-  void fetchLastSearchAndUpdateRecommendations() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-
-    // Fetch the last search term
-    String lastSearch = prefs.getString('lastSearch') ?? '';
-
-    // Filter recommendations based on the last search term
-    if (!mounted || _isLeavingHome) return;
-    _updateState(callback: () {
-      recommendedProducts = allProducts.where((product) {
-        return product.name.toLowerCase().contains(lastSearch.toLowerCase());
-      }).toList();
-    });
-  }
-
-  void generateRecommendations() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-
-    // Fetch the last search term
-    String lastSearch = prefs.getString('lastSearch') ?? '';
-
-    // Initialize recommendations list
-    List<ProductModel> recommendations = [];
-
-    // Add products matching the last search term
-    if (lastSearch.isNotEmpty) {
-      recommendations.addAll(allProducts.where((product) =>
-          product.name.toLowerCase().contains(lastSearch.toLowerCase())));
-    }
-
-    // Add frequently ordered products (mock logic placeholder).
-    // Replace with actual user activity tracking.
-    List<String> frequentOrders = [
-      'product1',
-      'product2',
-    ]; // Example product IDs
-    recommendations.addAll(
-        allProducts.where((product) => frequentOrders.contains(product.id)));
-
-    if (recommendations.isEmpty &&
-        lastSearch.isEmpty &&
-        !_didRunRecommendedFallback) {
-      _didRunRecommendedFallback = true;
-      final List<String> topTodayIds =
-          await fireStoreUtils.getMostOrderedProductIdsForToday();
-      final Map<String, ProductModel> productMap = {
-        for (var product in allProducts) product.id: product,
-      };
-      recommendations = topTodayIds
-          .map((id) => productMap[id])
-          .whereType<ProductModel>()
-          .toList();
-
-    }
-
-    // Final fallback: fill with all products if still empty
-    if (recommendations.isEmpty && allProducts.isNotEmpty) {
-      recommendations.addAll(allProducts);
-      recommendations.shuffle();
-    }
-
-    final Set<String> vendorIds = recommendations
-        .map((product) => product.vendorID)
-        .where((id) => id.isNotEmpty)
-        .toSet();
-    if (vendorIds.isNotEmpty) {
-      final List<Future<VendorModel?>> vendorFutures = vendorIds
-          .map((vendorId) => FireStoreUtils.getVendor(vendorId))
-          .toList();
-      final List<VendorModel?> fetchedVendors =
-          await Future.wait(vendorFutures);
-      recommendedVendors = fetchedVendors
-          .whereType<VendorModel>()
-          .toList();
-    } else {
-      recommendedVendors = [];
-    }
-
-    // Remove duplicates and limit to 30 recommendations
-    recommendations = recommendations.toSet().toList();
-    recommendations = recommendations.take(30).toList();
-
-    // Update the UI with new recommendations
-    if (!mounted || _isLeavingHome) return;
-    _updateState(callback: () {
-      recommendedProducts = recommendations;
-    });
-
-    if (recommendedProducts.isNotEmpty &&
-        recommendedVendors.isEmpty &&
-        !_didLogRecommendedVendorEmpty) {
-      _didLogRecommendedVendorEmpty = true;
-    }
   }
 
   // Fetch order again products from user's completed orders
@@ -1800,10 +1693,10 @@ class _HomeScreenState extends State<HomeScreen> {
           final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
               MyAppState.currentUser!.shippingAddress);
           if (resolvedDefaultAddress != null) {
-            MyAppState.selectedPosotion = resolvedDefaultAddress;
+            MyAppState.selectedPosition = resolvedDefaultAddress;
           } else {
             // Fallback to returned address if no default found
-            MyAppState.selectedPosotion = value;
+            MyAppState.selectedPosition = value;
           }
 
           if (mounted && !_isLeavingHome) {
@@ -1849,7 +1742,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       latitude: result.geometry!.location.lat,
                       longitude: result.geometry!.location.lng);
 
-                  MyAppState.selectedPosotion = addressModel;
+                  MyAppState.selectedPosition = addressModel;
 
                   if (!mounted || _isLeavingHome) return;
                   _updateState();
@@ -1889,7 +1782,7 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           });
 
-          MyAppState.selectedPosotion = addressModel;
+          MyAppState.selectedPosition = addressModel;
 
           await hideProgress();
 
@@ -1913,8 +1806,8 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: isDark
           ? const Color.fromARGB(255, 201, 144, 1)
           : const Color(0xffFFFFFF),
-      body: (MyAppState.selectedPosotion.location!.latitude == 0 &&
-              MyAppState.selectedPosotion.location!.longitude == 0)
+      body: (MyAppState.selectedPosition.location!.latitude == 0 &&
+              MyAppState.selectedPosition.location!.longitude == 0)
               ? Center(
                   child: showEmptyState("We don't have your location.", context,
                       description:
@@ -1950,7 +1843,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       latitude: result.geometry!.location.lat,
                                       longitude: result.geometry!.location.lng);
 
-                                  MyAppState.selectedPosotion = addressModel;
+                                  MyAppState.selectedPosition = addressModel;
 
                                   if (mounted && !_isLeavingHome) {
                                     _updateState();
@@ -1998,7 +1891,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             });
                           });
 
-                          MyAppState.selectedPosotion = addressModel;
+                          MyAppState.selectedPosition = addressModel;
 
                           await hideProgress();
 
@@ -2024,7 +1917,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (MyAppState.selectedPosotion.usesDefaultLocation)
+                            if (MyAppState.selectedPosition.usesDefaultLocation)
                               DefaultLocationBanner(
                                 onSetLocationTap: () =>
                                     showLocationOptionsBottomSheet(context),
@@ -2212,16 +2105,27 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ],
                               ),
 
-                            // Recommended for You Section
                             RepaintBoundary(
-                              child: RecommendedSection(
-                                recommendedProducts: recommendedProducts,
-                                vendors: recommendedVendors.isNotEmpty
-                                    ? recommendedVendors
-                                    : vendors,
-                                isLoading: recommendedProducts.isEmpty &&
-                                    allProducts.isNotEmpty &&
-                                    !_didRunRecommendedFallback,
+                              child: TrendingNowSection(
+                                allProducts: allProducts,
+                                lstFav: lstFav,
+                                onFavoriteChanged: _onFavoriteChanged,
+                              ),
+                            ),
+
+                            RepaintBoundary(
+                              child: TimeBasedSection(
+                                allProducts: allProducts,
+                                lstFav: lstFav,
+                                onFavoriteChanged: _onFavoriteChanged,
+                              ),
+                            ),
+
+                            RepaintBoundary(
+                              child: PersonalizedRecommendationsSection(
+                                allProducts: allProducts,
+                                offerList: offerList,
+                                currencyModel: currencyModel,
                               ),
                             ),
 
@@ -4284,9 +4188,9 @@ class _HomeScreenState extends State<HomeScreen> {
     // Don't call getData() here to avoid starting heavy streams immediately
     try {
       // Just check if location is available, don't start restaurant stream yet
-      if (MyAppState.selectedPosotion.location == null ||
-          (MyAppState.selectedPosotion.location!.latitude == 0 &&
-              MyAppState.selectedPosotion.location!.longitude == 0)) {
+      if (MyAppState.selectedPosition.location == null ||
+          (MyAppState.selectedPosition.location!.latitude == 0 &&
+              MyAppState.selectedPosition.location!.longitude == 0)) {
         // Location not set, check permissions but don't load data yet
         await getPermission();
       }

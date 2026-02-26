@@ -5,6 +5,7 @@ import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/VendorCategoryModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/view_all_category_product_screen.dart';
@@ -80,8 +81,8 @@ class HomeRestaurantsSection extends StatelessWidget {
                                 double distanceInMeters = Geolocator.distanceBetween(
                                     vendorModel.latitude,
                                     vendorModel.longitude,
-                                    MyAppState.selectedPosotion.location!.latitude,
-                                    MyAppState.selectedPosotion.location!.longitude);
+                                    MyAppState.selectedPosition.location!.latitude,
+                                    MyAppState.selectedPosition.location!.longitude);
 
                                 double kilometer = distanceInMeters / 1000;
                                 double minutes = 1.2;
@@ -93,7 +94,14 @@ class HomeRestaurantsSection extends StatelessWidget {
                                   margin: const EdgeInsets.symmetric(
                                       horizontal: 10, vertical: 8),
                                   child: GestureDetector(
-                                    onTap: () async {
+                                    onTap: () {
+                                      ClickTrackingService.logClick(
+                                        userId: MyAppState.currentUser
+                                                ?.userID ??
+                                            'guest',
+                                        restaurantId: vendorModel.id,
+                                        source: 'home_restaurants',
+                                      );
                                       push(
                                         context,
                                         NewVendorProductsScreen(

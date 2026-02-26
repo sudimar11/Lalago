@@ -1537,7 +1537,7 @@ class FireStoreUtils {
   //   List<VendorModel> vendors = [];
   //   try {
   //     var collectionReference = (path == null || path.isEmpty) ? firestore.collection(VENDORS) : firestore.collection(VENDORS).where("enabledDiveInFuture", isEqualTo: true);
-  //     GeoFirePoint center = geo.point(latitude: MyAppState.selectedPosotion.location!.location!.latitude, longitude: MyAppState.selectedPosotion.location!.location!.longitude);
+  //     GeoFirePoint center = geo.point(latitude: MyAppState.selectedPosition.location!.location!.latitude, longitude: MyAppState.selectedPosition.location!.location!.longitude);
   //     String field = 'g';
   //     Stream<List<DocumentSnapshot>> stream = geo.collection(collectionRef: collectionReference).within(center: center, radius: radiusValue, field: field, strictMode: true);
   //
@@ -1813,8 +1813,8 @@ class FireStoreUtils {
               .collection(VENDORS)
               .where("enabledDiveInFuture", isEqualTo: true);
       GeoFirePoint center = geo.point(
-          latitude: MyAppState.selectedPosotion.location!.latitude,
-          longitude: MyAppState.selectedPosotion.location!.longitude);
+          latitude: MyAppState.selectedPosition.location!.latitude,
+          longitude: MyAppState.selectedPosition.location!.longitude);
 
       String field = 'g';
       Stream<List<DocumentSnapshot>> stream = geo
@@ -1831,7 +1831,7 @@ class FireStoreUtils {
           return;
         }
 
-        final userLocation = MyAppState.selectedPosotion.location;
+        final userLocation = MyAppState.selectedPosition.location;
         if (userLocation == null) {
           for (var document in documentList) {
             final data = document.data() as Map<String, dynamic>;
@@ -1889,8 +1889,8 @@ class FireStoreUtils {
           .where('categoryID', isEqualTo: categoryId);
 
       GeoFirePoint center = geo.point(
-          latitude: MyAppState.selectedPosotion.location!.latitude,
-          longitude: MyAppState.selectedPosotion.location!.longitude);
+          latitude: MyAppState.selectedPosition.location!.latitude,
+          longitude: MyAppState.selectedPosition.location!.longitude);
 
       debugPrint(
           '📍 getCategoryRestaurants(categoryId="$categoryId"): Starting query with location filter (radius=$radiusValue km)');
@@ -1946,8 +1946,8 @@ class FireStoreUtils {
             .collection(VENDORS)
             .where("enabledDiveInFuture", isEqualTo: true);
     GeoFirePoint center = geo.point(
-        latitude: MyAppState.selectedPosotion.location!.latitude,
-        longitude: MyAppState.selectedPosotion.location!.longitude);
+        latitude: MyAppState.selectedPosition.location!.latitude,
+        longitude: MyAppState.selectedPosition.location!.longitude);
     String field = 'g';
     Stream<List<DocumentSnapshot>> stream = geo
         .collection(collectionRef: collectionReference)
@@ -1963,7 +1963,7 @@ class FireStoreUtils {
           vendors.add(VendorModel.fromJson(data));
         }
         // Sort by distance so Nearby Restaurants shows nearest first
-        final loc = MyAppState.selectedPosotion.location;
+        final loc = MyAppState.selectedPosition.location;
         if (loc != null && vendors.length > 1) {
           vendors.sort((VendorModel a, VendorModel b) {
             final distA = Geolocator.distanceBetween(
@@ -2026,8 +2026,8 @@ class FireStoreUtils {
             .collection(VENDORS)
             .where('categoryID', isEqualTo: cuisineID);
     GeoFirePoint center = geo.point(
-        latitude: MyAppState.selectedPosotion.location!.latitude,
-        longitude: MyAppState.selectedPosotion.location!.longitude);
+        latitude: MyAppState.selectedPosition.location!.latitude,
+        longitude: MyAppState.selectedPosition.location!.longitude);
     String field = 'g';
     Stream<List<DocumentSnapshot>> stream = geo
         .collection(collectionRef: collectionReference)
@@ -5376,7 +5376,8 @@ class FireStoreUtils {
   }
 
   // Search Analytics Methods
-  Future<void> trackSearchQuery({
+  /// Returns document ID for click-update flow, or null on error.
+  Future<String?> trackSearchQuery({
     required String userId,
     required String searchQuery,
     required String searchType,
@@ -5399,11 +5400,24 @@ class FireStoreUtils {
         deviceInfo: Platform.operatingSystem,
       );
 
-      await firestore
+      final docRef = await firestore
           .collection(SEARCH_ANALYTICS)
           .add(searchAnalytics.toJson());
+      return docRef.id;
     } catch (e) {
       debugPrint('Error tracking search: $e');
+      return null;
+    }
+  }
+
+  Future<void> updateSearchClick(String docId, String restaurantId) async {
+    try {
+      await firestore.collection(SEARCH_ANALYTICS).doc(docId).update({
+        'clickedRestaurantId': restaurantId,
+        'clickedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Error updating search click: $e');
     }
   }
 

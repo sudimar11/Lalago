@@ -269,7 +269,7 @@ class _ViewAllPopularRestaurantScreenState extends State<ViewAllPopularRestauran
     //      .getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
 
     setState(() {
-      position = LatLng(MyAppState.selectedPosotion.location!.latitude, MyAppState.selectedPosotion.location!.longitude);
+      position = LatLng(MyAppState.selectedPosition.location!.latitude, MyAppState.selectedPosition.location!.longitude);
       // cameraPosition = CameraPosition(
       //   target: LatLng(position.latitude, position.longitude),
       //   zoom: 14.4746,

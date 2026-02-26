@@ -33,8 +33,8 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
     var collectionReference = FireStoreUtils.firestore.collection(VENDORS);
 
     GeoFirePoint center = GeoFlutterFire().point(
-        latitude: MyAppState.selectedPosotion.location!.latitude,
-        longitude: MyAppState.selectedPosotion.location!.longitude);
+        latitude: MyAppState.selectedPosition.location!.latitude,
+        longitude: MyAppState.selectedPosition.location!.longitude);
     String field = 'g';
 
     Stream<List<DocumentSnapshot>> stream = GeoFlutterFire()

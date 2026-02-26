@@ -11,6 +11,7 @@ import 'package:foodie_customer/model/FavouriteModel.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
@@ -186,10 +187,14 @@ class _TopRestaurantCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: GestureDetector(
-        onTap: () => push(
-          context,
-          NewVendorProductsScreen(vendorModel: vendorModel),
-        ),
+        onTap: () {
+          ClickTrackingService.logClick(
+            userId: MyAppState.currentUser?.userID ?? 'guest',
+            restaurantId: vendorModel.id,
+            source: 'top_restaurants',
+          );
+          push(context, NewVendorProductsScreen(vendorModel: vendorModel));
+        },
         child: SizedBox(
           width: MediaQuery.of(context).size.width * 0.75,
           child: Stack(
@@ -585,8 +590,8 @@ class _DistanceWidget extends StatelessWidget {
     double distanceInMeters = Geolocator.distanceBetween(
       vendorModel.latitude,
       vendorModel.longitude,
-      MyAppState.selectedPosotion.location!.latitude,
-      MyAppState.selectedPosotion.location!.longitude,
+      MyAppState.selectedPosition.location!.latitude,
+      MyAppState.selectedPosition.location!.longitude,
     );
     double kilometer = distanceInMeters / 1000;
 

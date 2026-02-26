@@ -845,7 +845,7 @@ class _CartScreenState extends State<CartScreen> {
   void initState() {
     super.initState();
 
-    addressModel = MyAppState.selectedPosotion;
+    addressModel = MyAppState.selectedPosition;
 
     coupon = _fireStoreUtils.getAllCoupons();
 
@@ -1541,7 +1541,7 @@ class _CartScreenState extends State<CartScreen> {
               latitude: position.latitude,
               longitude: position.longitude,
             );
-            MyAppState.selectedPosotion = addressModel;
+            MyAppState.selectedPosition = addressModel;
           }
         } catch (_) {
           // Keep existing location if GPS fails
@@ -2396,12 +2396,12 @@ class _CartScreenState extends State<CartScreen> {
                                               MyAppState.currentUser!
                                                   .shippingAddress);
                                       if (resolvedDefaultAddress != null) {
-                                        MyAppState.selectedPosotion =
+                                        MyAppState.selectedPosition =
                                             resolvedDefaultAddress;
                                         addressModel = resolvedDefaultAddress;
                                       } else {
                                         // Fallback to returned address if no default found
-                                        MyAppState.selectedPosotion = value;
+                                        MyAppState.selectedPosition = value;
                                         addressModel = value;
                                       }
 
@@ -2420,7 +2420,7 @@ class _CartScreenState extends State<CartScreen> {
                                               MyAppState.currentUser!
                                                   .shippingAddress);
                                       if (resolvedDefaultAddress != null) {
-                                        MyAppState.selectedPosotion =
+                                        MyAppState.selectedPosition =
                                             resolvedDefaultAddress;
                                         addressModel = resolvedDefaultAddress;
                                         // Clear cache and recalculate
@@ -3105,11 +3105,11 @@ class _CartScreenState extends State<CartScreen> {
                           MyAppState.resolveDefaultAddress(
                               MyAppState.currentUser!.shippingAddress);
                       if (resolvedDefaultAddress != null) {
-                        MyAppState.selectedPosotion = resolvedDefaultAddress;
+                        MyAppState.selectedPosition = resolvedDefaultAddress;
                         addressModel = resolvedDefaultAddress;
                       } else {
                         // Fallback to returned address if no default found
-                        MyAppState.selectedPosotion = value;
+                        MyAppState.selectedPosition = value;
                         addressModel = value;
                       }
 
@@ -3127,7 +3127,7 @@ class _CartScreenState extends State<CartScreen> {
                           MyAppState.resolveDefaultAddress(
                               MyAppState.currentUser!.shippingAddress);
                       if (resolvedDefaultAddress != null) {
-                        MyAppState.selectedPosotion = resolvedDefaultAddress;
+                        MyAppState.selectedPosition = resolvedDefaultAddress;
                         addressModel = resolvedDefaultAddress;
                         // Clear cache and recalculate
                         _invalidateDeliveryCache();

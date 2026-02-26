@@ -22,6 +22,7 @@ import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
 import 'package:foodie_customer/utils/DarkThemeProvider.dart';
+import 'package:foodie_customer/utils/session_manager.dart';
 import 'package:foodie_customer/utils/Styles.dart';
 import 'package:foodie_customer/utils/notification_service.dart';
 import 'package:provider/provider.dart';
@@ -217,6 +218,8 @@ void main() async {
 
   await UserPreference.init();
 
+  await SessionManager.initialize();
+
   if (FireStoreUtils.isMessagingEnabled) {
     // Initialize notification service before app can receive FCM (ensures pop-up works)
     final notificationService = NotificationService.instance;
@@ -281,7 +284,7 @@ class MyApp extends StatefulWidget {
 
 class MyAppState extends State<MyApp> with WidgetsBindingObserver {
   static User? currentUser;
-  static AddressModel selectedPosotion = AddressModel();
+  static AddressModel selectedPosition = AddressModel();
   static const _debugLogPath =
       '/Users/sudimard/Desktop/customer/.cursor/debug.log';
 
@@ -327,13 +330,13 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
     }
   }
 
-  /// Updates MyAppState.selectedPosotion with the resolved default address from currentUser's shippingAddress.
+  /// Updates MyAppState.selectedPosition with the resolved default address from currentUser's shippingAddress.
   /// This should be called after any address update operation.
   static void updateSelectedPositionFromDefault() {
     if (currentUser != null && currentUser!.shippingAddress != null) {
       final defaultAddr = resolveDefaultAddress(currentUser!.shippingAddress);
       if (defaultAddr != null) {
-        selectedPosotion = defaultAddr;
+        selectedPosition = defaultAddr;
       }
     }
   }

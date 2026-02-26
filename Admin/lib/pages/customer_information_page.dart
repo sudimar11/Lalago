@@ -118,6 +118,10 @@ class _CustomerInformationPageState extends State<CustomerInformationPage> {
                 _buildActivitySnapshotCard(),
                 const SizedBox(height: 16),
 
+                // Preference Profile Card
+                _buildPreferenceProfileCard(userData),
+                const SizedBox(height: 16),
+
                 // Order History Section
                 _buildOrderHistorySection(),
               ],
@@ -291,6 +295,125 @@ class _CustomerInformationPageState extends State<CustomerInformationPage> {
               Icons.calendar_today,
               'Account Creation Date',
               creationDateText,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreferenceProfileCard(Map<String, dynamic> userData) {
+    final prefs = userData['preferenceProfile'] as Map<String, dynamic>?;
+    if (prefs == null || prefs.isEmpty) {
+      return Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Padding(
+          padding: EdgeInsets.all(16),
+          child: Center(
+            child: Text('No preference data yet'),
+          ),
+        ),
+      );
+    }
+
+    final cuisinePrefs = prefs['cuisinePreferences'] as Map? ?? {};
+    final avgSpend = prefs['avgSpend'];
+    final preferredTimes = prefs['preferredTimes'] as List? ?? [];
+    final favoriteRestaurants = prefs['favoriteRestaurants'] as List? ?? [];
+    final lastUpdated = prefs['lastUpdated'];
+
+    String lastUpdatedStr = 'Unknown';
+    if (lastUpdated != null && lastUpdated is Timestamp) {
+      lastUpdatedStr =
+          DateFormat.yMd().add_Hm().format(lastUpdated.toDate());
+    }
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'User Preference Profile',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 16),
+            if (cuisinePrefs.isNotEmpty) ...[
+              Text(
+                'Cuisine Preferences',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey[700],
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...cuisinePrefs.entries.map((e) {
+                final v = e.value is num ? (e.value as num).toDouble() : 0.0;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 100,
+                        child: Text(e.key.toString()),
+                      ),
+                      Expanded(
+                        child: LinearProgressIndicator(
+                          value: v.clamp(0.0, 1.0),
+                          backgroundColor: Colors.grey[200],
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.orange,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text('${(v * 100).toStringAsFixed(0)}%'),
+                    ],
+                  ),
+                );
+              }),
+              const Divider(height: 24),
+            ],
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Average Spend'),
+              trailing: Text(
+                avgSpend != null
+                    ? '₱${(avgSpend is num ? avgSpend : 0).toStringAsFixed(2)}'
+                    : 'N/A',
+              ),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Preferred Times'),
+              trailing: Text(
+                preferredTimes.isNotEmpty
+                    ? preferredTimes.join(', ')
+                    : 'N/A',
+              ),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Favorite Restaurants'),
+              subtitle: Text('${favoriteRestaurants.length} restaurants'),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Last Updated: $lastUpdatedStr',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[600],
+              ),
             ),
           ],
         ),

@@ -200,9 +200,9 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
               : const Color(0xffFAFAFA),
           body: isLoading == true
               ? Center(child: CircularProgressIndicator())
-              : MyAppState.selectedPosotion.location == null ||
-                      (MyAppState.selectedPosotion.location!.latitude == 0 &&
-                          MyAppState.selectedPosotion.location!.longitude == 0)
+              : MyAppState.selectedPosition.location == null ||
+                      (MyAppState.selectedPosition.location!.latitude == 0 &&
+                          MyAppState.selectedPosition.location!.longitude == 0)
                   ? Center(
                       child: showEmptyState(
                           "We don't have your location.", context,
@@ -239,7 +239,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                         longitude:
                                             result.geometry!.location.lng);
 
-                                    MyAppState.selectedPosotion = addressModel;
+                                    MyAppState.selectedPosition = addressModel;
 
                                     setState(() {});
 
@@ -306,7 +306,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                         value;
 
                                                     MyAppState
-                                                            .selectedPosotion =
+                                                            .selectedPosition =
                                                         addressModel;
 
                                                     setState(() {});
@@ -365,7 +365,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                                       .lng);
 
                                                               MyAppState
-                                                                      .selectedPosotion =
+                                                                      .selectedPosition =
                                                                   addressModel;
 
                                                               setState(() {});
@@ -434,7 +434,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                       });
 
                                                       MyAppState
-                                                              .selectedPosotion =
+                                                              .selectedPosition =
                                                           addressModel;
 
                                                       await hideProgress();
@@ -450,7 +450,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                 Expanded(
                                                     child: Text(
                                                         MyAppState
-                                                            .selectedPosotion
+                                                            .selectedPosition
                                                             .getFullAddress()
                                                             .toString(),
                                                         maxLines: 1,
@@ -2437,8 +2437,8 @@ class _MoreStoriesState extends State<MoreStories> {
                 double distanceInMeters = Geolocator.distanceBetween(
                     vendorModel!.latitude,
                     vendorModel.longitude,
-                    MyAppState.selectedPosotion.location!.latitude,
-                    MyAppState.selectedPosotion.location!.longitude);
+                    MyAppState.selectedPosition.location!.latitude,
+                    MyAppState.selectedPosition.location!.longitude);
 
                 double kilometer = distanceInMeters / 1000;
 

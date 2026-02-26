@@ -379,7 +379,7 @@ class _LoginScreen extends State<LoginScreen> {
           MyAppState.currentUser!.shippingAddress!.isNotEmpty) {
         pushAndRemoveUntil(context, ContainerScreen(user: result), false);
       } else {
-        MyAppState.selectedPosotion = AddressModel.defaultJoloLocation();
+        MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
         pushAndRemoveUntil(context, ContainerScreen(user: result), false);
       }
     }
@@ -429,12 +429,12 @@ class _LoginScreen extends State<LoginScreen> {
             if (MyAppState.currentUser!.shippingAddress!
                 .where((element) => element.isDefault == true)
                 .isNotEmpty) {
-              MyAppState.selectedPosotion = MyAppState
+              MyAppState.selectedPosition = MyAppState
                   .currentUser!.shippingAddress!
                   .where((element) => element.isDefault == true)
                   .single;
             } else {
-              MyAppState.selectedPosotion =
+              MyAppState.selectedPosition =
                   MyAppState.currentUser!.shippingAddress!.first;
             }
 
@@ -490,12 +490,12 @@ class _LoginScreen extends State<LoginScreen> {
             if (MyAppState.currentUser!.shippingAddress!
                 .where((element) => element.isDefault == true)
                 .isNotEmpty) {
-              MyAppState.selectedPosotion = MyAppState
+              MyAppState.selectedPosition = MyAppState
                   .currentUser!.shippingAddress!
                   .where((element) => element.isDefault == true)
                   .single;
             } else {
-              MyAppState.selectedPosotion =
+              MyAppState.selectedPosition =
                   MyAppState.currentUser!.shippingAddress!.first;
             }
 
@@ -544,12 +544,12 @@ class _LoginScreen extends State<LoginScreen> {
             if (MyAppState.currentUser!.shippingAddress!
                 .where((element) => element.isDefault == true)
                 .isNotEmpty) {
-              MyAppState.selectedPosotion = MyAppState
+              MyAppState.selectedPosition = MyAppState
                   .currentUser!.shippingAddress!
                   .where((element) => element.isDefault == true)
                   .single;
             } else {
-              MyAppState.selectedPosotion =
+              MyAppState.selectedPosition =
                   MyAppState.currentUser!.shippingAddress!.first;
             }
 

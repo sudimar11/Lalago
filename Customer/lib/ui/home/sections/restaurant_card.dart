@@ -6,6 +6,8 @@ import 'package:intl/intl.dart';
 
 import 'package:foodie_customer/AppGlobal.dart';
 import 'package:foodie_customer/constants.dart';
+import 'package:foodie_customer/main.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/offer_model.dart';
@@ -20,6 +22,9 @@ class RestaurantCard extends StatelessWidget {
   final List<OfferModel> offerList;
   final List<ProductModel> allProducts;
   final dynamic currencyModel;
+  final String? source;
+  final int? position;
+  final String? recommendationReason;
 
   const RestaurantCard({
     Key? key,
@@ -27,6 +32,9 @@ class RestaurantCard extends StatelessWidget {
     required this.offerList,
     required this.allProducts,
     required this.currencyModel,
+    this.source,
+    this.position,
+    this.recommendationReason,
   }) : super(key: key);
 
   @override
@@ -64,10 +72,19 @@ class RestaurantCard extends StatelessWidget {
     }
 
     return GestureDetector(
-      onTap: () => push(
-        context,
-        NewVendorProductsScreen(vendorModel: vendorModel),
-      ),
+      onTap: () {
+        ClickTrackingService.logClick(
+          userId: MyAppState.currentUser?.userID ?? 'guest',
+          restaurantId: vendorModel.id,
+          source: source ?? 'home_section',
+          metadata: {
+            if (position != null) 'position': position,
+            if (recommendationReason != null)
+              'recommendationReason': recommendationReason,
+          },
+        );
+        push(context, NewVendorProductsScreen(vendorModel: vendorModel));
+      },
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
@@ -180,6 +197,40 @@ class RestaurantCard extends StatelessWidget {
                     )
                   ],
                 ),
+                if (recommendationReason != null)
+                  Container(
+                    margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.info_outline,
+                          size: 12,
+                          color: Colors.orange[700],
+                        ),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            recommendationReason!,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.orange[800],
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 8),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),

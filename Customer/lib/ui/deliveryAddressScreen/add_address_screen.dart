@@ -799,7 +799,7 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
                                     final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
                                         MyAppState.currentUser!.shippingAddress);
                                     if (resolvedDefaultAddress != null) {
-                                      MyAppState.selectedPosotion = resolvedDefaultAddress;
+                                      MyAppState.selectedPosition = resolvedDefaultAddress;
                                     }
                                   } catch (e) {
                                     log("Error updating user data in Firestore: $e");

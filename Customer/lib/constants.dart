@@ -99,6 +99,7 @@ const Setting = 'settings';
 const tax = 'tax';
 const FavouriteRestaurant = "favorite_restaurant";
 const SEARCH_ANALYTICS = 'search_analytics';
+const USER_CLICKS = 'user_clicks';
 const CUSTOMER_FEEDBACK = 'customer_feedback';
 const VENDOR_VIEWERS = 'vendor_viewers';
 const VENDOR_VISITS = 'vendor_visits';

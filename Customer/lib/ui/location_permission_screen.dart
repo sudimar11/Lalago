@@ -167,7 +167,7 @@ class _LocationPermissionScreenState extends State<LocationPermissionScreen> {
         });
       });
 
-      MyAppState.selectedPosotion = addressModel;
+      MyAppState.selectedPosition = addressModel;
 
       await hideProgress();
 
@@ -391,7 +391,7 @@ class _LocationPermissionScreenState extends State<LocationPermissionScreen> {
 
             log(result.toString());
 
-            MyAppState.selectedPosotion = addressModel;
+            MyAppState.selectedPosition = addressModel;
 
             setState(() {});
 
@@ -503,7 +503,7 @@ class _LocationPermissionScreenState extends State<LocationPermissionScreen> {
 
                       setState(() {});
 
-                      MyAppState.selectedPosotion = addressModel;
+                      MyAppState.selectedPosition = addressModel;
 
                       await hideProgress();
 
@@ -527,7 +527,7 @@ class _LocationPermissionScreenState extends State<LocationPermissionScreen> {
                         });
                       });
 
-                      MyAppState.selectedPosotion = addressModel;
+                      MyAppState.selectedPosition = addressModel;
 
                       await hideProgress();
 
@@ -609,7 +609,7 @@ class _LocationPermissionScreenState extends State<LocationPermissionScreen> {
                             .then((value) {
                           if (value != null) {
                             AddressModel addressModel = value;
-                            MyAppState.selectedPosotion = addressModel;
+                            MyAppState.selectedPosition = addressModel;
                             pushAndRemoveUntil(
                               context,
                               ContainerScreen(user: MyAppState.currentUser),

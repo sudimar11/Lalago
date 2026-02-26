@@ -35,8 +35,8 @@ class _ViewAllDineInRestaurantState extends State<ViewAllDineInRestaurant> {
         .where("enabledDiveInFuture", isEqualTo: true);
 
     GeoFirePoint center = GeoFlutterFire().point(
-        latitude: MyAppState.selectedPosotion.location!.latitude,
-        longitude: MyAppState.selectedPosotion.location!.longitude);
+        latitude: MyAppState.selectedPosition.location!.latitude,
+        longitude: MyAppState.selectedPosition.location!.longitude);
     String field = 'g';
 
     Stream<List<DocumentSnapshot>> stream = GeoFlutterFire()

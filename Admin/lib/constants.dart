@@ -21,3 +21,4 @@ const REPORTS = 'reports';
 const CUSTOMER_SUGGESTIONS = 'customer_suggestions';
 const CUSTOMER_FEEDBACK = 'customer_feedback';
 const SEARCH_ANALYTICS = 'search_analytics';
+const USER_CLICKS = 'user_clicks';
