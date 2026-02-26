@@ -105,6 +105,17 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // Dispatch settings: admin read/write for auto-dispatch toggle
+    match /config/dispatch_settings {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Restaurant order settings (device status, SMS contact, timeout)
+    match /vendors/{vendorId}/settings/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
     // TODO: Replace with proper security rules before production deployment
     // Example of proper rules:
     // match /users/{userId} {

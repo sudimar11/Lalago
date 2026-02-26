@@ -30,6 +30,51 @@ class _CustomersPageState extends State<CustomersPage> {
     super.dispose();
   }
 
+  Future<void> _confirmDelete(
+    BuildContext context,
+    String name,
+    String userId,
+  ) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete customer?'),
+        content: Text(
+          'Remove "$name" from customers? This will deactivate the account.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !context.mounted) return;
+    try {
+      await FirebaseFirestore.instance.collection(USERS).doc(userId).update({
+        'active': false,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$name has been removed')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final Query baseQuery = FirebaseFirestore.instance
@@ -206,6 +251,17 @@ class _CustomersPageState extends State<CustomersPage> {
                                                   ),
                                                 ),
                                               ],
+                                            ),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(
+                                              Icons.delete_outline,
+                                              color: Colors.red,
+                                            ),
+                                            onPressed: () => _confirmDelete(
+                                              context,
+                                              name,
+                                              userId,
                                             ),
                                           ),
                                           const Icon(

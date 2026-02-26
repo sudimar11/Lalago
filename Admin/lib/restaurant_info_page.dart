@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'models/working_hours_model.dart';
 import 'pages/edit_restaurant_schedule_page.dart';
+import 'pages/restaurant_settings_page.dart';
 import 'services/vendor_service.dart';
 
 class RestaurantInfoPage extends StatefulWidget {
@@ -439,27 +440,50 @@ class _RestaurantInfoPageState extends State<RestaurantInfoPage> {
               );
             }),
             const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () async {
-                final updated = await Navigator.of(context).push<bool>(
-                  MaterialPageRoute(
-                    builder: (context) => EditRestaurantSchedulePage(
-                      vendorId: widget.vendorId,
-                      initialWorkingHours: _parseWorkingHours(),
-                      restaurantName: _str(
-                        _vendorData['title'] ??
-                            _vendorData['authorName'] ??
-                            'Restaurant',
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final updated = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute(
+                        builder: (context) => EditRestaurantSchedulePage(
+                          vendorId: widget.vendorId,
+                          initialWorkingHours: _parseWorkingHours(),
+                          restaurantName: _str(
+                            _vendorData['title'] ??
+                                _vendorData['authorName'] ??
+                                'Restaurant',
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                );
-                if (updated == true && mounted) {
-                  _refetchVendor();
-                }
-              },
-              icon: const Icon(Icons.edit, size: 18),
-              label: const Text('Edit Schedule'),
+                    );
+                    if (updated == true && mounted) {
+                      _refetchVendor();
+                    }
+                  },
+                  icon: const Icon(Icons.edit, size: 18),
+                  label: const Text('Edit Schedule'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => RestaurantSettingsPage(
+                          vendorId: widget.vendorId,
+                          restaurantName: _str(
+                            _vendorData['title'] ??
+                                _vendorData['authorName'] ??
+                                'Restaurant',
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.settings, size: 18),
+                  label: const Text('Restaurant Settings'),
+                ),
+              ],
             ),
           ],
         ),

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:brgy/services/dispatch_analytics_service.dart';
+import 'package:brgy/services/dispatch_config_service.dart';
 import 'package:intl/intl.dart';
 
 class DispatchConfigPage extends StatefulWidget {
@@ -14,10 +15,12 @@ class DispatchConfigPage extends StatefulWidget {
 class _DispatchConfigPageState
     extends State<DispatchConfigPage> {
   final _service = DispatchAnalyticsService();
+  final _dispatchConfigService = DispatchConfigService();
   final _firestore = FirebaseFirestore.instance;
 
   bool _isLoading = true;
   bool _isSaving = false;
+  bool _autoDispatchEnabled = true;
 
   double _weightETA = 0.35;
   double _weightWorkload = 0.20;
@@ -81,6 +84,7 @@ class _DispatchConfigPageState
           .collection('config')
           .doc('performance_tiers')
           .get(),
+      _dispatchConfigService.getAutoDispatchEnabled(),
     ]);
 
     final weights = results[0] as Map<String, double>;
@@ -88,6 +92,7 @@ class _DispatchConfigPageState
     final history =
         results[2] as List<Map<String, dynamic>>;
     final tierDoc = results[3] as DocumentSnapshot;
+    final autoDispatchEnabled = results[4] as bool;
 
     final tierData =
         tierDoc.data() as Map<String, dynamic>?;
@@ -215,8 +220,105 @@ class _DispatchConfigPageState
       }
 
       _history = history;
+      _autoDispatchEnabled = autoDispatchEnabled;
       _isLoading = false;
     });
+  }
+
+  Future<void> _onAutoDispatchToggleChanged(bool value) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(value ? 'Enable Auto-Dispatch?' : 'Disable Auto-Dispatch?'),
+        content: Text(
+          value
+              ? 'Enabling auto-dispatch will automatically assign riders to '
+                  'new and queued orders. Continue?'
+              : 'Disabling auto-dispatch will stop automatic rider assignment. '
+                  'Orders will stay in "Order Accepted" until manually '
+                  'dispatched. Continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await _dispatchConfigService.setAutoDispatchEnabled(value);
+      if (mounted) {
+        setState(() => _autoDispatchEnabled = value);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Auto-dispatch settings updated'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Widget _buildAutoDispatchSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Auto-Dispatch',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Master switch for automatic rider assignment when orders '
+              'reach "Order Accepted" status.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Enable Auto-Dispatch',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              ),
+              subtitle: Text(
+                _autoDispatchEnabled
+                    ? 'Active — riders auto-assigned to new orders'
+                    : 'Off — manual dispatch only',
+                style: const TextStyle(fontSize: 12),
+              ),
+              value: _autoDispatchEnabled,
+              activeColor: Colors.black,
+              onChanged: (v) => _onAutoDispatchToggleChanged(v),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   double get _totalWeight =>
@@ -380,6 +482,8 @@ class _DispatchConfigPageState
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                _buildAutoDispatchSection(),
+                const SizedBox(height: 24),
                 _buildWeightsSection(),
                 const SizedBox(height: 24),
                 _buildOperationalSection(),

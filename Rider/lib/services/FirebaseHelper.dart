@@ -176,9 +176,13 @@ class FireStoreUtils {
     driverStreamController?.close();
   }
 
-  static Future<User?> getCurrentUser(String uid) async {
+  static Future<User?> getCurrentUser(String uid,
+      {bool forceFromServer = false}) async {
+    final options = forceFromServer
+        ? GetOptions(source: Source.server)
+        : GetOptions();
     DocumentSnapshot<Map<String, dynamic>> userDocument =
-        await firestore.collection(USERS).doc(uid).get();
+        await firestore.collection(USERS).doc(uid).get(options);
     if (userDocument.data() != null && userDocument.exists) {
       final user = User.fromJson(userDocument.data()!);
 

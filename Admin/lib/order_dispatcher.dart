@@ -8,17 +8,20 @@ import 'package:brgy/services/order_rejection_service.dart';
 import 'package:brgy/services/manual_dispatch_service.dart';
 import 'package:brgy/services/driver_change_service.dart';
 
+import 'package:brgy/services/dispatch_config_service.dart';
 import 'package:brgy/services/driver_assignment_service.dart';
 import 'package:brgy/services/delivery_zone_service.dart';
 import 'package:brgy/services/driver_response_tracking_service.dart';
 import 'package:brgy/widgets/orders/assignments_log_list.dart';
 import 'package:brgy/widgets/orders/order_helpers.dart';
+import 'package:brgy/widgets/orders/pending_device_less_orders.dart';
 import 'package:brgy/widgets/orders/order_preparation_dialog.dart';
 import 'package:brgy/widgets/orders/order_rejection_dialog.dart';
 import 'package:brgy/widgets/orders/change_driver_dialog.dart';
 import 'package:brgy/widgets/orders/order_info_section.dart';
 import 'package:brgy/utils/order_ready_time_helper.dart';
 import 'package:brgy/pages/change_order_status_page.dart';
+import 'package:brgy/services/restaurant_settings_service.dart';
 import 'package:brgy/services/sms_service.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -110,6 +113,8 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
   // Driver response tracking service
   final DriverResponseTrackingService _driverResponseTrackingService =
       DriverResponseTrackingService();
+  final RestaurantSettingsService _restaurantSettingsService =
+      RestaurantSettingsService();
 
   // Zone name cache: orderId -> zone name (resolved async, shown on next rebuild)
   final Map<String, String> _zoneNameCache = {};
@@ -280,6 +285,12 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
             }
           }
 
+          // Exclude Order Placed + restaurantHasNoDevice (shown in Pending No Device section)
+          if (status == 'Order Placed' &&
+              (data['restaurantHasNoDevice'] == true)) {
+            return false;
+          }
+
           return true;
         }).toList();
 
@@ -310,6 +321,25 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                 child: ListView(
                   scrollDirection: Axis.horizontal,
                   children: [
+                    StreamBuilder<bool>(
+                      stream: DispatchConfigService()
+                          .streamAutoDispatchEnabled(),
+                      builder: (context, snap) {
+                        final enabled = snap.data ?? true;
+                        return _HealthChip(
+                          icon: enabled
+                              ? Icons.auto_awesome
+                              : Icons.handyman,
+                          label: enabled
+                              ? 'Auto-Dispatch: ON'
+                              : 'Auto-Dispatch: OFF',
+                          color: enabled
+                              ? Colors.green
+                              : Colors.orange,
+                        );
+                      },
+                    ),
+                    const SizedBox(width: 8),
                     _HealthChip(
                       icon: Icons.people_outline,
                       label: '$availableRiders riders',
@@ -373,6 +403,7 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                 ),
               ),
             ),
+            const PendingDeviceLessOrders(),
             Expanded(
               child: ListView.separated(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -408,6 +439,9 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
             }
             final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
             final vendorName = (vendor['title'] ?? '') as String? ?? '';
+            final vendorId =
+                (vendor['id'] ?? data['vendorID'] ?? data['vendorId'] ?? '')
+                    .toString();
             final zoneName = _resolveZoneName(id, data);
 
             // Check if this order has status "Order Accepted" or "Order Completed"
@@ -723,89 +757,70 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                       ],
                     ),
                   ),
-                  // Accept and Reject Order Buttons - Only show for "Order Placed" status
+                  // Accept and Reject Order Buttons - Only show when allowed by settings
                   if (isOrderPlaced)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: Row(
-                        children: [
-                          Expanded(
+                    vendorId.isEmpty
+                        ? const SizedBox.shrink()
+                        : FutureBuilder<RestaurantOrderSettings>(
+                            future: _restaurantSettingsService.getSettings(
+                              vendorId,
+                            ),
+                            builder: (context, snap) {
+                              if (snap.connectionState ==
+                                  ConnectionState.waiting) {
+                                return const SizedBox.shrink();
+                              }
+                              final settings = snap.data ??
+                                  RestaurantOrderSettings(
+                                    hasDevice: true,
+                                    allowAdminOverride: false,
+                                  );
+                              return _buildOrderPlacedActions(
+                                context,
+                                id,
+                                settings,
+                                isDispatching,
+                              );
+                            },
+                          ),
+                  // Dispatch Now Button - Show only when auto-dispatch is OFF
+                  if (isOrderAccepted || isDriverRejected)
+                    StreamBuilder<bool>(
+                      stream: DispatchConfigService()
+                          .streamAutoDispatchEnabled(),
+                      builder: (context, snap) {
+                        final autoDispatchOn = snap.data ?? true;
+                        if (autoDispatchOn) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                          child: SizedBox(
+                            width: double.infinity,
                             child: ElevatedButton.icon(
                               onPressed: isDispatching
                                   ? null
-                                  : () => _acceptOrder(context, id),
+                                  : () => _manualDispatch(context, id, data),
                               icon: isDispatching
                                   ? const SizedBox(
                                       width: 16,
                                       height: 16,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        valueColor:
-                                            AlwaysStoppedAnimation<Color>(
-                                                Colors.white),
+                                        valueColor: AlwaysStoppedAnimation<
+                                            Color>(Colors.white),
                                       ),
                                     )
-                                  : const Icon(Icons.check_circle),
-                              label: Text(
-                                  isDispatching ? 'Accepting...' : 'Accept'),
+                                  : const Icon(Icons.bolt),
+                              label: Text(isDispatching
+                                  ? 'Dispatching...'
+                                  : 'Dispatch Now'),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
+                                backgroundColor: Colors.orange,
                                 foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 12),
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: isDispatching
-                                  ? null
-                                  : () => _rejectOrder(context, id),
-                              icon: const Icon(Icons.cancel),
-                              label: Text(
-                                  isDispatching ? 'Processing...' : 'Reject'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.red,
-                                foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 12),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  // Dispatch Now Button - Show for "Order Accepted" or "Driver Rejected"
-                  if (isOrderAccepted || isDriverRejected)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: isDispatching
-                              ? null
-                              : () => _manualDispatch(context, id, data),
-                          icon: isDispatching
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                        Colors.white),
-                                  ),
-                                )
-                              : const Icon(Icons.bolt),
-                          label: Text(isDispatching
-                              ? 'Dispatching...'
-                              : 'Dispatch Now'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.orange,
-                            foregroundColor: Colors.white,
-                          ),
-                        ),
-                      ),
+                        );
+                      },
                     ),
                   // Change Driver Button - Show for "Driver Assigned" and "Driver Accepted" statuses
                   if (isDriverAssigned || isDriverAccepted)
@@ -950,6 +965,86 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
           ],
         );
       },
+    );
+  }
+
+  Widget _buildOrderPlacedActions(
+    BuildContext context,
+    String orderId,
+    RestaurantOrderSettings settings,
+    bool isDispatching,
+  ) {
+    final showButtons = !settings.hasDevice || settings.allowAdminOverride;
+
+    if (!showButtons) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.hourglass_empty, size: 18, color: Colors.orange.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Waiting for restaurant to accept order...',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey.shade700,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: isDispatching ? null : () => _acceptOrder(context, orderId),
+              icon: isDispatching
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : const Icon(Icons.check_circle),
+              label: Text(isDispatching ? 'Accepting...' : 'Accept'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: isDispatching ? null : () => _rejectOrder(context, orderId),
+              icon: const Icon(Icons.cancel),
+              label: Text(isDispatching ? 'Processing...' : 'Reject'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

@@ -447,6 +447,14 @@ exports.autoDispatcher = functions.firestore
     // Only trigger when order status changes to 'Order Accepted' (ready for AI auto-dispatch)
     if (beforeData.status !== 'Order Accepted' && afterData.status === 'Order Accepted') {
         try {
+          // Check global auto-dispatch toggle
+          const settingsSnap = await getDb().collection('config').doc('dispatch_settings').get();
+          const settings = settingsSnap.exists ? settingsSnap.data() : {};
+          if (settings.autoDispatchEnabled === false) {
+            console.log(`[AI AutoDispatcher] Auto-dispatch is disabled, skipping order ${orderId}`);
+            return null;
+          }
+
           // Restaurant-first model: dispatch all orders reaching 'Order Accepted'.
           if (afterData?.driverID) {
             console.log(
@@ -5942,6 +5950,157 @@ exports.validateBundleOrder = functions
         console.warn(`[validateBundleOrder] Analytics update failed for bundle ${bundleId}:`, e);
       }
     }
+    return null;
+  });
+
+/**
+ * On restaurant_orders create: send SMS to restaurant if it has no device.
+ * One-way notification only. Admin will accept/reject on behalf of restaurant.
+ */
+exports.sendOrderSMSNotification = functions
+  .region('us-central1')
+  .firestore.document('restaurant_orders/{orderId}')
+  .onCreate(async (snap, context) => {
+    const orderId = context.params.orderId;
+    const data = snap.data() || {};
+    const orderRef = snap.ref;
+
+    const vendorId = String(data.vendorID || data.vendorId || data.vendor?.id || '');
+    if (!vendorId) {
+      console.log(`[sendOrderSMSNotification] No vendorId for order ${orderId}`);
+      return null;
+    }
+
+    const db = getDb();
+    const settingsSnap = await db
+      .collection('vendors')
+      .doc(vendorId)
+      .collection('settings')
+      .doc('order_config')
+      .get();
+
+    const settings = settingsSnap.exists ? settingsSnap.data() : {};
+    const hasDevice = settings.hasDevice !== false;
+    const contactNumber = (settings.contactNumber || '').toString().trim();
+
+    if (hasDevice || !contactNumber) {
+      return null;
+    }
+
+    const orderSnap = await orderRef.get();
+    const latest = orderSnap.exists ? orderSnap.data() : {};
+    if (String(latest.status || '') === 'Order Rejected') {
+      console.log(`[sendOrderSMSNotification] Order ${orderId} already rejected, skip SMS`);
+      return null;
+    }
+
+    const products = latest.products || latest.productList || [];
+    const total = latest.vendorTotal ?? latest.total ?? latest.amount ?? 0;
+    const totalNum = typeof total === 'number' ? total : parseFloat(String(total)) || 0;
+    const parts = [`[Lalago] New order #${orderId.substring(0, 12)}:`];
+    for (const p of products) {
+      if (p && (p.name || p.title)) {
+        const qty = typeof p.quantity === 'number' ? p.quantity : parseInt(p.quantity, 10) || 1;
+        const price = typeof p.price === 'number' ? p.price : parseFloat(String(p.price || 0)) || 0;
+        parts.push(`${qty}x ${p.name || p.title} (₱${Math.round(price)})`);
+      }
+    }
+    parts.push(`Total: ₱${Math.round(totalNum)}. Please prepare the food. Rider will be assigned soon.`);
+    const body = parts.join(' ');
+
+    try {
+      const config = functions.config().sms || {};
+      const accountSid = config.account_sid || process.env.TWILIO_ACCOUNT_SID;
+      const authToken = config.auth_token || process.env.TWILIO_AUTH_TOKEN;
+      const fromNumber = config.from_number || process.env.TWILIO_FROM_NUMBER;
+
+      if (accountSid && authToken && fromNumber) {
+        const twilio = require('twilio');
+        const client = twilio(accountSid, authToken);
+        let to = contactNumber.replace(/\D/g, '');
+        if (to.startsWith('0')) to = '63' + to.substring(1);
+        else if (!to.startsWith('63')) to = '63' + to;
+
+        await client.messages.create({
+          body,
+          from: fromNumber,
+          to: '+' + to,
+        });
+        console.log(`[sendOrderSMSNotification] SMS sent to ${to} for order ${orderId}`);
+      } else {
+        console.log('[sendOrderSMSNotification] Twilio not configured, skip SMS. Set sms.account_sid, sms.auth_token, sms.from_number');
+      }
+    } catch (e) {
+      console.error(`[sendOrderSMSNotification] SMS failed for order ${orderId}:`, e);
+    }
+
+    await orderRef.update({
+      smsSentAt: admin.firestore.FieldValue.serverTimestamp(),
+      restaurantHasNoDevice: true,
+    });
+
+    return null;
+  });
+
+/**
+ * Scheduled: check for pending no-device orders that exceeded timeout and auto-cancel.
+ */
+exports.pendingOrderTimeoutChecker = functions
+  .region('us-central1')
+  .pubsub.schedule('every 1 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = admin.firestore.Timestamp.now();
+    const ordersSnap = await db
+      .collection('restaurant_orders')
+      .where('status', '==', 'Order Placed')
+      .where('restaurantHasNoDevice', '==', true)
+      .get();
+
+    for (const doc of ordersSnap.docs) {
+      const data = doc.data();
+      const smsSentAt = data.smsSentAt;
+      if (!smsSentAt || !smsSentAt.toDate) continue;
+
+      const vendorId = String(data.vendorID || data.vendorId || data.vendor?.id || '');
+      let timeoutMinutes = 5;
+      if (vendorId) {
+        try {
+          const settingsSnap = await db
+            .collection('vendors')
+            .doc(vendorId)
+            .collection('settings')
+            .doc('order_config')
+            .get();
+          const settings = settingsSnap.exists ? settingsSnap.data() : {};
+          timeoutMinutes = Math.max(1, parseInt(settings.smsTimeoutMinutes, 10) || 5);
+        } catch (_) {}
+      }
+
+      const sentAt = smsSentAt.toDate();
+      const deadline = new Date(sentAt.getTime() + timeoutMinutes * 60 * 1000);
+      if (new Date() < deadline) continue;
+
+      try {
+        await doc.ref.update({
+          status: 'Order Cancelled',
+          cancellationReason: 'admin_timeout',
+          cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        await db.collection('dispatch_events').add({
+          type: 'admin_timeout_cancel',
+          orderId: doc.id,
+          vendorId,
+          timeoutMinutes,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[pendingOrderTimeoutChecker] Order ${doc.id} auto-cancelled (timeout ${timeoutMinutes}m)`);
+      } catch (e) {
+        console.error(`[pendingOrderTimeoutChecker] Failed to cancel order ${doc.id}:`, e);
+      }
+    }
+
     return null;
   });
 
