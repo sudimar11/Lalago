@@ -113,7 +113,7 @@ class CartDatabase extends _$CartDatabase {
             category_id: element.category_id,
             extras_price: extrasPrice.toString(),
             extras: joinTitleString,
-            discountPrice: element.discountPrice!,
+            discountPrice: element.discountPrice ?? "",
             bundleId: element.bundleId,
             bundleName: element.bundleName,
             addonPromoId: element.addonPromoId,

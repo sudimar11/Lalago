@@ -563,7 +563,7 @@ class _RestaurantInfoPageState extends State<RestaurantInfoPage> {
           children: [
             Expanded(
               child: DropdownButtonFormField<String?>(
-                value: effective.isEmpty ? null : effective,
+                value: effective?.isEmpty == true ? null : effective,
                 decoration: const InputDecoration(
                   isDense: true,
                   contentPadding: EdgeInsets.symmetric(

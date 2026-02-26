@@ -46,6 +46,7 @@ import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/model/addon_promo_model.dart';
 import 'package:foodie_customer/services/addon_promo_service.dart';
 import 'package:foodie_customer/ui/addon/addon_promo_card.dart';
+import 'package:foodie_customer/utils/extensions/cart_product_extension.dart';
 
 /// Temporarily set to false to silence cart debug logs while tracing FCM.
 const bool _kShowCartLogs = false;
@@ -2645,12 +2646,7 @@ class _CartScreenState extends State<CartScreen> {
     }
 
     // ProductModel will be fetched on-demand in the onTap handler to avoid side effects during build
-    VariantInfo? variantInfo;
-
-    if (cartProduct.variant_info != null) {
-      variantInfo =
-          VariantInfo.fromJson(jsonDecode(cartProduct.variant_info.toString()));
-    }
+    final variantInfo = cartProduct.parseVariantInfo();
 
     if (cartProduct.extras == null) {
       addOnVal.clear();
@@ -2898,24 +2894,25 @@ class _CartScreenState extends State<CartScreen> {
               ],
             ),
 
-            variantInfo == null || variantInfo.variantOptions!.isEmpty
-                ? Container()
-                : Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 5, vertical: 10),
+            (variantInfo != null &&
+                    variantInfo.variantOptions != null &&
+                    variantInfo.variantOptions!.isNotEmpty)
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 5, vertical: 10),
                     child: Wrap(
                       spacing: 6.0,
                       runSpacing: 6.0,
-                      children: List.generate(
-                        variantInfo.variantOptions!.length,
-                        (i) {
-                          return _buildChip(
-                              "${variantInfo!.variantOptions!.keys.elementAt(i)} : ${variantInfo.variantOptions![variantInfo.variantOptions!.keys.elementAt(i)]}",
-                              i);
-                        },
-                      ).toList(),
+                      children:
+                          variantInfo.variantOptions!.entries.toList().asMap().entries
+                              .map((e) => _buildChip(
+                                    "${e.value.key} : ${e.value.value}",
+                                    e.key,
+                                  ))
+                              .toList(),
                     ),
-                  ),
+                  )
+                : const SizedBox.shrink(),
 
             SizedBox(
               height: addOnVal.isEmpty ? 0 : 30,
@@ -3707,13 +3704,20 @@ class _CartScreenState extends State<CartScreen> {
   addtocard(CartProduct cartProduct, qun) async {
     await cartDatabase.updateProduct(CartProduct(
         id: cartProduct.id,
+        category_id: cartProduct.category_id,
         name: cartProduct.name,
         photo: cartProduct.photo,
         price: cartProduct.price,
         vendorID: cartProduct.vendorID,
         quantity: qun,
-        category_id: cartProduct.category_id,
-        discountPrice: cartProduct.discountPrice!));
+        extras_price: cartProduct.extras_price,
+        extras: cartProduct.extras,
+        discountPrice: cartProduct.discountPrice ?? "",
+        variant_info: cartProduct.variant_info,
+        bundleId: cartProduct.bundleId,
+        bundleName: cartProduct.bundleName,
+        addonPromoId: cartProduct.addonPromoId,
+        addonPromoName: cartProduct.addonPromoName));
   }
 
   removetocard(CartProduct cartProduct, qun) async {
@@ -3726,7 +3730,14 @@ class _CartScreenState extends State<CartScreen> {
           price: cartProduct.price,
           vendorID: cartProduct.vendorID,
           quantity: qun,
-          discountPrice: cartProduct.discountPrice));
+          extras_price: cartProduct.extras_price,
+          extras: cartProduct.extras,
+          discountPrice: cartProduct.discountPrice ?? "",
+          variant_info: cartProduct.variant_info,
+          bundleId: cartProduct.bundleId,
+          bundleName: cartProduct.bundleName,
+          addonPromoId: cartProduct.addonPromoId,
+          addonPromoName: cartProduct.addonPromoName));
     } else {
       cartDatabase.removeProduct(cartProduct.id);
     }

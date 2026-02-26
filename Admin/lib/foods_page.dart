@@ -2,7 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class FoodsPage extends StatefulWidget {
-  const FoodsPage({super.key});
+  const FoodsPage({
+    super.key,
+    this.filterUnpublished = false,
+  });
+
+  /// When true, shows only unpublished menu items.
+  final bool filterUnpublished;
 
   @override
   State<FoodsPage> createState() => _FoodsPageState();
@@ -142,7 +148,11 @@ class _FoodsPageState extends State<FoodsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Foods'),
+        title: Text(
+          widget.filterUnpublished
+              ? 'Unpublished Menu Items'
+              : 'Foods',
+        ),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
       ),
@@ -203,6 +213,10 @@ class _FoodsPageState extends State<FoodsPage> {
 
                     final filtered = docs.where((d) {
                       final data = d.data() as Map<String, dynamic>;
+                      if (widget.filterUnpublished &&
+                          _readPublished(data)) {
+                        return false;
+                      }
                       final name = _readName(data).toLowerCase();
                       String vendor = _readVendor(data).toLowerCase();
                       if (vendor.isEmpty) {

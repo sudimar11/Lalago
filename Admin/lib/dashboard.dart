@@ -60,7 +60,9 @@ import 'package:brgy/pages/search_history_page.dart';
 import 'package:brgy/pages/search_analytics_dashboard.dart';
 import 'package:brgy/pages/click_analytics_dashboard.dart';
 import 'package:brgy/pages/recommendation_performance.dart';
+import 'package:brgy/pages/full_operations_page.dart';
 import 'package:brgy/map_page.dart';
+import 'package:brgy/widgets/dashboard/analytics_kpi_cards.dart';
 import 'package:brgy/constants.dart';
 import 'package:brgy/services/order_sound_service.dart';
 import 'package:brgy/utils/order_ready_time_helper.dart';
@@ -171,9 +173,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final int safeIndex = _selectedIndex < _screens.length ? _selectedIndex : 0;
 
     return Scaffold(
+      drawer: const _AnalyticsDrawer(),
       appBar: AppBar(
         title: Text('LalaGO'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.trending_up),
+            tooltip: 'View Trends',
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
           // Notification icon with badge
           StreamBuilder<int>(
             stream: NotificationService.getUnreadCount(),
@@ -358,19 +366,16 @@ class DashboardBlankPage extends StatefulWidget {
 }
 
 class _DashboardBlankPageState extends State<DashboardBlankPage> {
-  late Future<_AvgDeliveryKpiData> _avgDeliveryFuture;
   late Future<int> _unpublishedFoodsFuture;
 
   @override
   void initState() {
     super.initState();
-    _avgDeliveryFuture = _loadAvgDeliveryKpi();
     _unpublishedFoodsFuture = _loadUnpublishedFoodsKpi();
   }
 
   Future<void> _onRefresh() async {
     setState(() {
-      _avgDeliveryFuture = _loadAvgDeliveryKpi();
       _unpublishedFoodsFuture = _loadUnpublishedFoodsKpi();
     });
     await Future<void>.delayed(const Duration(milliseconds: 300));
@@ -485,245 +490,6 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
           ),
         ];
 
-        final customersItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.people_alt,
-            label: 'Top 10 buyers (today)',
-            onTap: () => push(const TopBuyersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.person,
-            label: 'Active customers',
-            onTap: () => push(const ActiveCustomersPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.person_off,
-            label: 'Inactive customers',
-            onTap: () => push(const InactiveCustomersPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.lightbulb_outline,
-            label: 'Suggestions',
-            onTap: () => push(const CustomerSuggestionsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.feedback,
-            label: 'Feedback',
-            onTap: () => push(const CustomerFeedbackPage()),
-          ),
-        ];
-
-        final searchItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.search,
-            label: 'Search history',
-            onTap: () => push(const SearchHistoryPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.analytics,
-            label: 'Search Analytics',
-            onTap: () => push(const SearchAnalyticsDashboard()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.touch_app,
-            label: 'Click Analytics',
-            onTap: () => push(const ClickAnalyticsDashboard()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.insights,
-            label: 'Recommendation Performance',
-            onTap: () => push(const RecommendationPerformance()),
-          ),
-        ];
-
-        final ridersItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.local_shipping,
-            label: 'Rider orders (today)',
-            onTap: () => push(const RidersOrdersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.people_outline,
-            label: 'Rider overview',
-            onTap: () => push(const RiderOverviewPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.calendar_view_week,
-            label: 'Rider orders (week)',
-            onTap: () => push(const RidersOrdersWeeklyPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.bar_chart,
-            label: 'Rider performance',
-            onTap: () => push(const RiderPerformancePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.report_problem,
-            label: 'Driver reports',
-            onTap: () => push(const DriverReportsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.map,
-            label: 'Active riders (live map)',
-            onTap: () => push(DriversMapPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.event_note,
-            label: 'Attendance',
-            onTap: () => push(const AttendancePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.list_alt,
-            label: 'Driver list (manage multiple orders)',
-            onTap: () => push(DriverListPage()),
-          ),
-        ];
-
-        final ordersItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.today,
-            label: 'Orders today',
-            onTap: () => push(const OrdersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.calendar_view_week,
-            label: 'Orders this week',
-            onTap: () => push(const OrdersThisWeekPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.shopping_cart,
-            label: 'Total orders',
-            onTap: () => push(const TotalOrdersPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.timer,
-            label: 'Avg delivery time',
-            onTap: () => push(const AverageDeliveryTimePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.attach_money,
-            label: 'Restaurant earnings',
-            onTap: () => push(const RestaurantOrdersEarningPage()),
-          ),
-        ];
-
-        final restaurantsItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.fastfood,
-            label: 'Total foods',
-            onTap: () => push(const FoodsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.inventory_2,
-            label: 'Bundle Deals',
-            onTap: () => push(const BundlesPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.add_circle_outline,
-            label: 'Add-on Promos',
-            onTap: () => push(const AddonsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.storefront,
-            label: 'Total restaurants',
-            onTap: () => push(const RestaurantsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.insights,
-            label: 'Restaurant Performance',
-            onTap: () => push(const RestaurantPerformancePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.restaurant,
-            label: 'Top restaurants (today)',
-            onTap: () => push(const TopRestaurantsOrdersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.block,
-            label: 'Zero orders (today)',
-            onTap: () => push(const RestaurantsZeroOrdersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.restaurant_menu,
-            label: 'Restaurant orders (week)',
-            onTap: () => push(const RestaurantOrdersWeeklyPage()),
-          ),
-        ];
-
-        final marketingItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.sms,
-            label: 'SMS tool',
-            onTap: () => push(AddDashboard()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.campaign,
-            label: 'Ads management',
-            onTap: () => push(const AdsManagementPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.local_offer,
-            label: 'Coupon management',
-            onTap: () => push(const CouponManagementPage()),
-          ),
-        ];
-
-        final financeItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.send,
-            label: 'Remittance',
-            onTap: () => push(const RemittancePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.check_circle,
-            label: 'Confirm remittance',
-            onTap: () => push(const ConfirmedTransactionsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.payment,
-            label: 'Payout request',
-            onTap: () => push(const PayoutPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.verified,
-            label: 'Confirm payout',
-            onTap: () => push(const ConfirmedPayoutsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.account_balance_wallet,
-            label: 'Driver wallet',
-            onTap: () => push(const DriverWalletPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.swap_horiz,
-            label: 'Payout & remittance',
-            onTap: () => push(const PayoutRemittancePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.money_off,
-            label: 'Collect from driver',
-            onTap: () => push(const DriverCollectionPage()),
-          ),
-        ];
-
-        final analyticsItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.analytics,
-            label: 'Analytics today',
-            onTap: () => push(const AnalyticsTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.analytics_outlined,
-            label: 'Analytics (week)',
-            onTap: () => push(const AnalyticsWeeklyPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.local_shipping,
-            label: 'Dispatch Analytics',
-            onTap: () => push(const DispatchAnalyticsPage()),
-          ),
-        ];
-
         return RefreshIndicator(
           onRefresh: _onRefresh,
           child: SingleChildScrollView(
@@ -732,6 +498,8 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                _AtRiskFocalSection(onNavigate: push),
+                const SizedBox(height: 12),
                 if (isWideHeader) ...[
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -751,62 +519,12 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
                 const SizedBox(height: 12),
                 _AtAGlanceSection(
                   columns: columns,
-                  avgDeliveryFuture: _avgDeliveryFuture,
                   unpublishedFoodsFuture: _unpublishedFoodsFuture,
                   onNavigate: push,
                   onNavigateToOrders: widget.onNavigateToOrders,
                 ),
                 const SizedBox(height: 20),
-                _DashboardGroup(
-                  title: 'Operations',
-                  subtitle: 'Orders, riders, and restaurants',
-                  initiallyExpanded: true,
-                  child: Column(
-                    children: [
-                      _DashboardNavGrid(columns: columns, items: ordersItems),
-                      const SizedBox(height: 12),
-                      _DashboardNavGrid(columns: columns, items: ridersItems),
-                      const SizedBox(height: 12),
-                      _DashboardNavGrid(
-                        columns: columns,
-                        items: restaurantsItems,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _DashboardGroup(
-                  title: 'Customers',
-                  subtitle: 'Retention, activity, and feedback',
-                  initiallyExpanded: false,
-                  child: _DashboardNavGrid(columns: columns, items: customersItems),
-                ),
-                const SizedBox(height: 12),
-                _DashboardGroup(
-                  title: 'Finance & marketing',
-                  subtitle: 'Payouts, remittance, and promotions',
-                  initiallyExpanded: false,
-                  child: Column(
-                    children: [
-                      _DashboardNavGrid(columns: columns, items: financeItems),
-                      const SizedBox(height: 12),
-                      _DashboardNavGrid(columns: columns, items: marketingItems),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _DashboardGroup(
-                  title: 'Search & analytics',
-                  subtitle: 'Trends and internal tools',
-                  initiallyExpanded: false,
-                  child: Column(
-                    children: [
-                      _DashboardNavGrid(columns: columns, items: searchItems),
-                      const SizedBox(height: 12),
-                      _DashboardNavGrid(columns: columns, items: analyticsItems),
-                    ],
-                  ),
-                ),
+                _ManagementHubBar(onNavigate: push),
               ],
             ),
           ),
@@ -1001,17 +719,323 @@ class _AvgDeliveryKpiData {
   });
 }
 
+class _AtRiskFocalSection extends StatelessWidget {
+  const _AtRiskFocalSection({
+    required this.onNavigate,
+  });
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final String todayDate =
+        DateTime.now().toIso8601String().split('T')[0];
+    final DateTime startOfDay =
+        DateTime.parse('$todayDate 00:00:00Z').toUtc();
+    final DateTime endOfDay =
+        DateTime.parse('$todayDate 23:59:59Z').toUtc();
+
+    final ordersStream = FirebaseFirestore.instance
+        .collection('restaurant_orders')
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+        )
+        .where(
+          'createdAt',
+          isLessThanOrEqualTo: Timestamp.fromDate(endOfDay),
+        )
+        .snapshots();
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: ordersStream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_outlined,
+                      color: Colors.orange, size: 32),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'At-risk orders',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_outlined,
+                      color: Colors.orange, size: 32),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'At-risk orders',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const Icon(Icons.error, color: Colors.red),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final orders = snapshot.data?.docs ?? [];
+        final ordersTyped =
+            orders.cast<QueryDocumentSnapshot<Map<String, dynamic>>>();
+        final atRiskItems = _computeAtRiskItemsFromOrders(ordersTyped);
+        final topAtRisk =
+            atRiskItems.length <= 10 ? atRiskItems : atRiskItems.sublist(0, 10);
+
+        return _AtRiskOrdersCard(
+          items: topAtRisk,
+          onNavigate: onNavigate,
+        );
+      },
+    );
+  }
+}
+
+class _AnalyticsDrawer extends StatelessWidget {
+  const _AnalyticsDrawer();
+
+  void _navigateAndClose(BuildContext context, Widget page) {
+    Navigator.pop(context);
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => page),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Drawer(
+      child: Column(
+        children: [
+          DrawerHeader(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primaryContainer,
+            ),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Trends & Analytics',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.timer),
+            title: const Text('30-Day Avg Delivery'),
+            onTap: () =>
+                _navigateAndClose(context, const AverageDeliveryTimePage()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.bar_chart),
+            title: const Text('Peak Hours Analysis'),
+            subtitle: const Text('Most active hours'),
+            onTap: () =>
+                _navigateAndClose(context, const AnalyticsTodayPage()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.calendar_view_week),
+            title: const Text('Weekly Comparison'),
+            onTap: () =>
+                _navigateAndClose(context, const AnalyticsWeeklyPage()),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.analytics),
+            title: const Text('Full Analytics Suite'),
+            trailing: const Icon(Icons.arrow_forward),
+            onTap: () =>
+                _navigateAndClose(context, const AnalyticsTodayPage()),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ManagementHubBar extends StatelessWidget {
+  const _ManagementHubBar({
+    required this.onNavigate,
+  });
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _HubButton(
+                icon: Icons.list_alt,
+                label: 'Orders',
+                onTap: () => onNavigate(const OrderDispatcherPage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.restaurant,
+                label: 'Restaurants',
+                onTap: () => onNavigate(const RestaurantsPage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.delivery_dining,
+                label: 'Riders',
+                onTap: () => onNavigate(DriverListPage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.payments,
+                label: 'Finance',
+                onTap: () => onNavigate(const RemittancePage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.settings,
+                label: 'Settings',
+                onTap: () => onNavigate(const SettingsPage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.more_horiz,
+                label: 'More...',
+                onTap: () => onNavigate(const FullOperationsPage()),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HubButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _HubButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 20, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: theme.textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoneAKpiRow extends StatelessWidget {
+  const _ZoneAKpiRow({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 600;
+        if (isNarrow) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: children
+                  .map(
+                    (w) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: SizedBox(width: 120, child: w),
+                    ),
+                  )
+                  .toList(),
+            ),
+          );
+        }
+        return Row(
+          children: children
+              .map(
+                (w) => Expanded(child: Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: w,
+                )),
+              )
+              .toList(),
+        );
+      },
+    );
+  }
+}
+
 class _AtAGlanceSection extends StatelessWidget {
   const _AtAGlanceSection({
     required this.columns,
-    required this.avgDeliveryFuture,
     required this.unpublishedFoodsFuture,
     required this.onNavigate,
     this.onNavigateToOrders,
   });
 
   final int columns;
-  final Future<_AvgDeliveryKpiData> avgDeliveryFuture;
   final Future<int> unpublishedFoodsFuture;
   final void Function(Widget page) onNavigate;
   final VoidCallback? onNavigateToOrders;
@@ -1116,7 +1140,6 @@ class _AtAGlanceSection extends StatelessWidget {
 
                 final Set<String> vendorsWithOrders = {};
                 double earningsToday = 0.0;
-                final atRiskItems = <_AtRiskOrderItem>[];
 
                 String normalizeOrderStatus(dynamic raw) {
                   if (raw == null) return '—';
@@ -1218,14 +1241,6 @@ class _AtAGlanceSection extends StatelessWidget {
                             readyAt.difference(now).inMinutes;
                         if (minutesToReady <= 10) {
                           unassignedNearReady++;
-                          atRiskItems.add(
-                            _AtRiskOrderItem.unassignedNearReady(
-                              orderId: doc.id,
-                              vendorName: _vendorNameFromOrder(data),
-                              readyAt: readyAt,
-                              minutesToReady: minutesToReady,
-                            ),
-                          );
                         }
                       }
                     }
@@ -1237,14 +1252,6 @@ class _AtAGlanceSection extends StatelessWidget {
                             now.difference(assignedAt).inMinutes;
                         if (minutesPending >= 5) {
                           stuckDriverAssigned++;
-                          atRiskItems.add(
-                            _AtRiskOrderItem.stuckDriverAssigned(
-                              orderId: doc.id,
-                              vendorName: _vendorNameFromOrder(data),
-                              assignedAt: assignedAt,
-                              minutesPending: minutesPending,
-                            ),
-                          );
                         }
                       }
                     }
@@ -1295,11 +1302,6 @@ class _AtAGlanceSection extends StatelessWidget {
                     : peakHours
                         .map((h) => '${h.toString().padLeft(2, '0')}:00')
                         .join(', ');
-
-                atRiskItems.sort((a, b) => b.riskScore.compareTo(a.riskScore));
-                final topAtRisk = atRiskItems.length <= 10
-                    ? atRiskItems
-                    : atRiskItems.sublist(0, 10);
 
                 final vendorsStream = FirebaseFirestore.instance
                     .collection('vendors')
@@ -1471,12 +1473,32 @@ class _AtAGlanceSection extends StatelessWidget {
                           builder: (context, foodsSnap) {
                             final unpublishedFoods = foodsSnap.data;
 
+                            Widget buildAnalyticsCard({
+                              required IconData icon,
+                              required String label,
+                              required String value,
+                              String? helper,
+                              VoidCallback? onTap,
+                              bool isLoading = false,
+                            }) {
+                              return isLoading
+                                  ? const _KpiCard.loading()
+                                  : _KpiCard(
+                                      icon: icon,
+                                      label: label,
+                                      value: value,
+                                      helper: helper,
+                                      onTap: onTap,
+                                      tone: _KpiTone.neutral,
+                                    );
+                            }
+
                             final kpiChildren = <Widget>[
                           _KpiCard(
                             icon: Icons.receipt_long,
                             label: 'Orders today',
                             value: ordersToday.toString(),
-                            helper: 'Peak: $peakHourDisplay',
+                            helper: 'Today',
                             tone: _KpiTone.brand,
                             onTap: () => onNavigate(const OrdersTodayPage()),
                           ),
@@ -1581,19 +1603,114 @@ class _AtAGlanceSection extends StatelessWidget {
                             onTap: () =>
                                 onNavigate(const RestaurantOrdersEarningPage()),
                           ),
+                          NewCustomersTodayKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          BuyersTodayKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          OrdersThisWeekKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          BuyersThisWeekKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          TotalFoodsKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          UnpublishedFoodsKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          FoodsAddedTodayKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          TotalRestaurantsKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          TotalRidersKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          InactiveCustomersKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          ActiveCustomersKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          TotalCustomersKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
                           avgResponseKpi(),
                           rejectionRateKpi(),
-                          _AvgDeliveryKpi(
-                            future: avgDeliveryFuture,
-                            onNavigate: onNavigate,
+                        ];
+
+                        final atRiskCount =
+                            unassignedNearReady + stuckDriverAssigned;
+                        final zoneACards = <Widget>[
+                          _KpiCard(
+                            icon: Icons.receipt_long,
+                            label: 'Orders',
+                            value: ordersToday.toString(),
+                            helper: 'Today',
+                            tone: _KpiTone.brand,
+                            onTap: () => onNavigate(const OrdersTodayPage()),
+                          ),
+                          _KpiCard(
+                            icon: Icons.pending_actions,
+                            label: 'Pending',
+                            value: pendingToday.toString(),
+                            helper: 'Not done',
+                            tone: pendingToday > 0
+                                ? _KpiTone.warning
+                                : _KpiTone.neutral,
+                            onTap: () => onNavigate(const OrdersTodayPage()),
+                          ),
+                          _KpiCard(
+                            icon: Icons.warning_amber_outlined,
+                            label: 'At-Risk',
+                            value: atRiskCount.toString(),
+                            helper: 'Need action',
+                            tone: atRiskCount > 0
+                                ? _KpiTone.danger
+                                : _KpiTone.neutral,
+                            onTap: () => onNavigate(
+                              const OrderDispatcherPage(initialTabIndex: 1),
+                            ),
+                          ),
+                          _ActiveRidersKpi(onNavigate: onNavigate),
+                          _KpiCard(
+                            icon: Icons.payments,
+                            label: 'GMV',
+                            value: _formatCurrency(earningsToday),
+                            helper: 'Today',
+                            tone: earningsToday > 0
+                                ? _KpiTone.success
+                                : _KpiTone.neutral,
+                            onTap: () => onNavigate(
+                              const RestaurantOrdersEarningPage(),
+                            ),
                           ),
                         ];
 
                         return Column(
                           children: [
+                            _ZoneAKpiRow(children: zoneACards),
+                            const SizedBox(height: 12),
                             _DeliveryPipelineCard(
                               ordersToday: orders.cast<
-                                  QueryDocumentSnapshot<Map<String, dynamic>>>(),
+                                  QueryDocumentSnapshot<
+                                      Map<String, dynamic>>>(),
                               waitingAccept: waitingAccept,
                               unassignedNearReady: unassignedNearReady,
                               stuckDriverAssigned: stuckDriverAssigned,
@@ -1602,20 +1719,10 @@ class _AtAGlanceSection extends StatelessWidget {
                               asDateTime: asDateTime,
                             ),
                             const SizedBox(height: 12),
-                            _KpiGrid(
-                              columns: _KpiGrid.columnsForDashboard(columns),
-                              children: kpiChildren,
-                            ),
-                            const SizedBox(height: 12),
                             _AlertsStrip(
                               rejectedToday: rejectedToday,
                               zeroOrderRestaurants: zeroRestaurants,
                               unpublishedFoods: unpublishedFoods,
-                              onNavigate: onNavigate,
-                            ),
-                            const SizedBox(height: 12),
-                            _AtRiskOrdersCard(
-                              items: topAtRisk,
                               onNavigate: onNavigate,
                             ),
                             const SizedBox(height: 12),
@@ -1629,19 +1736,30 @@ class _AtAGlanceSection extends StatelessWidget {
                                   onNavigate(const AnalyticsTodayPage()),
                             ),
                             const SizedBox(height: 12),
-                            _WeeklySnapshotCard(onNavigate: onNavigate),
+                            _KpiGrid(
+                              columns: _KpiGrid.columnsForDashboard(
+                                columns,
+                              ),
+                              children: kpiChildren,
+                            ),
                             const SizedBox(height: 12),
-                            _DailyFinanceShortcuts(onNavigate: onNavigate),
+                            _WeeklySnapshotCard(
+                              onNavigate: onNavigate,
+                            ),
+                            const SizedBox(height: 12),
+                            _DailyFinanceShortcuts(
+                              onNavigate: onNavigate,
+                            ),
                           ],
-                        );
-                          },
                         );
                       },
                     );
                   },
                 );
               },
-            ),
+            );
+          },
+        ),
           ],
         ),
       ),
@@ -1801,6 +1919,133 @@ String _vendorNameFromOrder(Map<String, dynamic> data) {
     if (s.isNotEmpty) return s;
   }
   return '';
+}
+
+List<_AtRiskOrderItem> _computeAtRiskItemsFromOrders(
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
+) {
+  DateTime? asDateTime(dynamic value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    return null;
+  }
+
+  String normalizeOrderStatus(dynamic raw) {
+    if (raw == null) return '—';
+    if (raw is num) {
+      switch (raw.toInt()) {
+        case 0:
+          return 'Order Placed';
+        case 1:
+          return 'Order Accepted';
+        case 2:
+          return 'In Transit';
+        case 3:
+          return 'Order Completed';
+        default:
+          return raw.toString();
+      }
+    }
+    final s = raw.toString().trim();
+    switch (s.toLowerCase()) {
+      case 'request':
+      case 'order placed':
+        return 'Order Placed';
+      case 'confirm':
+      case 'order accepted':
+        return 'Order Accepted';
+      case 'driver assigned':
+        return 'Driver Assigned';
+      case 'driver accepted':
+        return 'Driver Accepted';
+      case 'order shipped':
+        return 'Order Shipped';
+      case 'released':
+      case 'in transit':
+        return 'In Transit';
+      case 'completed':
+      case 'order completed':
+        return 'Order Completed';
+      case 'driver rejected':
+        return 'Driver Rejected';
+      case 'order rejected':
+        return 'Order Rejected';
+      default:
+        return s;
+    }
+  }
+
+  String extractDriverId(Map<String, dynamic> data) {
+    final raw = (data['driverID'] ?? data['driverId'] ?? data['driver_id'] ?? '')
+        as Object?;
+    return raw?.toString().trim() ?? '';
+  }
+
+  DateTime? computeReadyAt(Map<String, dynamic> data) {
+    final acceptedAt = asDateTime(data['acceptedAt']);
+    final createdAt = asDateTime(data['createdAt']);
+    final baseTime = acceptedAt ?? createdAt;
+    if (baseTime == null) return null;
+    final prepMin = OrderReadyTimeHelper.parsePreparationMinutes(
+      data['estimatedTimeToPrepare']?.toString(),
+    );
+    return OrderReadyTimeHelper.getReadyAt(baseTime, prepMin);
+  }
+
+  final atRiskItems = <_AtRiskOrderItem>[];
+  final now = DateTime.now();
+
+  for (final doc in orders) {
+    try {
+      final data = doc.data();
+      if (data == null || data is! Map<String, dynamic>) continue;
+
+      final status = (data['status'] ?? '').toString().toLowerCase();
+      if (status == 'order rejected' || status == 'driver rejected') continue;
+
+      final normalizedStatus = normalizeOrderStatus(data['status']);
+      final driverId = extractDriverId(data);
+
+      if (normalizedStatus == 'Order Accepted' && driverId.isEmpty) {
+        final readyAt = computeReadyAt(data);
+        if (readyAt != null) {
+          final minutesToReady = readyAt.difference(now).inMinutes;
+          if (minutesToReady <= 10) {
+            atRiskItems.add(
+              _AtRiskOrderItem.unassignedNearReady(
+                orderId: doc.id,
+                vendorName: _vendorNameFromOrder(data),
+                readyAt: readyAt,
+                minutesToReady: minutesToReady,
+              ),
+            );
+          }
+        }
+      }
+
+      if (normalizedStatus == 'Driver Assigned') {
+        final assignedAt = asDateTime(data['assignedAt']);
+        if (assignedAt != null) {
+          final minutesPending = now.difference(assignedAt).inMinutes;
+          if (minutesPending >= 5) {
+            atRiskItems.add(
+              _AtRiskOrderItem.stuckDriverAssigned(
+                orderId: doc.id,
+                vendorName: _vendorNameFromOrder(data),
+                assignedAt: assignedAt,
+                minutesPending: minutesPending,
+              ),
+            );
+          }
+        }
+      }
+    } catch (_) {
+      continue;
+    }
+  }
+
+  atRiskItems.sort((a, b) => b.riskScore.compareTo(a.riskScore));
+  return atRiskItems;
 }
 
 /// Stage averages (today) for delivery pipeline. -1 means no data.
@@ -2453,7 +2698,7 @@ class _AlertsStrip extends StatelessWidget {
           icon: Icons.visibility_off,
           label: '${unpublishedFoods ?? 0} unpublished foods',
           tone: _KpiTone.warning,
-          onTap: () => onNavigate(const FoodsPage()),
+          onTap: () => onNavigate(const FoodsPage(filterUnpublished: true)),
         ),
       );
     }

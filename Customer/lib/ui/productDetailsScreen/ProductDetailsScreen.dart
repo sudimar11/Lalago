@@ -2302,7 +2302,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             category_id: element.category_id,
             extras_price: extrasPrice.toString(),
             extras: joinTitleString,
-            discountPrice: element.discountPrice!));
+            discountPrice: element.discountPrice ?? ""));
       } else {
         await cartDatabase.updateProduct(CartProduct(
             id: productModel.id +
@@ -2454,7 +2454,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             category_id: element.category_id,
             extras_price: extrasPrice.toString(),
             extras: joinTitleString,
-            discountPrice: element.discountPrice!));
+            discountPrice: element.discountPrice ?? ""));
       } else {
         await cartDatabase.updateProduct(CartProduct(
             id: productModel.id +
