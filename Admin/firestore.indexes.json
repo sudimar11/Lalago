@@ -291,6 +291,114 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "restaurant_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "expiresAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "vendors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "autoPause.isPaused",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "autoPause.autoUnpauseAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "pauseHistory",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "resumedAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "pausedAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "restaurant_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "vendorID",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "restaurant_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "vendor.id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "restaurant_orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "pickup_issues",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "reportedAt",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

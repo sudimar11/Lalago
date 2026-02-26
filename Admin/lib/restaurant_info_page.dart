@@ -5,8 +5,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'models/working_hours_model.dart';
 import 'pages/edit_restaurant_schedule_page.dart';
+import 'pages/restaurant_performance_details.dart';
 import 'pages/restaurant_settings_page.dart';
+import 'services/public_metrics_service.dart';
 import 'services/vendor_service.dart';
+import 'widgets/pause_management_section.dart';
 
 class RestaurantInfoPage extends StatefulWidget {
   const RestaurantInfoPage({
@@ -27,6 +30,8 @@ class _RestaurantInfoPageState extends State<RestaurantInfoPage> {
   bool _loadingEmail = true;
   late Map<String, dynamic> _vendorData;
   bool _updatingStatus = false;
+  String? _selectedBadgeOverride;
+  bool _savingBadgeOverride = false;
 
   @override
   void initState() {
@@ -485,9 +490,148 @@ class _RestaurantInfoPageState extends State<RestaurantInfoPage> {
                 ),
               ],
             ),
+            const Divider(),
+            const SizedBox(height: 16),
+            PauseManagementSection(
+              vendorId: widget.vendorId,
+              currentPauseStatus:
+                  _vendorData['autoPause'] ?? <String, dynamic>{},
+              onStatusChanged: _refetchVendor,
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => RestaurantPerformanceDetailsPage(
+                      vendorId: widget.vendorId,
+                      vendorName: _str(
+                        _vendorData['title'] ??
+                            _vendorData['authorName'] ??
+                            'Restaurant',
+                      ),
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.analytics, size: 18),
+              label: const Text('View Full Performance Report'),
+            ),
+            const Divider(),
+            _buildBadgeOverrideSection(),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildBadgeOverrideSection() {
+    final pm = _vendorData['publicMetrics'] as Map<String, dynamic>? ?? {};
+    final current = pm['overrideBadge']?.toString();
+    final effective = _selectedBadgeOverride ?? current;
+    final computedBadge = pm['badge']?.toString() ?? '—';
+
+    const options = [
+      (null, 'None (use computed)'),
+      ('fast', 'Fast Responder'),
+      ('reliable', 'Reliable'),
+      ('slow', 'Slow to Confirm'),
+      ('new', 'New Restaurant'),
+      ('hidden', 'Hidden'),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Performance Badge Override',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Computed badge: $computedBadge',
+          style: const TextStyle(
+            fontSize: 12,
+            color: Colors.grey,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String?>(
+                value: effective.isEmpty ? null : effective,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                ),
+                items: options
+                    .map(
+                      (e) => DropdownMenuItem<String?>(
+                        value: e.$1,
+                        child: Text(e.$2),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _savingBadgeOverride
+                    ? null
+                    : (v) => setState(() => _selectedBadgeOverride = v),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              onPressed: _savingBadgeOverride
+                  ? null
+                  : () => _saveBadgeOverride(effective),
+              child: _savingBadgeOverride
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _saveBadgeOverride(String? value) async {
+    setState(() => _savingBadgeOverride = true);
+    try {
+      await PublicMetricsService().setBadgeOverride(widget.vendorId, value);
+      if (!mounted) return;
+      setState(() {
+        _savingBadgeOverride = false;
+        _selectedBadgeOverride = null;
+        _vendorData = Map<String, dynamic>.from(_vendorData);
+        final pm = _vendorData['publicMetrics'] as Map<String, dynamic>? ?? {};
+        pm['overrideBadge'] = value;
+        _vendorData['publicMetrics'] = pm;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Badge override saved.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _savingBadgeOverride = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 }

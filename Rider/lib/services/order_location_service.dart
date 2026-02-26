@@ -1,4 +1,6 @@
 import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:foodie_driver/constants.dart';
 import 'package:foodie_driver/model/OrderModel.dart';
 import 'package:foodie_driver/model/User.dart';
@@ -26,6 +28,7 @@ class OrderLocationService {
   static Timer? _customerArrivalDetectionTimer;
   static final Set<String> _hasShownArrivalDialog = <String>{};
   static final Set<String> _hasShownCustomerArrival = <String>{};
+  static final Set<String> _hasRecordedArrival = <String>{};
   static bool _wasNearRestaurant = false;
   static bool _wasNearCustomer = false;
 
@@ -277,10 +280,27 @@ class OrderLocationService {
     _wasNearRestaurant = wouldBeNear;
 
     if (_wasNearRestaurant) {
+      if (!_hasRecordedArrival.contains(order.id)) {
+        _hasRecordedArrival.add(order.id);
+        _recordArrivedAtRestaurant(order.id);
+      }
       _startArrivalDetectionTimer(order.id, delaySec);
     } else {
       _cancelArrivalDetectionTimer();
       _departureDetectedController.add(order.id);
+    }
+  }
+
+  static Future<void> _recordArrivedAtRestaurant(String orderId) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection(ORDERS)
+          .doc(orderId)
+          .update({
+        'coordination.arrivedAtRestaurant': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      print('Error recording arrivedAtRestaurant: $e');
     }
   }
 
@@ -359,6 +379,7 @@ class OrderLocationService {
     _cancelCustomerArrivalDetectionTimer();
     _wasNearRestaurant = false;
     _wasNearCustomer = false;
+    _hasRecordedArrival.clear();
     _locationBuffer.clear();
     _lastSmoothedLocation = null;
     _lastProximityStateChangeAt = null;

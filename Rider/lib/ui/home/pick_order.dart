@@ -6,6 +6,8 @@ import 'package:foodie_driver/constants.dart';
 import 'package:foodie_driver/main.dart';
 import 'package:foodie_driver/model/OrderModel.dart';
 import 'package:foodie_driver/model/OrderProductModel.dart';
+import 'package:foodie_driver/constants/quick_messages.dart';
+import 'package:foodie_driver/services/eta_service.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/services/order_location_service.dart';
@@ -393,6 +395,14 @@ class _PickOrderState extends State<PickOrder> {
               ],
             ),
           ),
+          if (_order.driverID != null &&
+              (_order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                  _order.status == ORDER_STATUS_SHIPPED))
+            _buildEtaBanner(),
+          if (_order.driverID != null &&
+              (_order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                  _order.status == ORDER_STATUS_SHIPPED))
+            const SizedBox(height: 12),
           const SizedBox(height: 28),
           Text(
             "${_order.vendor.title}",
@@ -415,6 +425,156 @@ class _PickOrderState extends State<PickOrder> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildQuickMessageButton() {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.message),
+      onSelected: (key) => _sendQuickMessage(key),
+      itemBuilder: (context) =>
+          QuickMessages.getKeys('rider').map((key) {
+            final label = QuickMessages.getMessage(key, 'rider');
+            return PopupMenuItem<String>(
+              value: key,
+              child: Text(label),
+            );
+          }).toList(),
+    );
+  }
+
+  Future<void> _sendQuickMessage(String key) async {
+    final message = QuickMessages.getMessage(key, 'rider');
+    await FirebaseFirestore.instance
+        .collection('order_messages')
+        .doc(_order.id)
+        .collection('messages')
+        .add({
+      'senderId': MyAppState.currentUser?.userID ?? '',
+      'senderType': 'rider',
+      'messageType': 'quick',
+      'messageKey': key,
+      'messageText': message,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sent: $message')),
+      );
+    }
+  }
+
+  Widget _buildReportIssueButton() {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.report_problem),
+      onSelected: (key) => _reportIssue(key),
+      itemBuilder: (context) => [
+        const PopupMenuItem(value: 'long_wait', child: Text('Long wait')),
+        const PopupMenuItem(
+          value: 'restaurant_closed',
+          child: Text('Restaurant closed'),
+        ),
+        const PopupMenuItem(value: 'wrong_order', child: Text('Wrong order')),
+        const PopupMenuItem(value: 'missing_items', child: Text('Missing items')),
+        const PopupMenuItem(value: 'rude_staff', child: Text('Rude staff')),
+        const PopupMenuItem(value: 'other', child: Text('Other')),
+      ],
+    );
+  }
+
+  Future<void> _reportIssue(String issueType) async {
+    final riderId = MyAppState.currentUser?.userID ?? '';
+    int? waitMin;
+    final arrived = _order.coordination?['arrivedAtRestaurant'];
+    if (arrived != null && arrived is Timestamp) {
+      final arrivedDt = arrived.toDate();
+      waitMin = DateTime.now().difference(arrivedDt).inMinutes;
+    }
+    await FirebaseFirestore.instance.collection('pickup_issues').add({
+      'orderId': _order.id,
+      'riderId': riderId,
+      'restaurantId': _order.vendorID,
+      'issueType': issueType,
+      'waitTimeMinutes': waitMin,
+      'reportedAt': FieldValue.serverTimestamp(),
+      'status': 'pending',
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Issue reported. Admin will review.')),
+      );
+    }
+  }
+
+  int? _getRemainingPrepMinutes() {
+    final baseTime =
+        _order.acceptedAt?.toDate() ?? _order.createdAt.toDate();
+    final prepMinutes = OrderReadyTimeHelper.parsePreparationMinutes(
+      _order.estimatedTimeToPrepare,
+    );
+    final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    final remaining = readyAt.difference(DateTime.now()).inMinutes;
+    return remaining > 0 ? remaining : null;
+  }
+
+  Widget _buildEtaBanner() {
+    final riderId = _order.driverID;
+    if (riderId == null || riderId.isEmpty) return const SizedBox.shrink();
+    return StreamBuilder<int>(
+      stream: EtaService.watchEtaMinutes(
+        riderId: riderId,
+        restaurantLat: _order.vendor.latitude,
+        restaurantLng: _order.vendor.longitude,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data! >= 999) {
+          return const SizedBox.shrink();
+        }
+        final eta = snapshot.data!;
+        final remainingPrep = _getRemainingPrepMinutes();
+        final showWarning = remainingPrep != null && remainingPrep > eta;
+        Color bgColor = Colors.green.shade700;
+        if (showWarning) bgColor = Colors.orange.shade700;
+        return Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.timer, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Arriving in ~$eta min',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (showWarning)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Food may not be ready when you arrive',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.95),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -446,28 +606,36 @@ class _PickOrderState extends State<PickOrder> {
             ),
           ),
           centerTitle: false,
+          actions: [
+            _buildQuickMessageButton(),
+            _buildReportIssueButton(),
+          ],
         ),
         body: _buildPreparingView(),
       );
     }
 
     return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: Icon(Icons.chevron_left),
-          onPressed: () => Navigator.pop(context),
-        ),
-        titleSpacing: -8,
-        title: Text(
-          "Pick: ${_order.id}",
-          style: TextStyle(
-            color: isDarkMode(context) ? Color(0xffFFFFFF) : Color(0xff000000),
-            fontFamily: "Poppinsr",
+        appBar: AppBar(
+          leading: IconButton(
+            icon: Icon(Icons.chevron_left),
+            onPressed: () => Navigator.pop(context),
           ),
+          titleSpacing: -8,
+          title: Text(
+            "Pick: ${_order.id}",
+            style: TextStyle(
+              color: isDarkMode(context) ? Color(0xffFFFFFF) : Color(0xff000000),
+              fontFamily: "Poppinsr",
+            ),
+          ),
+          centerTitle: false,
+          actions: [
+            _buildQuickMessageButton(),
+            _buildReportIssueButton(),
+          ],
         ),
-        centerTitle: false,
-      ),
-      body: Padding(
+        body: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 25.0, vertical: 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -500,6 +668,14 @@ class _PickOrderState extends State<PickOrder> {
                 ],
               ),
             ),
+            if (_order.driverID != null &&
+                (_order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                    _order.status == ORDER_STATUS_SHIPPED))
+              _buildEtaBanner(),
+            if (_order.driverID != null &&
+                (_order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                    _order.status == ORDER_STATUS_SHIPPED))
+              const SizedBox(height: 12),
             SizedBox(height: 28),
             Text(
               "ITEMS",

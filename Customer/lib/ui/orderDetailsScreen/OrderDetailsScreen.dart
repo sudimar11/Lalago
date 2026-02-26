@@ -35,6 +35,7 @@ import 'package:foodie_customer/widget/order_status_progress_bar.dart';
 import 'package:foodie_customer/ui/ordersScreen/OrdersScreen.dart';
 import 'package:foodie_customer/ui/reviewScreen.dart/reviewScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
+import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 // Removed Google Maps/Directions client usage from this screen
 import 'package:lottie/lottie.dart' as lottie;
 import 'package:provider/provider.dart';
@@ -537,6 +538,47 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
     );
   }
 
+  Widget _buildPerformanceHint(OrderModel order) {
+    final badge = order.vendor.performanceBadge?.toLowerCase();
+    String? hint;
+    if (badge == 'fast') {
+      hint = 'This restaurant usually confirms within 1 minute';
+    } else if (badge == 'reliable') {
+      hint = 'This restaurant usually confirms within 2 minutes';
+    } else if (badge == 'slow') {
+      hint = 'This restaurant sometimes takes longer to confirm';
+    } else {
+      hint = 'Waiting for restaurant to confirm';
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, left: 10, right: 10),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.blue.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.blue.withOpacity(0.3)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.schedule, color: Colors.blue.shade700, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                hint,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontFamily: 'Poppinsr',
+                  color: Colors.blue.shade800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<OrderModel?> getOrderById(String orderId) async {
     try {
       DocumentSnapshot<Map<String, dynamic>> doc = await FirebaseFirestore
@@ -561,25 +603,14 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
   // Removed unused _onTimerEnd (auto-reject handled elsewhere)
 
-  void _showOrderRejectedDialog() {
+  void _showOrderRejectedDialog(OrderModel order) {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Order Unsuccessful'),
-          content: const Text(
-            "We regret to inform you that this order could not be completed as the restaurant is currently unavailable. We kindly recommend exploring other restaurant options. Thank you for your patience and understanding.",
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop(); // Close the dialog
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
+      barrierDismissible: false,
+      builder: (ctx) => _OrderRejectedWithSuggestionsDialog(
+        order: order,
+        onDismiss: () => Navigator.of(ctx).pop(),
+      ),
     );
   }
 
@@ -727,6 +758,10 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                   orderData,
                                   orderModel,
                                 ),
+                                if ((orderData['status'] as String?)
+                                        ?.toLowerCase() ==
+                                    'order placed')
+                                  _buildPerformanceHint(orderModel),
                               ],
                             ),
                           ),
@@ -2555,6 +2590,14 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
         debugPrint("Driver ID in order: ${event.driverID}");
 
         if (mounted) {
+          final wasRejected = (currentOrder?.status ?? '')
+              .toLowerCase()
+              .contains('rejected');
+          final isRejected =
+              event.status.toLowerCase().contains('rejected');
+          if (!wasRejected && isRejected) {
+            _showOrderRejectedDialog(event);
+          }
           setState(() {
             currentOrder = event;
 
@@ -3039,4 +3082,108 @@ Widget _buildChip(String label, int attributesOptionIndex) {
       ),
     ),
   );
+}
+
+class _OrderRejectedWithSuggestionsDialog extends StatefulWidget {
+  final OrderModel order;
+  final VoidCallback onDismiss;
+
+  const _OrderRejectedWithSuggestionsDialog({
+    required this.order,
+    required this.onDismiss,
+  });
+
+  @override
+  State<_OrderRejectedWithSuggestionsDialog> createState() =>
+      _OrderRejectedWithSuggestionsDialogState();
+}
+
+class _OrderRejectedWithSuggestionsDialogState
+    extends State<_OrderRejectedWithSuggestionsDialog> {
+  List<VendorModel> _similarVendors = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSimilar();
+  }
+
+  Future<void> _loadSimilar() async {
+    final list = await FireStoreUtils.getSimilarVendors(
+      widget.order.vendorID,
+      widget.order.vendor.categoryID.isNotEmpty
+          ? widget.order.vendor.categoryID
+          : null,
+      limit: 3,
+    );
+    if (mounted) {
+      setState(() {
+        _similarVendors = list;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Order Unsuccessful'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "The restaurant didn't confirm your order. "
+              "Here are similar options that respond quickly:",
+              style: TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 16),
+            if (_loading)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            else if (_similarVendors.isEmpty)
+              Text(
+                'No similar restaurants found. '
+                'Try searching for other options.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey.shade600,
+                ),
+              )
+            else
+              ..._similarVendors.map(
+                (v) => ListTile(
+                  title: Text(v.title),
+                  subtitle: Text(
+                    v.acceptanceRate != null
+                        ? '${v.acceptanceRate!.toStringAsFixed(0)}% acceptance'
+                        : 'No performance data',
+                  ),
+                  trailing: const Icon(Icons.arrow_forward),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    push(
+                      context,
+                      NewVendorProductsScreen(vendorModel: v),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: widget.onDismiss,
+          child: const Text('Maybe Later'),
+        ),
+      ],
+    );
+  }
 }

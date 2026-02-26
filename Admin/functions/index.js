@@ -51,6 +51,60 @@ function handleCors(req, res) {
 }
 
 /**
+ * Firestore Trigger: Notify recipient when rider/restaurant sends quick message.
+ * Triggered on order_messages/{orderId}/messages/{messageId} document create.
+ */
+exports.notifyOnOrderMessage = functions
+  .region('us-central1')
+  .firestore.document('order_messages/{orderId}/messages/{messageId}')
+  .onCreate(async (snap, context) => {
+    const orderId = context.params.orderId;
+    const msg = snap.data() || {};
+    const senderType = String(msg.senderType || '');
+    const messageText = String(msg.messageText || 'New message');
+
+    try {
+      const db = getDb();
+      const orderSnap = await db.collection('restaurant_orders').doc(orderId).get();
+      if (!orderSnap.exists) return null;
+
+      const order = orderSnap.data() || {};
+      const vendorID = order.vendorID || order.vendor?.id || '';
+      const driverID = order.driverID || '';
+
+      let token = '';
+      let title = 'Order Message';
+
+      if (senderType === 'rider') {
+        const vendorSnap = await db.collection('vendors').doc(vendorID).get();
+        token = vendorSnap.exists ? String(vendorSnap.data()?.fcmToken || '') : '';
+        title = 'Rider Message';
+      } else if (senderType === 'restaurant') {
+        const driverSnap = await db.collection('users').doc(driverID).get();
+        token = driverSnap.exists ? String(driverSnap.data()?.fcmToken || '') : '';
+        title = 'Restaurant Message';
+      }
+
+      if (!token) return null;
+
+      await getMessaging().send({
+        token,
+        notification: {
+          title,
+          body: messageText.length > 100 ? messageText.substring(0, 97) + '...' : messageText,
+        },
+        data: {
+          type: 'order_message',
+          orderId: String(orderId),
+        },
+      });
+    } catch (e) {
+      console.error('[notifyOnOrderMessage] Error:', e);
+    }
+    return null;
+  });
+
+/**
  * Firestore Trigger: Notify customer when driver sends a chat message
  *
  * Triggered on chat_driver/{orderId}/thread/{messageId} document create.
@@ -5954,6 +6008,56 @@ exports.validateBundleOrder = functions
   });
 
 /**
+ * On restaurant_orders create: set expiresAt and send FCM to restaurant.
+ */
+exports.onOrderCreatedSetExpiresAt = functions
+  .region('us-central1')
+  .firestore.document('restaurant_orders/{orderId}')
+  .onCreate(async (snap, context) => {
+    const orderId = context.params.orderId;
+    const data = snap.data() || {};
+    const vendorId = String(data.vendorID || data.vendorId || data.vendor?.id || '');
+    if (!vendorId) {
+      console.log(`[onOrderCreatedSetExpiresAt] No vendorId for order ${orderId}`);
+      return null;
+    }
+
+    const db = getDb();
+    const vendorSnap = await db.collection('vendors').doc(vendorId).get();
+    const vendorData = vendorSnap.exists ? vendorSnap.data() : {};
+    const settings = vendorData.acceptanceSettings || {};
+    const timerSeconds = Math.min(300, Math.max(60, settings.timerSeconds || 180));
+    const expiresAt = new Date(Date.now() + timerSeconds * 1000);
+
+    await snap.ref.update({
+      expiresAt: admin.firestore.Timestamp.fromDate(expiresAt),
+      acceptanceTimerSeconds: timerSeconds,
+    });
+
+    const fcmToken = vendorData.fcmToken || (data.vendor && data.vendor.fcmToken);
+    if (fcmToken) {
+      try {
+        await getMessaging().send({
+          token: fcmToken,
+          notification: {
+            title: 'New Order',
+            body: `You have a new order #${orderId.slice(-6)}`,
+          },
+          data: {
+            type: 'new_order',
+            orderId: orderId,
+          },
+        });
+        console.log(`[onOrderCreatedSetExpiresAt] FCM sent to vendor for order ${orderId}`);
+      } catch (e) {
+        console.error(`[onOrderCreatedSetExpiresAt] FCM failed:`, e);
+      }
+    }
+
+    return null;
+  });
+
+/**
  * On restaurant_orders create: send SMS to restaurant if it has no device.
  * One-way notification only. Admin will accept/reject on behalf of restaurant.
  */
@@ -6101,6 +6205,583 @@ exports.pendingOrderTimeoutChecker = functions
       }
     }
 
+    return null;
+  });
+
+async function checkAndAutoPause(db, vendorId) {
+  const vendorRef = db.collection('vendors').doc(vendorId);
+  const vendorSnap = await vendorRef.get();
+  if (!vendorSnap.exists) return;
+
+  const vendor = vendorSnap.data();
+  const metrics = vendor.acceptanceMetrics || {};
+  const settings = vendor.acceptanceSettings || {};
+  const consecutive = (metrics.consecutiveUnaccepted || 0);
+  const threshold = settings.consecutiveMissesThreshold || 2;
+  const autoPauseEnabled = settings.autoPauseEnabled !== false;
+
+  if (consecutive < threshold || !autoPauseEnabled) return;
+
+  const now = new Date();
+  let autoUnpauseAt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 6, 0, 0);
+  if (autoUnpauseAt <= now) {
+    autoUnpauseAt.setDate(autoUnpauseAt.getDate() + 1);
+  }
+
+  await vendorRef.update({
+    autoPause: {
+      isPaused: true,
+      pausedAt: admin.firestore.FieldValue.serverTimestamp(),
+      pauseReason: 'consecutive_unaccepted',
+      autoUnpauseAt: admin.firestore.Timestamp.fromDate(autoUnpauseAt),
+      pausedBy: 'system',
+    },
+  });
+
+  await vendorRef.collection('pauseHistory').add({
+    pausedAt: admin.firestore.FieldValue.serverTimestamp(),
+    pauseReason: 'consecutive_unaccepted',
+    consecutiveMisses: consecutive,
+    autoUnpauseAt: admin.firestore.Timestamp.fromDate(autoUnpauseAt),
+    resumedAt: null,
+  });
+
+  const fcmToken = vendor.fcmToken;
+  if (fcmToken) {
+    try {
+      await getMessaging().send({
+        token: fcmToken,
+        notification: {
+          title: 'Store Paused',
+          body: `Your store has been paused due to ${consecutive} unaccepted orders.`,
+        },
+        data: {
+          type: 'store_paused',
+          reason: 'consecutive_unaccepted',
+        },
+      });
+    } catch (e) {
+      console.error('[checkAndAutoPause] FCM failed:', e);
+    }
+  }
+}
+
+/**
+ * Scheduled: reject expired Order Placed orders and update vendor metrics.
+ */
+exports.acceptanceTimeoutChecker = functions
+  .region('us-central1')
+  .pubsub.schedule('* * * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = admin.firestore.Timestamp.now();
+
+    const expiredSnap = await db
+      .collection('restaurant_orders')
+      .where('status', '==', 'Order Placed')
+      .where('expiresAt', '<=', now)
+      .limit(100)
+      .get();
+
+    for (const doc of expiredSnap.docs) {
+      const data = doc.data();
+      const vendorId = String(data.vendorID || data.vendorId || data.vendor?.id || '');
+
+      try {
+        await doc.ref.update({
+          status: 'Order Rejected',
+          rejectedAt: admin.firestore.FieldValue.serverTimestamp(),
+          rejectionReason: 'timeout',
+        });
+
+        if (vendorId) {
+          const vendorRef = db.collection('vendors').doc(vendorId);
+          const vendorSnap = await vendorRef.get();
+          if (vendorSnap.exists) {
+            const v = vendorSnap.data();
+            const metrics = v.acceptanceMetrics || {};
+            const today = new Date().toISOString().slice(0, 10);
+            const lastReset = metrics.lastResetDate || '';
+            const updates = {
+              'acceptanceMetrics.consecutiveUnaccepted': admin.firestore.FieldValue.increment(1),
+              'acceptanceMetrics.lastUnacceptedAt': admin.firestore.FieldValue.serverTimestamp(),
+              'acceptanceMetrics.totalUnacceptedToday': admin.firestore.FieldValue.increment(1),
+            };
+            if (lastReset !== today) {
+              updates['acceptanceMetrics.lastResetDate'] = today;
+              updates['acceptanceMetrics.totalUnacceptedToday'] = 1;
+            }
+            await vendorRef.update(updates);
+            await checkAndAutoPause(db, vendorId);
+          }
+        }
+        console.log(`[acceptanceTimeoutChecker] Order ${doc.id} rejected (timeout)`);
+      } catch (e) {
+        console.error(`[acceptanceTimeoutChecker] Failed for order ${doc.id}:`, e);
+      }
+    }
+
+    return null;
+  });
+
+/**
+ * Scheduled: auto-unpause vendors at 6 AM daily.
+ */
+exports.scheduledRestaurantUnpause = functions
+  .region('us-central1')
+  .pubsub.schedule('0 6 * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = admin.firestore.Timestamp.now();
+
+    const pausedSnap = await db
+      .collection('vendors')
+      .where('autoPause.isPaused', '==', true)
+      .where('autoPause.autoUnpauseAt', '<=', now)
+      .get();
+
+    for (const doc of pausedSnap.docs) {
+      try {
+        await doc.ref.update({
+          'autoPause.isPaused': false,
+          'autoPause.resumedAt': admin.firestore.FieldValue.serverTimestamp(),
+          'autoPause.resumedBy': 'auto',
+        });
+
+        const historySnap = await doc.ref
+          .collection('pauseHistory')
+          .where('resumedAt', '==', null)
+          .limit(1)
+          .get();
+
+        for (const h of historySnap.docs) {
+          await h.ref.update({
+            resumedAt: admin.firestore.FieldValue.serverTimestamp(),
+            resumedBy: 'auto',
+          });
+        }
+
+        const vendor = doc.data();
+        const fcmToken = vendor.fcmToken;
+        if (fcmToken) {
+          try {
+            await getMessaging().send({
+              token: fcmToken,
+              notification: {
+                title: 'Store Auto-Unpaused',
+                body: 'Your store has been automatically unpaused and is now accepting orders.',
+              },
+            });
+          } catch (_) {}
+        }
+        console.log(`[scheduledRestaurantUnpause] Unpaused vendor ${doc.id}`);
+      } catch (e) {
+        console.error(`[scheduledRestaurantUnpause] Failed for vendor ${doc.id}:`, e);
+      }
+    }
+
+    return null;
+  });
+
+/**
+ * Compute publicMetrics for a vendor from last 30 days of dailyMetrics.
+ * Returns { badge, acceptanceRate, avgAcceptanceTimeSeconds, orderCountLast30Days, qualifiedAt }
+ */
+async function computePublicMetrics(db, vendorId, now) {
+  const vendorRef = db.collection('vendors').doc(vendorId);
+  const refs = [];
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    refs.push(vendorRef.collection('dailyMetrics').doc(d.toISOString().slice(0, 10)));
+  }
+  const snaps = await db.getAll(...refs);
+
+  let totalOrders = 0;
+  let accepted = 0;
+  let totalAcceptanceTime = 0;
+  let acceptanceTimeCount = 0;
+
+  for (const snap of snaps) {
+    if (!snap.exists) continue;
+    const data = snap.data();
+    const t = data.totalOrders || 0;
+    const a = data.accepted || 0;
+    const avgTime = data.avgAcceptanceTimeSeconds || 0;
+    totalOrders += t;
+    accepted += a;
+    if (a > 0 && avgTime > 0) {
+      totalAcceptanceTime += avgTime * a;
+      acceptanceTimeCount += a;
+    }
+  }
+
+  const acceptanceRate = totalOrders > 0 ? (accepted / totalOrders) * 100 : 100;
+  const avgAcceptanceTimeSeconds =
+    acceptanceTimeCount > 0 ? totalAcceptanceTime / acceptanceTimeCount : 0;
+  const qualifiedAt = now.toISOString().slice(0, 10);
+
+  // Aggregate confirmation speed feedback from order_feedback
+  let avgConfirmationSpeedRating = null;
+  const feedbackSnap = await db
+    .collection('order_feedback')
+    .where('vendorId', '==', vendorId)
+    .get();
+  if (!feedbackSnap.empty) {
+    let sum = 0;
+    let count = 0;
+    for (const d of feedbackSnap.docs) {
+      const r = d.data().confirmationSpeedRating;
+      if (typeof r === 'number' && r >= 1 && r <= 5) {
+        sum += r;
+        count++;
+      }
+    }
+    if (count > 0) {
+      avgConfirmationSpeedRating = Math.round((sum / count) * 10) / 10;
+    }
+  }
+
+  let badge = null;
+  if (totalOrders < 30) {
+    badge = 'new';
+  } else if (acceptanceRate > 98 && avgAcceptanceTimeSeconds < 45) {
+    badge = 'fast';
+  } else if (acceptanceRate > 90) {
+    badge = 'reliable';
+  } else if (acceptanceRate < 80) {
+    badge = 'slow';
+  }
+
+  const result = {
+    badge,
+    acceptanceRate: Math.round(acceptanceRate * 10) / 10,
+    avgAcceptanceTimeSeconds: Math.round(avgAcceptanceTimeSeconds * 10) / 10,
+    orderCountLast30Days: totalOrders,
+    qualifiedAt,
+  };
+  if (avgConfirmationSpeedRating != null) {
+    result.avgConfirmationSpeedRating = avgConfirmationSpeedRating;
+  }
+  return result;
+}
+
+/**
+ * Compute coordination metrics for a vendor from last 30 days of completed orders.
+ * Returns { coordinationScore, avgRiderWaitSeconds, readyOnTimeRate } or null.
+ */
+async function computeCoordinationMetrics(db, vendorId, now) {
+  const thirtyDaysAgo = new Date(now);
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const ordersSnap = await db
+    .collection('restaurant_orders')
+    .where('vendorID', '==', vendorId)
+    .where('status', '==', 'Order Completed')
+    .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(thirtyDaysAgo))
+    .get();
+
+  let totalWaitSeconds = 0;
+  let ordersWithArrival = 0;
+  let readyOnTimeCount = 0;
+  let ordersWithReadyData = 0;
+
+  const toMs = (ts) => {
+    if (!ts) return null;
+    if (ts._seconds != null) return ts._seconds * 1000;
+    if (ts.seconds != null) return ts.seconds * 1000;
+    if (ts.toMillis) return ts.toMillis();
+    return null;
+  };
+
+  for (const doc of ordersSnap.docs) {
+    const order = doc.data();
+    const arrivedAt = order.coordination?.arrivedAtRestaurant;
+    const pickedUpAt = order.pickedUpAt;
+    const readyAt = order.readyAt;
+
+    if (arrivedAt && pickedUpAt) {
+      const arrivedMs = toMs(arrivedAt);
+      const pickedMs = toMs(pickedUpAt);
+      if (arrivedMs != null && pickedMs != null) {
+        totalWaitSeconds += (pickedMs - arrivedMs) / 1000;
+        ordersWithArrival++;
+      }
+    }
+
+    if (readyAt && arrivedAt) {
+      const readyMs = toMs(readyAt);
+      const arrivedMs = toMs(arrivedAt);
+      if (readyMs != null && arrivedMs != null) {
+        if (readyMs <= arrivedMs) readyOnTimeCount++;
+        ordersWithReadyData++;
+      }
+    }
+  }
+
+  const avgRiderWaitSeconds =
+    ordersWithArrival > 0 ? totalWaitSeconds / ordersWithArrival : null;
+  const readyOnTimeRate =
+    ordersWithReadyData > 0
+      ? (readyOnTimeCount / ordersWithReadyData) * 100
+      : null;
+
+  let coordinationScore = 100;
+  if (avgRiderWaitSeconds != null) {
+    if (avgRiderWaitSeconds > 300) {
+      coordinationScore -= Math.min(30, (avgRiderWaitSeconds - 300) / 60);
+    }
+  }
+  if (readyOnTimeRate != null) {
+    coordinationScore = coordinationScore * 0.6 + readyOnTimeRate * 0.4;
+  }
+  coordinationScore = Math.max(0, Math.min(100, Math.round(coordinationScore)));
+
+  return {
+    coordinationScore,
+    avgRiderWaitSeconds: avgRiderWaitSeconds != null
+      ? Math.round(avgRiderWaitSeconds * 10) / 10
+      : null,
+    readyOnTimeRate: readyOnTimeRate != null
+      ? Math.round(readyOnTimeRate * 10) / 10
+      : null,
+  };
+}
+
+/**
+ * Scheduled: Send rider arrival warnings to restaurants (Phase 4.2).
+ * Runs every 2 minutes. For orders with Driver Accepted/Order Shipped,
+ * computes rider ETA to restaurant and sends 5-min and 2-min warnings.
+ */
+exports.sendRiderArrivalWarnings = functions
+  .region('us-central1')
+  .pubsub.schedule('every 2 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = new Date();
+    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+
+    const ordersSnap = await db
+      .collection('restaurant_orders')
+      .where('status', 'in', ['Driver Accepted', 'Order Shipped'])
+      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(twoHoursAgo))
+      .get();
+
+    for (const orderDoc of ordersSnap.docs) {
+      try {
+        const orderId = orderDoc.id;
+        const order = orderDoc.data();
+        const driverID = order.driverID;
+        const vendorID = order.vendorID || order.vendor?.id;
+        if (!driverID || !vendorID) continue;
+
+        const coord = order.coordination || {};
+        const restaurantNotifiedAt = coord.restaurantNotifiedAt;
+        const riderArrivalNotifiedAt = coord.riderArrivalNotifiedAt;
+
+        let restLat; let restLng;
+        if (order.vendor && (order.vendor.latitude != null || order.vendor.latitude !== undefined)) {
+          restLat = Number(order.vendor.latitude) || 0;
+          restLng = Number(order.vendor.longitude) || 0;
+        } else {
+          const vendorSnap = await db.collection('vendors').doc(vendorID).get();
+          if (!vendorSnap.exists) continue;
+          const v = vendorSnap.data() || {};
+          restLat = Number(v.latitude) || 0;
+          restLng = Number(v.longitude) || 0;
+        }
+
+        const riderSnap = await db.collection('users').doc(driverID).get();
+        if (!riderSnap.exists) continue;
+        const riderData = riderSnap.data() || {};
+        const loc = riderData.location;
+        if (!loc) continue;
+        const riderLat = loc.latitude != null ? Number(loc.latitude) : (loc.lat != null ? Number(loc.lat) : null);
+        const riderLng = loc.longitude != null ? Number(loc.longitude) : (loc.lng != null ? Number(loc.lng) : null);
+        if (riderLat == null || riderLng == null) continue;
+
+        const eta = Math.ceil(calculateETA(
+          { lat: riderLat, lng: riderLng },
+          { lat: restLat, lng: restLng },
+        ));
+
+        const orderRef = db.collection('restaurant_orders').doc(orderId);
+
+        if (eta <= 5 && !restaurantNotifiedAt) {
+          let token = String(order.vendor?.fcmToken || '');
+          if (!token) {
+            const vendorSnap = await db.collection('vendors').doc(vendorID).get();
+            token = String(vendorSnap.exists ? (vendorSnap.data()?.fcmToken || '') : '');
+          }
+          if (token) {
+            const shortId = orderId.length > 8 ? orderId.substring(0, 8) : orderId;
+            await getMessaging().send({
+              token,
+              notification: {
+                title: 'Rider Arriving Soon',
+                body: `Rider for order #${shortId} arriving in ~5 minutes`,
+              },
+              data: {
+                type: 'rider_arrival_warning',
+                orderId: String(orderId),
+                minutes: '5',
+              },
+            });
+          }
+          await orderRef.update({
+            'coordination.restaurantNotifiedAt': admin.firestore.FieldValue.serverTimestamp(),
+            'coordination.notificationType': 'five_min_warning',
+          });
+        }
+
+        if (eta <= 2 && !riderArrivalNotifiedAt) {
+          let token = String(order.vendor?.fcmToken || '');
+          if (!token) {
+            const vendorSnap = await db.collection('vendors').doc(vendorID).get();
+            token = String(vendorSnap.exists ? (vendorSnap.data()?.fcmToken || '') : '');
+          }
+          if (token) {
+            const shortId = orderId.length > 8 ? orderId.substring(0, 8) : orderId;
+            await getMessaging().send({
+              token,
+              notification: {
+                title: 'Rider Arriving NOW',
+                body: `Rider for order #${shortId} is ~2 min away`,
+              },
+              data: {
+                type: 'rider_arrival_warning',
+                orderId: String(orderId),
+                minutes: '2',
+              },
+            });
+          }
+          await orderRef.update({
+            'coordination.riderArrivalNotifiedAt': admin.firestore.FieldValue.serverTimestamp(),
+            'coordination.notificationType': 'two_min_warning',
+          });
+        }
+      } catch (e) {
+        console.error(`[sendRiderArrivalWarnings] Error for order ${orderDoc.id}:`, e);
+      }
+    }
+    return null;
+  });
+
+/**
+ * Scheduled: compute daily restaurant metrics at 11:59 PM (Asia/Manila).
+ */
+exports.computeDailyRestaurantMetrics = functions
+  .region('us-central1')
+  .pubsub.schedule('59 23 * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    const vendorsSnap = await db.collection('vendors').get();
+
+    for (const vendorDoc of vendorsSnap.docs) {
+      const vendorId = vendorDoc.id;
+      const vendorData = vendorDoc.data() || {};
+
+      try {
+        const ordersSnap = await db
+          .collection('restaurant_orders')
+          .where('vendorID', '==', vendorId)
+          .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(startOfDay))
+          .where('createdAt', '<=', admin.firestore.Timestamp.fromDate(endOfDay))
+          .get();
+
+        let total = 0;
+        let accepted = 0;
+        let missed = 0;
+        let totalAcceptanceTime = 0;
+        let acceptanceTimeCount = 0;
+
+        for (const orderDoc of ordersSnap.docs) {
+          const order = orderDoc.data();
+          total++;
+
+          const status = String(order.status || '').toLowerCase();
+          if (status === 'order accepted') {
+            accepted++;
+            const acceptedAt = order.acceptedAt;
+            const createdAt = order.createdAt;
+            if (acceptedAt && createdAt) {
+              const a = acceptedAt.toDate ? acceptedAt.toDate() : new Date(acceptedAt.seconds * 1000);
+              const c = createdAt.toDate ? createdAt.toDate() : new Date(createdAt.seconds * 1000);
+              totalAcceptanceTime += (a - c) / 1000;
+              acceptanceTimeCount++;
+            }
+          }
+
+          if (status === 'order rejected') missed++;
+          if (status === 'order placed') {
+            const expiresAt = order.expiresAt;
+            if (expiresAt) {
+              const exp = expiresAt.toDate ? expiresAt.toDate() : new Date(expiresAt.seconds * 1000);
+              if (exp < now) missed++;
+            }
+          }
+        }
+
+        const acceptanceRate = total > 0 ? (accepted / total) * 100 : 100;
+        const avgAcceptanceTime = acceptanceTimeCount > 0
+          ? totalAcceptanceTime / acceptanceTimeCount
+          : 0;
+
+        const metrics = vendorData.acceptanceMetrics || {};
+        const autoPause = vendorData.autoPause || {};
+
+        await db
+          .collection('vendors')
+          .doc(vendorId)
+          .collection('dailyMetrics')
+          .doc(dateStr)
+          .set({
+            date: dateStr,
+            totalOrders: total,
+            accepted,
+            missed,
+            acceptanceRate,
+            avgAcceptanceTimeSeconds: avgAcceptanceTime,
+            consecutiveMisses: metrics.consecutiveUnaccepted || 0,
+            wasPaused: autoPause.isPaused === true,
+            computedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+
+        // Compute publicMetrics from last 30 days of dailyMetrics
+        const publicMetrics = await computePublicMetrics(db, vendorId, now);
+        const coordMetrics = await computeCoordinationMetrics(db, vendorId, now);
+        const vendorRef = db.collection('vendors').doc(vendorId);
+        const currentData = (await vendorRef.get()).data() || {};
+        const existingPublicMetrics = currentData.publicMetrics || {};
+        const publicUpdates = {
+          ...publicMetrics,
+          overrideBadge: existingPublicMetrics.overrideBadge || null,
+        };
+        if (coordMetrics) {
+          publicUpdates.coordinationScore = coordMetrics.coordinationScore;
+          publicUpdates.avgRiderWaitSeconds = coordMetrics.avgRiderWaitSeconds;
+          publicUpdates.readyOnTimeRate = coordMetrics.readyOnTimeRate;
+          publicUpdates.coordinationLastUpdated =
+            admin.firestore.FieldValue.serverTimestamp();
+        }
+        await vendorRef.update({
+          publicMetrics: publicUpdates,
+        });
+      } catch (e) {
+        console.error(`[computeDailyRestaurantMetrics] Failed for vendor ${vendorId}:`, e);
+      }
+    }
+
+    console.log(`[computeDailyRestaurantMetrics] Completed for ${vendorsSnap.size} vendors`);
     return null;
   });
 

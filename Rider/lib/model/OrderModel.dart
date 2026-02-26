@@ -51,6 +51,9 @@ class OrderModel {
   bool? restaurantArrivalConfirmed;
   bool? customerArrivalDetected;
 
+  /// Coordination data (rider ETA, arrivedAtRestaurant, notifications).
+  Map<String, dynamic>? coordination;
+
   Timestamp? riderAcceptDeadline;
 
   // Driver earnings fields (calculated when order is completed)
@@ -92,6 +95,7 @@ class OrderModel {
       this.taxModel,
       this.restaurantArrivalConfirmed,
       this.customerArrivalDetected,
+      this.coordination,
       this.originalDeliveryFee,
       this.driverEarnings,
       this.discountAmount,
@@ -197,6 +201,7 @@ class OrderModel {
       taxModel: taxList,
       restaurantArrivalConfirmed: parsedJson["restaurantArrivalConfirmed"],
       customerArrivalDetected: parsedJson["customerArrivalDetected"],
+      coordination: parsedJson["coordination"] as Map<String, dynamic>?,
       originalDeliveryFee: parsedJson["originalDeliveryFee"] != null
           ? (parsedJson["originalDeliveryFee"] is String
               ? parsedJson["originalDeliveryFee"]
@@ -263,6 +268,7 @@ class OrderModel {
       "rejectedByDrivers": this.rejectedByDrivers,
       "restaurantArrivalConfirmed": this.restaurantArrivalConfirmed,
       "customerArrivalDetected": this.customerArrivalDetected,
+      "coordination": this.coordination,
       "originalDeliveryFee": this.originalDeliveryFee,
       "driverEarnings": this.driverEarnings,
       "discountAmount": this.discountAmount,

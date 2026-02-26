@@ -5,6 +5,7 @@ import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/FavouriteModel.dart';
 import 'package:foodie_customer/model/OrderModel.dart';
+import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
@@ -12,6 +13,7 @@ import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 import 'package:foodie_customer/ui/reviewScreen.dart/reviewScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:intl/intl.dart';
 
 class PostCompletionDialog extends StatefulWidget {
@@ -40,6 +42,8 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
   bool _isProcessingFavorite = false;
   Set<String> _selectedFeedbackTags = {};
   bool? _orderAccuracy;
+  double? _confirmationSpeedRating;
+  bool _savingConfirmationFeedback = false;
   final TextEditingController _reportController = TextEditingController();
 
   @override
@@ -392,6 +396,36 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
     }
   }
 
+  Future<void> _handleConfirmationSpeedRating(double rating) async {
+    setState(() {
+      _confirmationSpeedRating = rating;
+      _savingConfirmationFeedback = true;
+    });
+    try {
+      await FirebaseFirestore.instance.collection(ORDER_FEEDBACK).add({
+        'orderId': widget.order.id,
+        'vendorId': widget.order.vendorID,
+        'userId': MyAppState.currentUser?.userID ?? '',
+        'confirmationSpeedRating': rating.toInt(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Thank you for your feedback!')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error saving confirmation feedback: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save feedback: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _savingConfirmationFeedback = false);
+    }
+  }
+
   void _toggleFeedbackTag(String tag) {
     setState(() {
       if (_selectedFeedbackTags.contains(tag)) {
@@ -505,6 +539,38 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
                       ),
                     ),
 
+                    const SizedBox(height: 24),
+
+                    // Confirmation speed feedback
+                    Text(
+                      'How fast did the restaurant confirm your order?',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontFamily: 'Poppinsr',
+                        color: isDarkMode(context)
+                            ? Colors.white70
+                            : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    RatingBar.builder(
+                      initialRating: _confirmationSpeedRating ?? 0,
+                      minRating: 1,
+                      direction: Axis.horizontal,
+                      allowHalfRating: false,
+                      itemCount: 5,
+                      itemSize: 28,
+                      itemPadding:
+                          const EdgeInsets.symmetric(horizontal: 2),
+                      itemBuilder: (context, _) => Icon(
+                        Icons.star,
+                        color: Color(COLOR_PRIMARY),
+                      ),
+                      onRatingUpdate: (rating) {
+                        _handleConfirmationSpeedRating(rating);
+                      },
+                      ignoreGestures: _savingConfirmationFeedback,
+                    ),
                     const SizedBox(height: 24),
 
                     // Secondary Actions

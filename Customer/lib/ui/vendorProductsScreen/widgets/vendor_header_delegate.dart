@@ -12,6 +12,7 @@ import '../../../model/WorkingHoursModel.dart';
 import '../../../services/helper.dart';
 import 'ficon_button.dart';
 import '../../../ui/home/sections/widgets/restaurant_eta_fee_row.dart';
+import 'restaurant_performance_section.dart';
 
 class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
   final BuildContext context;
@@ -178,7 +179,20 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                             runSpacing: 6,
                             crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              if (vendorModel.reviewsCount != 0)
+                              if (vendorModel.serviceRating != null)
+                                Text(
+                                  'Food: ${vendorModel.foodRating.toStringAsFixed(1)} | '
+                                  'Service: ${vendorModel.serviceRating!.toStringAsFixed(1)}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontFamily: 'Poppinsm',
+                                    fontWeight: FontWeight.w600,
+                                    color: isDarkMode(context)
+                                        ? Colors.white
+                                        : const Color(0xff2A2A2A),
+                                  ),
+                                )
+                              else if (vendorModel.reviewsCount != 0)
                                 _StatChip(
                                   icon: Icons.star_rounded,
                                   iconColor: Colors.amber,
@@ -201,6 +215,7 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                                 ),
                             ],
                           ),
+                          RestaurantPerformanceSection(vendorModel: vendorModel),
                           RestaurantEtaFeeRow(
                             vendorModel: vendorModel,
                             currencyModel: null,

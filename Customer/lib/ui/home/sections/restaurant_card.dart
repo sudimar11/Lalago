@@ -13,6 +13,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
+import 'package:foodie_customer/widgets/performance_badge.dart';
 
 class RestaurantCard extends StatelessWidget {
   final VendorModel vendorModel;
@@ -185,7 +186,11 @@ class RestaurantCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(vendorModel.title,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(vendorModel.title,
                           maxLines: 1,
                           style: TextStyle(
                             fontFamily: "Poppinsm",
@@ -196,6 +201,13 @@ class RestaurantCard extends StatelessWidget {
                                 ? Colors.white
                                 : Colors.black,
                           )),
+                          ),
+                          PerformanceBadge(
+                            vendorModel: vendorModel,
+                            compact: true,
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 8),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.center,

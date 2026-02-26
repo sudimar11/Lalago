@@ -41,6 +41,9 @@ class OrderModel {
   Timestamp? readyAt;
   Timestamp? shippedAt;
 
+  /// Coordination data (rider ETA, arrivedAtRestaurant, notifications).
+  Map<String, dynamic>? coordination;
+
   OrderModel(
       {address,
       author,
@@ -70,6 +73,7 @@ class OrderModel {
       this.acceptedAt,
       this.readyAt,
       this.shippedAt,
+      this.coordination,
       this.taxModel})
       : this.address = address ?? AddressModel(),
         this.author = author ?? User(),
@@ -146,7 +150,7 @@ class OrderModel {
       acceptedAt: parsedJson["acceptedAt"],
       readyAt: parsedJson["readyAt"],
       shippedAt: parsedJson["shippedAt"],
-
+      coordination: parsedJson["coordination"] as Map<String, dynamic>?,
       taxModel: taxList,
     );
   }
@@ -183,6 +187,7 @@ class OrderModel {
       "acceptedAt": this.acceptedAt,
       "readyAt": this.readyAt,
       "shippedAt": this.shippedAt,
+      "coordination": this.coordination,
     };
   }
 

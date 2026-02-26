@@ -115,4 +115,19 @@ class RestaurantSettingsService {
       SetOptions(merge: true),
     );
   }
+
+  /// Update acceptance settings on the vendor document.
+  Future<void> updateAcceptanceSettings(
+    String vendorId, {
+    required bool autoPauseEnabled,
+    int consecutiveMissesThreshold = 2,
+    int timerSeconds = 180,
+  }) async {
+    await _firestore.collection('vendors').doc(vendorId).update({
+      'acceptanceSettings.autoPauseEnabled': autoPauseEnabled,
+      'acceptanceSettings.consecutiveMissesThreshold':
+          consecutiveMissesThreshold,
+      'acceptanceSettings.timerSeconds': timerSeconds,
+    });
+  }
 }

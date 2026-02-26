@@ -28,6 +28,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool prepRemindersEnabled = true;
   int reminderMinutes = 5;
 
+  bool soundAlertsEnabled = true;
+  int timerSeconds = 180;
+  bool autoPauseEnabled = true;
+  int consecutiveMisses = 0;
+
   VendorModel? vendors;
 
   @override
@@ -58,9 +63,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         .then((snap) {
       if (snap.exists && snap.data() != null) {
         final d = snap.data()!;
+        final acceptance = d['acceptanceSettings'] as Map<String, dynamic>? ?? {};
+        final metrics = d['acceptanceMetrics'] as Map<String, dynamic>? ?? {};
         setState(() {
           prepRemindersEnabled = d['prepRemindersEnabled'] as bool? ?? true;
           reminderMinutes = d['reminderMinutes'] as int? ?? 5;
+          soundAlertsEnabled =
+              acceptance['soundAlertsEnabled'] as bool? ?? true;
+          timerSeconds = acceptance['timerSeconds'] as int? ?? 180;
+          autoPauseEnabled =
+              acceptance['autoPauseEnabled'] as bool? ?? true;
+          consecutiveMisses =
+              (metrics['consecutiveUnaccepted'] as int?) ?? 0;
         });
       }
     });
@@ -80,6 +94,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
     } catch (e) {
       debugPrint('Error saving prep reminder prefs: $e');
+    }
+  }
+
+  Future<void> _saveAcceptancePrefs() async {
+    final vid = MyAppState.currentUser?.vendorID;
+    if (vid == null || vid.isEmpty) return;
+    try {
+      await FirebaseFirestore.instance.collection('vendors').doc(vid).update({
+        'acceptanceSettings': {
+          'soundAlertsEnabled': soundAlertsEnabled,
+          'timerSeconds': timerSeconds,
+          'autoPauseEnabled': autoPauseEnabled,
+        },
+      });
+    } catch (e) {
+      debugPrint('Error saving acceptance prefs: $e');
     }
   }
 
@@ -273,6 +303,106 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               Padding(
+                padding: const EdgeInsets.only(right: 16, left: 16, top: 24, bottom: 8),
+                child: Text(
+                  'Acceptance Settings'.tr(),
+                  style: TextStyle(color: isDarkMode(context) ? Colors.white54 : Colors.black54, fontSize: 18),
+                ),
+              ),
+              Material(
+                elevation: 2,
+                color: isDarkMode(context) ? Color(DARK_CARD_BG_COLOR) : Colors.white,
+                child: Column(
+                  children: [
+                    SwitchListTile.adaptive(
+                      activeColor: Color(COLOR_ACCENT),
+                      title: Text(
+                        'Sound Alerts'.tr(),
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Play sound for new orders',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: isDarkMode(context) ? Colors.white54 : Colors.black54,
+                        ),
+                      ),
+                      value: soundAlertsEnabled,
+                      onChanged: (v) {
+                        setState(() => soundAlertsEnabled = v);
+                        _saveAcceptancePrefs();
+                      },
+                    ),
+                    ListTile(
+                      title: Text(
+                        'Acceptance Timer',
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      subtitle: Text('${timerSeconds ~/ 60} minutes'),
+                      trailing: DropdownButton<int>(
+                        value: timerSeconds,
+                        items: [60, 120, 180, 240, 300].map((s) {
+                          return DropdownMenuItem(
+                            value: s,
+                            child: Text('${s ~/ 60} min'),
+                          );
+                        }).toList(),
+                        onChanged: (v) {
+                          if (v != null) {
+                            setState(() => timerSeconds = v);
+                            _saveAcceptancePrefs();
+                          }
+                        },
+                      ),
+                    ),
+                    SwitchListTile.adaptive(
+                      activeColor: Color(COLOR_ACCENT),
+                      title: Text(
+                        'Auto-Pause on Misses'.tr(),
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Pause store after consecutive unaccepted orders',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: isDarkMode(context) ? Colors.white54 : Colors.black54,
+                        ),
+                      ),
+                      value: autoPauseEnabled,
+                      onChanged: (v) {
+                        setState(() => autoPauseEnabled = v);
+                        _saveAcceptancePrefs();
+                      },
+                    ),
+                    ListTile(
+                      title: Text(
+                        'Consecutive Misses'.tr(),
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      trailing: Text(
+                        '$consecutiveMisses',
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
                 padding: const EdgeInsets.only(top: 32.0, bottom: 16),
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(minWidth: double.infinity),
@@ -294,6 +424,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           await FireStoreUtils.updatestatus(vendor, reststatus);
                           await FireStoreUtils.updatePhoto(vendor, photos);
                           await _savePrepReminderPrefs();
+                          await _saveAcceptancePrefs();
                         }
 
                         User? updateUser = await FireStoreUtils.updateCurrentUser(user!);

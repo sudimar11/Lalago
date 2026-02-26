@@ -17,6 +17,7 @@ import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
+import 'package:foodie_customer/widgets/performance_badge.dart';
 import 'package:foodie_customer/ui/home/view_all_popular_restaurant_screen.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
@@ -362,7 +363,7 @@ class _TopRestaurantCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Restaurant name and rating
+                        // Restaurant name, badge, and rating
                         Row(
                           children: [
                             Expanded(
@@ -380,6 +381,10 @@ class _TopRestaurantCard extends StatelessWidget {
                                       : Colors.black87,
                                 ),
                               ),
+                            ),
+                            PerformanceBadge(
+                              vendorModel: vendorModel,
+                              compact: true,
                             ),
                             const SizedBox(width: 8),
                             Container(

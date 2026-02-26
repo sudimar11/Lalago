@@ -30,6 +30,7 @@ import 'package:brgy/top_restaurants_orders_today_page.dart';
 import 'package:brgy/restaurants_zero_orders_today_page.dart';
 import 'package:brgy/restaurant_orders_weekly_page.dart';
 import 'package:brgy/restaurant_orders_earning_page.dart';
+import 'package:brgy/pages/restaurant_performance_page.dart';
 import 'package:brgy/driver_reports_page.dart';
 import 'package:brgy/remittance.dart';
 import 'package:brgy/confirmed_transactions.dart';
@@ -608,6 +609,11 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             icon: Icons.storefront,
             label: 'Total restaurants',
             onTap: () => push(const RestaurantsPage()),
+          ),
+          _DashboardNavItem(
+            icon: Icons.insights,
+            label: 'Restaurant Performance',
+            onTap: () => push(const RestaurantPerformancePage()),
           ),
           _DashboardNavItem(
             icon: Icons.restaurant,

@@ -39,12 +39,12 @@ import 'package:foodie_restaurant/services/helper.dart';
 
 import 'package:foodie_restaurant/services/pushnotification.dart';
 
+import 'package:foodie_restaurant/services/acceptance_metrics_service.dart';
+import 'package:foodie_restaurant/services/eta_service.dart';
 import 'package:foodie_restaurant/ui/chat_screen/chat_screen.dart';
-
+import 'package:foodie_restaurant/ui/order_acceptance_screen.dart';
 import 'package:foodie_restaurant/ui/ordersScreen/OrderDetailsScreen.dart';
-
 import 'package:foodie_restaurant/ui/reviewScreen.dart';
-
 import 'package:foodie_restaurant/utils/order_ready_time_helper.dart';
 
 class OrdersScreen extends StatefulWidget {
@@ -66,6 +66,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   bool isLoading = true;
 
   Set<String> _previousOrderIds = {};
+  bool _acceptanceScreenPushed = false;
 
   String? selectedTime;
   Timer? _soundLoopTimer;
@@ -104,11 +105,22 @@ class _OrdersScreenState extends State<OrdersScreen> {
       final newIds = currentIds.difference(_previousOrderIds);
 
       if (newIds.isNotEmpty) {
-        _startSoundLoop(); // 🔊 Play sound for new orders
-      }
+        _startSoundLoop();
 
-      // Timer management is now handled by individual _PreparationTimerWidget instances
-      // No need to manage timers here anymore
+        final newPlaced =
+            orders.where((o) => o.status == ORDER_STATUS_PLACED && newIds.contains(o.id)).toList();
+        if (newPlaced.isNotEmpty && !_acceptanceScreenPushed && mounted) {
+          _acceptanceScreenPushed = true;
+          final order = newPlaced.first;
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => OrderAcceptanceScreen(orderModel: order),
+            ),
+          ).then((_) {
+            _acceptanceScreenPushed = false;
+          });
+        }
+      }
 
       _previousOrderIds = currentIds;
     }, onError: (error) {
@@ -456,12 +468,68 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
+  Widget _buildArrivalIndicator(OrderModel orderModel) {
+    if (orderModel.driverID == null ||
+        (orderModel.status != ORDER_STATUS_DRIVER_ACCEPTED &&
+            orderModel.status != ORDER_STATUS_SHIPPED)) {
+      return const SizedBox.shrink();
+    }
+    return StreamBuilder<int>(
+      stream: EtaService.watchEtaMinutes(
+        riderId: orderModel.driverID!,
+        restaurantLat: orderModel.vendor.latitude,
+        restaurantLng: orderModel.vendor.longitude,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data! > 5 || snapshot.data! >= 999) {
+          return const SizedBox.shrink();
+        }
+        final eta = snapshot.data!;
+        if (eta <= 2) {
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.red,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              'Rider arriving NOW',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          );
+        }
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.orange,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            'Rider arriving in $eta min',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget buildOrderContent(OrderModel orderModel) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _buildArrivalIndicator(orderModel),
           // Customer & Delivery Info
           Row(
             children: [
@@ -563,7 +631,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
           // Driver Selected
           buildDriverContent(orderModel),
 
-          const Divider(height: 24),
+          // Rider ETA when driver assigned
+          if (orderModel.driverID != null &&
+              (orderModel.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                  orderModel.status == ORDER_STATUS_SHIPPED))
+            _buildRiderEtaCard(orderModel),
+          if (orderModel.driverID != null &&
+              (orderModel.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                  orderModel.status == ORDER_STATUS_SHIPPED))
+            const Divider(height: 24),
 
           // Remarks (if any)
           if (orderModel.notes != null && orderModel.notes!.isNotEmpty)
@@ -583,6 +659,70 @@ class _OrdersScreenState extends State<OrdersScreen> {
           _buildOrderActions(orderModel),
         ],
       ),
+    );
+  }
+
+  Widget _buildRiderEtaCard(OrderModel orderModel) {
+    final riderId = orderModel.driverID!;
+    return StreamBuilder<int>(
+      stream: EtaService.watchEtaMinutes(
+        riderId: riderId,
+        restaurantLat: orderModel.vendor.latitude,
+        restaurantLng: orderModel.vendor.longitude,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data! >= 999) {
+          return const SizedBox.shrink();
+        }
+        final eta = snapshot.data!;
+        final baseTime =
+            orderModel.acceptedAt?.toDate() ?? orderModel.createdAt.toDate();
+        final prepMinutes =
+            OrderReadyTimeHelper.parsePreparationMinutes(
+                orderModel.estimatedTimeToPrepare);
+        final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+        final remainingPrep = readyAt.difference(DateTime.now()).inMinutes;
+        final showWarning = remainingPrep > 0 && remainingPrep > eta;
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.delivery_dining,
+                      color: Color(COLOR_PRIMARY),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Rider ETA: ~$eta min',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        color: isDarkMode(context)
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+                if (showWarning)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Food may not be ready when rider arrives',
+                      style: TextStyle(
+                        color: Colors.orange.shade700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -640,7 +780,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       );
     }
 
-    // Placed (can accept)
+    // Placed (can accept or reject)
     else if (orderModel.status == "Order Placed") {
       _startSoundLoop();
       return Row(
@@ -654,6 +794,20 @@ class _OrdersScreenState extends State<OrdersScreen> {
               ),
               child: Text(
                 'Accept'.tr(),
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton(
+              onPressed: () => rejectOrder(orderModel),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              child: Text(
+                'Reject'.tr(),
                 style: const TextStyle(color: Colors.white),
               ),
             ),
@@ -914,6 +1068,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
         "prepMinutes": prepMinutes,
       });
 
+      final vendorId = MyAppState.currentUser?.vendorID;
+      if (vendorId != null) {
+        await AcceptanceMetricsService.resetConsecutiveMisses(vendorId);
+      }
+
       // Prompt user to find a driver next
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -929,6 +1088,65 @@ class _OrdersScreenState extends State<OrdersScreen> {
           backgroundColor: Colors.red,
         ),
       );
+    }
+  }
+
+  Future<void> rejectOrder(OrderModel orderModel) async {
+    try {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Reject Order'),
+          content: const Text(
+            'Are you sure you want to reject this order?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('CANCEL'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              child: const Text('REJECT'),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+
+      await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(orderModel.id)
+          .update({
+        'status': ORDER_STATUS_REJECTED,
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'rejectionReason': 'restaurant_rejected',
+      });
+
+      final vendorId = MyAppState.currentUser?.vendorID;
+      if (vendorId != null) {
+        await AcceptanceMetricsService.incrementConsecutiveMisses(vendorId);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Order rejected'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error rejecting order: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error rejecting order'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 

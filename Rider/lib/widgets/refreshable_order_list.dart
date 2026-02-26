@@ -22,6 +22,8 @@ import 'package:foodie_driver/services/order_chat_service.dart';
 import 'package:foodie_driver/services/chat_read_service.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/performance_tier_helper.dart';
+import 'package:foodie_driver/model/OrderModel.dart';
+import 'package:foodie_driver/services/batch_optimization_service.dart';
 import 'package:foodie_driver/utils/order_ready_time_helper.dart';
 import 'package:intl/intl.dart';
 
@@ -76,6 +78,13 @@ class _OrderCardData {
   final DateTime? acceptedAt;
   final DateTime? readyAt;
   final Timestamp? riderAcceptDeadline;
+}
+
+/// Data for optimized pickup route display.
+class _OptimizedRouteData {
+  const _OptimizedRouteData({required this.route});
+
+  final List<OrderRoute> route;
 }
 
 /// Grouped data for a batch of orders.
@@ -971,6 +980,30 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
       items.add(s);
     }
 
+    // Add optimized route card when 2+ pickup-phase orders
+    final pickupDocs = docs
+        .where((d) {
+          final s = (d.data() as Map)['status']?.toString() ?? '';
+          return s == 'Driver Accepted' || s == 'Order Shipped';
+        })
+        .toList();
+    if (pickupDocs.length >= 2) {
+      try {
+        final orders = pickupDocs.map((d) {
+          final data = Map<String, dynamic>.from(d.data() as Map);
+          data['id'] = d.id;
+          return OrderModel.fromJson(data);
+        }).toList();
+        final riderLoc = MyAppState.currentUser?.location;
+        final route =
+            BatchOptimizationService.optimizePickupSequence(
+                orders, riderLocation: riderLoc);
+        if (route.isNotEmpty) {
+          items.insert(0, _OptimizedRouteData(route: route));
+        }
+      } catch (_) {}
+    }
+
     // Only one order card shows a real map to avoid BLASTBufferQueue conflicts.
     String? mapForOrderId;
     for (final item in items) {
@@ -995,6 +1028,9 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
         itemCount: items.length,
         itemBuilder: (context, index) {
           final item = items[index];
+          if (item is _OptimizedRouteData) {
+            return _buildOptimizedRouteCard(context, item);
+          }
           if (item is _OrderBatchData) {
             return _buildBatchCard(
               context,
@@ -1018,6 +1054,73 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
             mapForOrderId: mapForOrderId,
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildOptimizedRouteCard(
+    BuildContext context,
+    _OptimizedRouteData data,
+  ) {
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      color: Colors.blue.shade50,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.blue.shade300, width: 2),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.route, color: Colors.blue.shade700, size: 24),
+                const SizedBox(width: 8),
+                Text(
+                  'Optimized Pickup Route',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue.shade900,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ...data.route.map((r) {
+              final readyStr = r.readyAt != null
+                  ? DateFormat.jm().format(r.readyAt!)
+                  : '--';
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  backgroundColor: Colors.orange,
+                  child: Text(
+                    '${r.sequence}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                title: Text(
+                  r.order.vendor.title,
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: Text(
+                  'ETA: ${r.etaMinutes} min | Ready: $readyStr',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+                trailing: r.sequence == 1
+                    ? Icon(Icons.play_arrow, color: Colors.green)
+                    : null,
+              );
+            }),
+          ],
+        ),
       ),
     );
   }

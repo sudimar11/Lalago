@@ -79,6 +79,20 @@ class FireStoreUtils {
     yield* firestore.collection(ORDERS).doc(orderID).snapshots();
   }
 
+  static Future<OrderModel?> getOrderById(String orderId) async {
+    final doc =
+        await firestore.collection(ORDERS).doc(orderId).get();
+    if (!doc.exists || doc.data() == null) return null;
+    try {
+      final data = Map<String, dynamic>.from(doc.data()!);
+      data['id'] = doc.id;
+      return OrderModel.fromJson(data);
+    } catch (e) {
+      print('FireStoreUtils.getOrderById Parse error: $e');
+      return null;
+    }
+  }
+
   static Future addInbox(InboxModel inboxModel) async {
     return await firestore
         .collection("chat_restaurant")

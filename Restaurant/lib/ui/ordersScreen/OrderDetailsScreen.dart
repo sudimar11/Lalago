@@ -2,15 +2,20 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:esc_pos_utils/esc_pos_utils.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foodie_restaurant/constants.dart';
+import 'package:foodie_restaurant/constants/quick_messages.dart';
 import 'package:foodie_restaurant/model/OrderModel.dart';
 import 'package:foodie_restaurant/model/OrderProductModel.dart';
 import 'package:foodie_restaurant/model/TaxModel.dart';
 import 'package:foodie_restaurant/model/variant_info.dart';
+import 'package:foodie_restaurant/services/eta_service.dart';
+import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
+import 'package:foodie_restaurant/utils/order_ready_time_helper.dart';
 import 'package:foodie_restaurant/ui/ordersScreen/print.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
@@ -110,6 +115,14 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             buildOrderSummaryCard(widget.orderModel),
+            if (widget.orderModel.driverID != null &&
+                (widget.orderModel.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                    widget.orderModel.status == ORDER_STATUS_SHIPPED))
+              _buildRiderEtaCard(widget.orderModel),
+            if (widget.orderModel.driverID != null &&
+                (widget.orderModel.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                    widget.orderModel.status == ORDER_STATUS_SHIPPED))
+              _buildOrderMessagesCard(widget.orderModel),
             Card(
               color: isDarkMode(context)
                   ? const Color(DARK_CARD_BG_COLOR)
@@ -151,6 +164,191 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildRiderEtaCard(OrderModel orderModel) {
+    final riderId = orderModel.driverID!;
+    return StreamBuilder<int>(
+      stream: EtaService.watchEtaMinutes(
+        riderId: riderId,
+        restaurantLat: orderModel.vendor.latitude,
+        restaurantLng: orderModel.vendor.longitude,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data! >= 999) {
+          return const SizedBox.shrink();
+        }
+        final eta = snapshot.data!;
+        final baseTime =
+            orderModel.acceptedAt?.toDate() ?? orderModel.createdAt.toDate();
+        final prepMinutes =
+            OrderReadyTimeHelper.parsePreparationMinutes(
+                orderModel.estimatedTimeToPrepare);
+        final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+        final remainingPrep = readyAt.difference(DateTime.now()).inMinutes;
+        final showWarning = remainingPrep > 0 && remainingPrep > eta;
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.delivery_dining, color: Color(COLOR_PRIMARY)),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Rider ETA: ~$eta min',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        color: isDarkMode(context)
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+                if (showWarning)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Food may not be ready when rider arrives',
+                      style: TextStyle(
+                        color: Colors.orange.shade700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildOrderMessagesCard(OrderModel orderModel) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Messages',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () => _showQuickReplyDialog(orderModel.id),
+                  icon: const Icon(Icons.reply, size: 18),
+                  label: const Text('Quick Reply'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('order_messages')
+                  .doc(orderModel.id)
+                  .collection('messages')
+                  .orderBy('createdAt', descending: true)
+                  .limit(10)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return Text(
+                    'No messages yet',
+                    style: TextStyle(
+                      color: Colors.grey.shade600,
+                      fontSize: 13,
+                    ),
+                  );
+                }
+                return Column(
+                  children: snapshot.data!.docs.map((doc) {
+                    final d = doc.data() as Map<String, dynamic>;
+                    final isRider = d['senderType'] == 'rider';
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        isRider ? Icons.delivery_dining : Icons.restaurant,
+                        size: 20,
+                      ),
+                      title: Text(d['messageText']?.toString() ?? ''),
+                      subtitle: d['createdAt'] != null
+                          ? Text(
+                              _formatTimestamp(d['createdAt']),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey.shade600,
+                              ),
+                            )
+                          : null,
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatTimestamp(dynamic ts) {
+    if (ts == null) return '';
+    DateTime dt;
+    if (ts is Timestamp) {
+      dt = ts.toDate();
+    } else if (ts is Map && ts['_seconds'] != null) {
+      dt = DateTime.fromMillisecondsSinceEpoch(
+          (ts['_seconds'] as int) * 1000);
+    } else {
+      return '';
+    }
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _showQuickReplyDialog(String orderId) async {
+    final key = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: QuickMessages.getKeys('restaurant').map((k) {
+            return ListTile(
+              title: Text(QuickMessages.getMessage(k, 'restaurant')),
+              onTap: () => Navigator.pop(context, k),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+    if (key != null && mounted) {
+      final message = QuickMessages.getMessage(key, 'restaurant');
+      final uid = MyAppState.currentUser?.userID;
+      await FirebaseFirestore.instance
+          .collection('order_messages')
+          .doc(orderId)
+          .collection('messages')
+          .add({
+        'senderId': uid ?? '',
+        'senderType': 'restaurant',
+        'messageType': 'quick',
+        'messageKey': key,
+        'messageText': message,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
   }
 
   Widget buildOrderSummaryCard(OrderModel orderModel) {

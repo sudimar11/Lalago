@@ -23,7 +23,9 @@ import 'package:foodie_restaurant/ui/chat_screen/inbox_screen.dart';
 import 'package:foodie_restaurant/ui/container/message.dart';
 import 'package:foodie_restaurant/ui/manageProductsScreen/ManageProductsScreen.dart';
 import 'package:foodie_restaurant/ui/offer/offers.dart';
+import 'package:foodie_restaurant/ui/order_acceptance_screen.dart';
 import 'package:foodie_restaurant/ui/ordersScreen/OrdersScreen.dart';
+import 'package:foodie_restaurant/ui/pause_screen.dart';
 import 'package:foodie_restaurant/ui/ordersScreen/CompletedOrdersScreen.dart';
 import 'package:foodie_restaurant/ui/profile/ProfileScreen.dart';
 import 'package:foodie_restaurant/ui/termsAndCondition/terms_and_codition.dart';
@@ -118,6 +120,7 @@ class _ContainerScreen extends State<ContainerScreen> {
   void initState() {
     super.initState();
     NotificationService.onPrepTimeReminder = _showPrepTimeReminderDialog;
+    NotificationService.onNewOrder = _openOrderAcceptanceScreen;
     setCurrency();
 
     // Initialize user from widget.user if available, otherwise from MyAppState
@@ -174,7 +177,18 @@ class _ContainerScreen extends State<ContainerScreen> {
   @override
   void dispose() {
     NotificationService.onPrepTimeReminder = null;
+    NotificationService.onNewOrder = null;
     super.dispose();
+  }
+
+  void _openOrderAcceptanceScreen(String orderId) {
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => OrderAcceptanceScreen(orderId: orderId),
+      ),
+    );
   }
 
   void _showPrepTimeReminderDialog(String orderId, String minutes) {
@@ -828,28 +842,69 @@ class _ContainerScreen extends State<ContainerScreen> {
           ),
         ),
       ),
-      body: PopScope(
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    final vendorId = user?.vendorID ?? MyAppState.currentUser?.vendorID;
+    if (vendorId == null || vendorId.isEmpty) {
+      return PopScope(
+        onPopInvokedWithResult: (cantExit, dynamic) async {
+          final timeGap = DateTime.now().difference(preBackpress);
+          final shouldExit = timeGap >= const Duration(seconds: 2);
+          preBackpress = DateTime.now();
+          if (!shouldExit) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Press Back button again to Exit'),
+                duration: const Duration(seconds: 2),
+                backgroundColor: Colors.black,
+              ),
+            );
+            setExit(false);
+          } else {
+            setExit(true);
+          }
+        },
+        child: _currentWidget,
+      );
+    }
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FireStoreUtils.firestore
+          .collection(VENDORS)
+          .doc(vendorId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final autoPause = (snapshot.data?.data() as Map<String, dynamic>? ?? {})['autoPause'] as Map<String, dynamic>? ?? {};
+        final isPaused = autoPause['isPaused'] == true;
+
+        if (isPaused) {
+          return PauseScreen(vendorId: vendorId);
+        }
+
+        return PopScope(
           onPopInvokedWithResult: (cantExit, dynamic) async {
             final timeGap = DateTime.now().difference(preBackpress);
-            final cantExit = timeGap >= Duration(seconds: 2);
+            final shouldExit = timeGap >= const Duration(seconds: 2);
             preBackpress = DateTime.now();
-            if (cantExit) {
-              //show snackbar
-              final snack = SnackBar(
-                content: Text(
-                  'Press Back button again to Exit',
-                  style: TextStyle(color: Colors.white),
+            if (!shouldExit) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: const Text('Press Back button again to Exit'),
+                  duration: const Duration(seconds: 2),
+                  backgroundColor: Colors.black,
                 ),
-                duration: Duration(seconds: 2),
-                backgroundColor: Colors.black,
               );
-              ScaffoldMessenger.of(context).showSnackBar(snack);
-              return setExit(false); // false will do nothing when back press
+              setExit(false);
             } else {
-              return setExit(true); // true will exit the app
+              setExit(true);
             }
           },
-          child: _currentWidget),
+          child: _currentWidget,
+        );
+      },
     );
   }
 }

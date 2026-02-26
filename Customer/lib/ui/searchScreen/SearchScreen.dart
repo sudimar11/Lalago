@@ -792,6 +792,13 @@ class SearchScreenState extends State<SearchScreen> {
       }
     }
 
+    // Sort vendors by performance (acceptance rate 30% weight) for ranking
+    filteredVendors.sort((a, b) {
+      final scoreA = _vendorPerformanceScore(a);
+      final scoreB = _vendorPerformanceScore(b);
+      return scoreB.compareTo(scoreA);
+    });
+
     // Filter bundles by name/description
     final List<BundleModel> filteredBundles = [];
     for (final b in _cachedBundles) {
@@ -807,6 +814,11 @@ class SearchScreenState extends State<SearchScreen> {
       'products': filteredProducts,
       'bundles': filteredBundles,
     };
+  }
+
+  double _vendorPerformanceScore(VendorModel v) {
+    final rate = v.acceptanceRate ?? 0;
+    return 0.7 + 0.3 * (rate / 100);
   }
 
   Widget _buildBundleSection() {

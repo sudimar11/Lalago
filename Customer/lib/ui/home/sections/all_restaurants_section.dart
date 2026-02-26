@@ -19,6 +19,7 @@ import 'package:foodie_customer/ui/home/sections/restaurant_filter_card.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/widget/lazy_loading_widget.dart';
+import 'package:foodie_customer/widgets/performance_badge.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/FavouriteModel.dart';
@@ -777,17 +778,31 @@ class _AllRestaurantCardState extends State<_AllRestaurantCard> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        widget.vendorModel.title,
-                        maxLines: 1,
-                        style: TextStyle(
-                          fontFamily: "Poppinsm",
-                          letterSpacing: 0.5,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color:
-                              isDarkMode(context) ? Colors.white : Colors.black,
-                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              widget.vendorModel.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontFamily: "Poppinsm",
+                                letterSpacing: 0.5,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color:
+                                    isDarkMode(context)
+                                        ? Colors.white
+                                        : Colors.black,
+                              ),
+                            ),
+                          ),
+                          PerformanceBadge(
+                            vendorModel: widget.vendorModel,
+                            compact: true,
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 8),
                       Row(

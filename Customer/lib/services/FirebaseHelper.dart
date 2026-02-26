@@ -1563,6 +1563,67 @@ class FireStoreUtils {
     }
   }
 
+  /// Fetches daily acceptance rate from vendors/{vendorId}/dailyMetrics.
+  /// Returns map of date (yyyy-MM-dd) to acceptance rate 0-100.
+  static Future<Map<String, double>> getVendorDailyAcceptanceRates(
+    String vendorId, {
+    int lastDays = 30,
+  }) async {
+    final result = <String, double>{};
+    final now = DateTime.now();
+    for (var i = 0; i < lastDays; i++) {
+      final d = now.subtract(Duration(days: i));
+      final dateStr = DateFormat('yyyy-MM-dd').format(d);
+      final doc = await FirebaseFirestore.instance
+          .collection(VENDORS)
+          .doc(vendorId)
+          .collection('dailyMetrics')
+          .doc(dateStr)
+          .get();
+      if (doc.exists && doc.data() != null) {
+        final rate = doc.data()!['acceptanceRate'];
+        if (rate != null) {
+          result[dateStr] = (rate is num) ? rate.toDouble() : 0.0;
+        }
+      }
+    }
+    return result;
+  }
+
+  /// Returns similar vendors (same category) sorted by acceptance rate desc.
+  static Future<List<VendorModel>> getSimilarVendors(
+    String excludeVendorId,
+    String? categoryId,
+    {int limit = 3}
+  ) async {
+    final all = await FirebaseFirestore.instance
+        .collection(VENDORS)
+        .limit(100)
+        .get();
+    final list = <VendorModel>[];
+    for (final doc in all.docs) {
+      if (doc.id == excludeVendorId) continue;
+      try {
+        final data = Map<String, dynamic>.from(doc.data());
+        data['id'] = doc.id;
+        final v = VendorModel.fromJson(data);
+        if (v.id.isEmpty) continue;
+        if (categoryId != null &&
+            categoryId.isNotEmpty &&
+            v.categoryID != categoryId) {
+          continue;
+        }
+        list.add(v);
+      } catch (_) {}
+    }
+    list.sort((a, b) {
+      final ra = a.acceptanceRate ?? 0;
+      final rb = b.acceptanceRate ?? 0;
+      return rb.compareTo(ra);
+    });
+    return list.take(limit).toList();
+  }
+
   Future<List<VendorModel>> getVendors() async {
     List<VendorModel> vendors = [];
     QuerySnapshot<Map<String, dynamic>> vendorsQuery =

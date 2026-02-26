@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:brgy/services/restaurant_settings_service.dart';
 
@@ -19,12 +20,17 @@ class _RestaurantSettingsPageState extends State<RestaurantSettingsPage> {
   final _service = RestaurantSettingsService();
   final _contactController = TextEditingController();
   final _timeoutController = TextEditingController(text: '5');
+  final _consecutiveController = TextEditingController(text: '2');
+  final _timerController = TextEditingController(text: '180');
 
   bool _isLoading = true;
   bool _isSaving = false;
   bool _hasDevice = true;
   String _deviceType = 'mobile_app';
   bool _allowAdminOverride = false;
+  bool _autoPauseEnabled = true;
+  int _consecutiveMissesThreshold = 2;
+  int _timerSeconds = 180;
 
   static const _deviceTypes = [
     ('mobile_app', 'Mobile App'),
@@ -42,6 +48,8 @@ class _RestaurantSettingsPageState extends State<RestaurantSettingsPage> {
   void dispose() {
     _contactController.dispose();
     _timeoutController.dispose();
+    _consecutiveController.dispose();
+    _timerController.dispose();
     super.dispose();
   }
 
@@ -49,13 +57,28 @@ class _RestaurantSettingsPageState extends State<RestaurantSettingsPage> {
     setState(() => _isLoading = true);
     try {
       final s = await _service.getSettings(widget.vendorId);
+      final vendorDoc = await FirebaseFirestore.instance
+          .collection('vendors')
+          .doc(widget.vendorId)
+          .get();
       if (!mounted) return;
+      final acceptance = vendorDoc.data()?['acceptanceSettings']
+          as Map<String, dynamic>?;
       setState(() {
         _hasDevice = s.hasDevice;
         _deviceType = s.deviceType ?? 'mobile_app';
         _allowAdminOverride = s.allowAdminOverride;
         _contactController.text = s.contactNumber ?? '';
         _timeoutController.text = s.smsTimeoutMinutes.toString();
+        _autoPauseEnabled =
+            acceptance?['autoPauseEnabled'] as bool? ?? true;
+        _consecutiveMissesThreshold =
+            (acceptance?['consecutiveMissesThreshold'] as num?)?.toInt() ?? 2;
+        _timerSeconds =
+            (acceptance?['timerSeconds'] as num?)?.toInt() ?? 180;
+        _consecutiveController.text =
+            _consecutiveMissesThreshold.toString();
+        _timerController.text = _timerSeconds.toString();
         _isLoading = false;
       });
     } catch (e) {
@@ -107,6 +130,14 @@ class _RestaurantSettingsPageState extends State<RestaurantSettingsPage> {
         allowAdminOverride: allowOverride,
       );
       await _service.saveSettings(widget.vendorId, settings);
+      final consecutive = int.tryParse(_consecutiveController.text) ?? 2;
+      final timer = int.tryParse(_timerController.text) ?? 180;
+      await _service.updateAcceptanceSettings(
+        widget.vendorId,
+        autoPauseEnabled: _autoPauseEnabled,
+        consecutiveMissesThreshold: consecutive.clamp(1, 10),
+        timerSeconds: timer.clamp(60, 600),
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -256,6 +287,50 @@ class _RestaurantSettingsPageState extends State<RestaurantSettingsPage> {
                   fontSize: 12,
                   color: Theme.of(context).hintColor,
                 ),
+              ),
+            ],
+            const SizedBox(height: 24),
+            const Text(
+              'Order Acceptance (Auto-Pause)',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              title: const Text('Enable Auto-Pause'),
+              subtitle: const Text(
+                'Automatically pause restaurant after consecutive missed orders.',
+              ),
+              value: _autoPauseEnabled,
+              onChanged: (v) => setState(() => _autoPauseEnabled = v),
+            ),
+            if (_autoPauseEnabled) ...[
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _consecutiveController,
+                decoration: const InputDecoration(
+                  labelText: 'Consecutive Misses Threshold',
+                  suffixText: 'misses',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+                onChanged: (v) {
+                  final n = int.tryParse(v);
+                  if (n != null) setState(() => _consecutiveMissesThreshold = n);
+                },
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _timerController,
+                decoration: const InputDecoration(
+                  labelText: 'Acceptance Timer',
+                  suffixText: 'seconds',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+                onChanged: (v) {
+                  final n = int.tryParse(v);
+                  if (n != null) setState(() => _timerSeconds = n);
+                },
               ),
             ],
             const SizedBox(height: 24),

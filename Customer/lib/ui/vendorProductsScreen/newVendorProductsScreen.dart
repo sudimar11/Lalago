@@ -33,6 +33,7 @@ import '../../resources/assets.dart';
 import '../../resources/colors.dart';
 import 'photos.dart';
 import 'widgets/vendor_header_delegate.dart';
+import '../searchScreen/SearchScreen.dart';
 
 class NewVendorProductsScreen extends StatefulWidget {
   final VendorModel vendorModel;
@@ -74,6 +75,7 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   // Visitor tracking (real-time + per week)
   int _viewingNow = 0;
   int _visitorsThisWeek = 0;
+  bool _lowPerfWarningDismissed = false;
   String? _activeViewerSessionId;
   StreamSubscription<int>? _activeViewerSub;
   StreamSubscription<int>? _weeklyVisitSub;
@@ -165,6 +167,73 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
         const SnackBar(content: Text('Added to favorites')),
       );
     }
+  }
+
+  bool _shouldShowLowPerfWarning() {
+    if (_lowPerfWarningDismissed) return false;
+    final badge = widget.vendorModel.performanceBadge?.toLowerCase();
+    final rate = widget.vendorModel.acceptanceRate;
+    return badge == 'slow' || (rate != null && rate < 80);
+  }
+
+  Widget _buildLowPerfWarningBanner() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.amber.shade700),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded,
+                  color: Colors.amber.shade800, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'This restaurant sometimes takes longer to confirm orders. '
+                  'You may experience delays or cancellations.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontFamily: 'Poppinsr',
+                    color: Colors.amber.shade900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () {
+                  setState(() => _lowPerfWarningDismissed = true);
+                },
+                child: const Text('Continue Anyway'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const SearchScreen(
+                        shouldAutoFocus: true,
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('Find Faster Restaurant'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   void filterProducts(String query) {
@@ -485,6 +554,10 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
               visitorsThisWeek: _visitorsThisWeek),
           pinned: true,
         ),
+        if (_shouldShowLowPerfWarning())
+          SliverToBoxAdapter(
+            child: _buildLowPerfWarningBanner(),
+          ),
         if (searchQuery.isEmpty)
           SliverAppBar(
             automaticallyImplyLeading: false,
