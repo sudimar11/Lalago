@@ -88,6 +88,7 @@ import 'package:foodie_customer/ui/home/sections/home_header_section.dart';
 import 'package:foodie_customer/ui/home/sections/banner_section.dart';
 import 'package:foodie_customer/ui/home/sections/bundle_deals_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
+import 'package:foodie_customer/screens/ai_chat_screen.dart';
 
 import 'package:foodie_customer/model/bundle_model.dart';
 import 'package:foodie_customer/services/bundle_service.dart';
@@ -1930,6 +1931,40 @@ class _HomeScreenState extends State<HomeScreen> {
                               onSearchTap: _onSearchTap,
                               onMessageTap: _onMessageTap,
                               onFavoriteTap: _onFavoriteTap,
+                            ),
+
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              child: Column(
+                                children: [
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: ElevatedButton.icon(
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) =>
+                                                AiChatScreen(),
+                                          ),
+                                        );
+                                      },
+                                      icon: Icon(Icons.smart_toy, size: 20),
+                                      label: Text('Ask Lalago'),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Color(COLOR_PRIMARY),
+                                        foregroundColor: Colors.white,
+                                        padding: EdgeInsets.symmetric(
+                                          vertical: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
 
                             // Divider above Categories section

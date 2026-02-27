@@ -1383,6 +1383,64 @@ class FireStoreUtils {
     return topIds;
   }
 
+  /// Returns popular products for today with order counts for AI chat.
+  Future<List<Map<String, dynamic>>> getPopularProductsWithCountsForToday({
+    int limit = 15,
+  }) async {
+    final now = DateTime.now();
+    final startOfDay = DateTime(now.year, now.month, now.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+
+    final ordersQuery = await firestore
+        .collection(ORDERS)
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+        )
+        .where(
+          'createdAt',
+          isLessThan: Timestamp.fromDate(endOfDay),
+        )
+        .get();
+
+    final productCounts = _extractProductCountsFromOrders(ordersQuery.docs);
+    final sorted = productCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final topEntries = sorted.take(limit).toList();
+
+    final result = <Map<String, dynamic>>[];
+    for (final entry in topEntries) {
+      try {
+        final doc = await firestore.collection(PRODUCTS).doc(entry.key).get();
+        if (!doc.exists || doc.data() == null) continue;
+
+        final data = doc.data()!;
+        final vendorID = (data['vendorID'] ?? '').toString();
+        String vendorName = '';
+        if (vendorID.isNotEmpty) {
+          final vendorDoc =
+              await firestore.collection(VENDORS).doc(vendorID).get();
+          if (vendorDoc.exists && vendorDoc.data() != null) {
+            vendorName =
+                (vendorDoc.data()!['title'] ?? '').toString();
+          }
+        }
+
+        final photo = (data['photo'] ?? '').toString();
+        result.add({
+          'id': entry.key,
+          'name': (data['name'] ?? '').toString(),
+          'price': (data['price'] ?? '0').toString(),
+          'vendorID': vendorID,
+          'vendorName': vendorName,
+          'imageUrl': getImageVAlidUrl(photo),
+          'orderCount': entry.value,
+        });
+      } catch (_) {}
+    }
+    return result;
+  }
+
   /// Extracts product IDs and quantities from raw order docs without parsing
   /// OrderModel/CartProduct, which can throw on null fields in Firestore.
   static Map<String, int> _extractProductCountsFromOrders(

@@ -1,38 +1,41 @@
 {
   "project_info": {
-    "project_number": "687925021779",
-    "firebase_url": "https://lalago-1d721-default-rtdb.firebaseio.com",
-    "project_id": "lalago-1d721",
-    "storage_bucket": "lalago-1d721.appspot.com"
+    "project_number": "916084329397",
+    "project_id": "lalago-v2",
+    "storage_bucket": "lalago-v2.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:687925021779:android:042f6e22615488b2790aa6",
+        "mobilesdk_app_id": "1:916084329397:android:58c2f09244d7ccbe1c27fc",
         "android_client_info": {
           "package_name": "com.example.brgy"
         }
       },
       "oauth_client": [
         {
-          "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
+          "client_id": "916084329397-l5hn2jd8agb8228p3p42pf83jn4lf20b.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyBmNejthCCS-PLDDiZPxEeFOU3bYHHyNBQ"
-        },
-        {
-          "current_key": "AIzaSyA1yikO88ntceNiaJu8L_znG3XyNrUTHpc"
+          "current_key": "AIzaSyB4nASvwAKi3fxQzXWjr2DjzAAJ34OASRA"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
+              "client_id": "916084329397-l5hn2jd8agb8228p3p42pf83jn4lf20b.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "916084329397-193iedh2kq0ft0va3lbl289qljj4rr8s.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.foodieCustomer"
+              }
             }
           ]
         }
@@ -40,159 +43,35 @@
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:687925021779:android:051504165ca02b66790aa6",
-        "android_client_info": {
-          "package_name": "com.example.laundry_booking"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyBmNejthCCS-PLDDiZPxEeFOU3bYHHyNBQ"
-        },
-        {
-          "current_key": "AIzaSyA1yikO88ntceNiaJu8L_znG3XyNrUTHpc"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
-        }
-      }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:687925021779:android:781b8a109b3b9e87790aa6",
-        "android_client_info": {
-          "package_name": "com.example.minimal_firebase_auth_test"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyBmNejthCCS-PLDDiZPxEeFOU3bYHHyNBQ"
-        },
-        {
-          "current_key": "AIzaSyA1yikO88ntceNiaJu8L_znG3XyNrUTHpc"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
-        }
-      }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:687925021779:android:415a30d41f85df2a790aa6",
-        "android_client_info": {
-          "package_name": "com.example.parents"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyBmNejthCCS-PLDDiZPxEeFOU3bYHHyNBQ"
-        },
-        {
-          "current_key": "AIzaSyA1yikO88ntceNiaJu8L_znG3XyNrUTHpc"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
-        }
-      }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:687925021779:android:601abb2f4fa389c1790aa6",
-        "android_client_info": {
-          "package_name": "com.foodies.customer.android"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyBmNejthCCS-PLDDiZPxEeFOU3bYHHyNBQ"
-        },
-        {
-          "current_key": "AIzaSyA1yikO88ntceNiaJu8L_znG3XyNrUTHpc"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
-        }
-      }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:687925021779:android:efa437128d27f1c7790aa6",
+        "mobilesdk_app_id": "1:916084329397:android:d7da7ab32af956151c27fc",
         "android_client_info": {
           "package_name": "com.foodies.driver.android"
         }
       },
       "oauth_client": [
         {
-          "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
+          "client_id": "916084329397-l5hn2jd8agb8228p3p42pf83jn4lf20b.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyBmNejthCCS-PLDDiZPxEeFOU3bYHHyNBQ"
-        },
-        {
-          "current_key": "AIzaSyA1yikO88ntceNiaJu8L_znG3XyNrUTHpc"
+          "current_key": "AIzaSyB4nASvwAKi3fxQzXWjr2DjzAAJ34OASRA"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
+              "client_id": "916084329397-l5hn2jd8agb8228p3p42pf83jn4lf20b.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "916084329397-193iedh2kq0ft0va3lbl289qljj4rr8s.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.foodieCustomer"
+              }
             }
           ]
         }
@@ -200,31 +79,35 @@
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:687925021779:android:6651a5c0ad0e0dd9790aa6",
+        "mobilesdk_app_id": "1:916084329397:android:b3c6b6a34c3616db1c27fc",
         "android_client_info": {
           "package_name": "com.foodies.restaurant.android"
         }
       },
       "oauth_client": [
         {
-          "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
+          "client_id": "916084329397-l5hn2jd8agb8228p3p42pf83jn4lf20b.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyBmNejthCCS-PLDDiZPxEeFOU3bYHHyNBQ"
-        },
-        {
-          "current_key": "AIzaSyA1yikO88ntceNiaJu8L_znG3XyNrUTHpc"
+          "current_key": "AIzaSyB4nASvwAKi3fxQzXWjr2DjzAAJ34OASRA"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
+              "client_id": "916084329397-l5hn2jd8agb8228p3p42pf83jn4lf20b.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "916084329397-193iedh2kq0ft0va3lbl289qljj4rr8s.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.foodieCustomer"
+              }
             }
           ]
         }
@@ -232,31 +115,67 @@
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:687925021779:android:8f23c072854f0d5c790aa6",
+        "mobilesdk_app_id": "1:916084329397:android:fdcbb2942885da191c27fc",
         "android_client_info": {
           "package_name": "com.lalago.customer.android"
         }
       },
       "oauth_client": [
         {
-          "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
+          "client_id": "916084329397-f77gedccb1h4dcf0fc9mvdl4660e2acf.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lalago.customer.android",
+            "certificate_hash": "2921d547ad93ac7d914068b64f536b8516f24ba6"
+          }
+        },
+        {
+          "client_id": "916084329397-pradv9r1159mumbm6rmr5glk2idrgoqa.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lalago.customer.android",
+            "certificate_hash": "1b34d1395eccc8410d89fd91749061263bb1d92b"
+          }
+        },
+        {
+          "client_id": "916084329397-qe3m3um8j9sr73g9i20p16ueh1daq0a2.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lalago.customer.android",
+            "certificate_hash": "3240e68e5d4a6f6b5c2404e1c2a7afb92b96a895"
+          }
+        },
+        {
+          "client_id": "916084329397-scv4cjo16vp6sib7i2uqqjrld04u1p1r.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.lalago.customer.android",
+            "certificate_hash": "ea4def1b2ea67bd5f384bf25e8219a3b9ea6b9ea"
+          }
+        },
+        {
+          "client_id": "916084329397-l5hn2jd8agb8228p3p42pf83jn4lf20b.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyBmNejthCCS-PLDDiZPxEeFOU3bYHHyNBQ"
-        },
-        {
-          "current_key": "AIzaSyA1yikO88ntceNiaJu8L_znG3XyNrUTHpc"
+          "current_key": "AIzaSyB4nASvwAKi3fxQzXWjr2DjzAAJ34OASRA"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "687925021779-j19j07v9ms714566gvffr201ahdnvfhb.apps.googleusercontent.com",
+              "client_id": "916084329397-l5hn2jd8agb8228p3p42pf83jn4lf20b.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "916084329397-193iedh2kq0ft0va3lbl289qljj4rr8s.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.foodieCustomer"
+              }
             }
           ]
         }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:firebase_ai/firebase_ai.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -312,6 +313,33 @@ if (fbUser == null) {
             NotificationService.showEnableNotificationsDialogIfNeeded(context);
           }
         });
+      }
+    }
+  }
+
+  Future<void> _testGemini() async {
+    try {
+      final model = FirebaseAI.googleAI().generativeModel(
+        model: 'gemini-2.5-flash-lite',
+      );
+      final response = await model.generateContent([
+        Content.text('Say hello in one word'),
+      ]);
+      debugPrint('Gemini says: ${response.text}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Response: ${response.text}')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -760,6 +788,10 @@ if (fbUser == null) {
                       label: 'Profile',
                     ),
                   ],
+                ),
+                floatingActionButton: FloatingActionButton(
+                  onPressed: _testGemini,
+                  child: Icon(Icons.smart_toy),
                 ),
                 appBar: null);
   }

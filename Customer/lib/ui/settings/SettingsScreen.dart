@@ -5,6 +5,7 @@ import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/gemini_test_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 
@@ -180,7 +181,97 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ),
                       ),
-                    )
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(
+                          right: 16.0, left: 16, top: 16, bottom: 8),
+                      child: Text(
+                        'AI',
+                        style: TextStyle(
+                            color: isDarkMode(context)
+                                ? Colors.white54
+                                : Colors.black54,
+                            fontSize: 18),
+                      ),
+                    ),
+                    Material(
+                      elevation: 2,
+                      color: isDarkMode(context)
+                          ? Colors.black12
+                          : Colors.white,
+                      child: ListTile(
+                        title: Text(
+                          'Test Gemini AI',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: isDarkMode(context)
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
+                        trailing: Icon(
+                          Icons.psychology,
+                          color: Color(COLOR_ACCENT),
+                        ),
+                        onTap: () async {
+                          showProgress(
+                              buildContext, 'Calling Gemini AI...', true);
+                          try {
+                            final text = await testGemini();
+                            hideProgress();
+                            if (!mounted) return;
+                            final msg = text ?? 'No response';
+                            showDialog(
+                              context: buildContext,
+                              builder: (ctx) => AlertDialog(
+                                title: Text('Gemini Response'),
+                                content: SingleChildScrollView(
+                                  child: SelectableText(msg),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx),
+                                    child: Text('OK'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          } catch (e, st) {
+                            hideProgress();
+                            if (!mounted) return;
+                            showDialog(
+                              context: buildContext,
+                              builder: (ctx) => AlertDialog(
+                                title: Text('Error'),
+                                content: SingleChildScrollView(
+                                  child: SelectableText.rich(
+                                    TextSpan(
+                                      style: TextStyle(
+                                        color: Colors.red,
+                                        fontSize: 14,
+                                      ),
+                                      children: [
+                                        TextSpan(text: e.toString()),
+                                        TextSpan(
+                                          text: '\n\n$st',
+                                          style: TextStyle(fontSize: 12),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(ctx),
+                                    child: Text('OK'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    ),
                   ],
                 )),
       ),
