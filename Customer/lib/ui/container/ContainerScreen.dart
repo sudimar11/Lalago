@@ -27,6 +27,7 @@ import 'package:foodie_customer/ui/onBoarding/OnBoardingScreen.dart';
 
 import 'package:foodie_customer/ui/profile/ProfileScreen.dart';
 import 'package:foodie_customer/ui/searchScreen/SearchScreen.dart';
+import 'package:foodie_customer/screens/ai_chat_screen.dart';
 
 import 'package:foodie_customer/utils/DarkThemeProvider.dart';
 import 'package:foodie_customer/utils/notification_service.dart';
@@ -790,8 +791,8 @@ if (fbUser == null) {
                   ],
                 ),
                 floatingActionButton: FloatingActionButton(
-                  onPressed: _testGemini,
-                  child: Icon(Icons.smart_toy),
+                  onPressed: () => push(context, AiChatScreen()),
+                  child: const Icon(Icons.smart_toy),
                 ),
                 appBar: null);
   }

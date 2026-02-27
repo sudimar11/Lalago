@@ -79,7 +79,7 @@ class RestaurantListCard extends StatelessWidget {
   }
 }
 
-class _RestaurantCard extends StatelessWidget {
+class _RestaurantCard extends StatefulWidget {
   const _RestaurantCard({
     required this.id,
     required this.name,
@@ -97,6 +97,26 @@ class _RestaurantCard extends StatelessWidget {
   final String imageUrl;
 
   @override
+  State<_RestaurantCard> createState() => _RestaurantCardState();
+}
+
+class _RestaurantCardState extends State<_RestaurantCard> {
+  bool _isNavigating = false;
+
+  Future<void> _onTap(BuildContext context) async {
+    if (_isNavigating) return;
+    setState(() => _isNavigating = true);
+    try {
+      final vendor = await FireStoreUtils().getVendorByVendorID(widget.id);
+      if (context.mounted) {
+        push(context, NewVendorProductsScreen(vendorModel: vendor));
+      }
+    } finally {
+      if (mounted) setState(() => _isNavigating = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () => _onTap(context),
@@ -108,70 +128,95 @@ class _RestaurantCard extends StatelessWidget {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Stack(
             children: [
-              SizedBox(
-                height: 100,
-                width: double.infinity,
-                child: CachedNetworkImage(
-                  imageUrl: getImageVAlidUrl(imageUrl),
-                  fit: BoxFit.cover,
-                  errorWidget: (_, __, ___) => const Icon(Icons.restaurant),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    if (cuisine.isNotEmpty)
-                      Text(
-                        cuisine,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    height: 100,
+                    width: double.infinity,
+                    child: CachedNetworkImage(
+                      imageUrl: getImageVAlidUrl(widget.imageUrl),
+                      fit: BoxFit.cover,
+                      placeholder: (_, __) => Container(
+                        height: 100,
+                        color: Colors.grey[200],
+                        child: const Center(
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
                       ),
-                    Row(
+                      errorWidget: (_, __, ___) => Container(
+                        height: 100,
+                        color: Colors.grey[200],
+                        child: Icon(Icons.restaurant, color: Colors.grey[400]),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (rating > 0)
+                        Text(
+                          widget.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        if (widget.cuisine.isNotEmpty)
                           Text(
-                            '${rating.toStringAsFixed(1)} ★',
+                            widget.cuisine,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
-                        if (distance != null) ...[
-                          if (rating > 0) const Text(' • '),
-                          Text(
-                            '${distance} km',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
+                        Row(
+                          children: [
+                            if (widget.rating > 0)
+                              Text(
+                                '${widget.rating.toStringAsFixed(1)} ★',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            if (widget.distance != null) ...[
+                              if (widget.rating > 0) const Text(' • '),
+                              Text(
+                                '${widget.distance} km',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ],
+                        ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
+              if (_isNavigating)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black54,
+                    child: const Center(
+                      child: SizedBox(
+                        width: 32,
+                        height: 32,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
       ),
     );
-  }
-
-  Future<void> _onTap(BuildContext context) async {
-    final vendor = await FireStoreUtils().getVendorByVendorID(id);
-    if (vendor != null && context.mounted) {
-      push(
-        context,
-        NewVendorProductsScreen(vendorModel: vendor),
-      );
-    }
   }
 }
 
@@ -227,7 +272,7 @@ class ProductListCard extends StatelessWidget {
   }
 }
 
-class _ProductTile extends StatelessWidget {
+class _ProductTile extends StatefulWidget {
   const _ProductTile({
     required this.product,
     required this.cartService,
@@ -237,54 +282,180 @@ class _ProductTile extends StatelessWidget {
   final AiCartService cartService;
 
   @override
+  State<_ProductTile> createState() => _ProductTileState();
+}
+
+class _ProductTileState extends State<_ProductTile> {
+  bool _isAddingToCart = false;
+  bool _addedToCart = false;
+  bool _isNavigating = false;
+
+  Future<void> _navigateToProduct(BuildContext context) async {
+    if (_isNavigating) return;
+    final productId = (widget.product['id'] ?? '').toString();
+    final vendorId = (widget.product['vendorID'] ?? '').toString();
+    if (productId.isEmpty) return;
+    setState(() => _isNavigating = true);
+    try {
+      final firestore = FireStoreUtils();
+      ProductModel? product;
+      try {
+        product = await firestore.getProductByProductID(productId);
+      } catch (_) {}
+      if (product == null || product.id.isEmpty || !context.mounted) return;
+      VendorModel? vendor;
+      if (vendorId.isNotEmpty) {
+        vendor = await firestore.getVendorByVendorID(vendorId);
+      }
+      if (vendor == null || !context.mounted) return;
+      push(
+        context,
+        ProductDetailsScreen(
+          productModel: product,
+          vendorModel: vendor,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isNavigating = false);
+    }
+  }
+
+  Future<void> _addToCart(BuildContext context, String productId) async {
+    if (_isAddingToCart || _addedToCart) return;
+    setState(() => _isAddingToCart = true);
+    try {
+      final result = await widget.cartService.addProductById(productId, 1);
+      if (!context.mounted) return;
+      if (result['success'] == true) {
+        setState(() {
+          _isAddingToCart = false;
+          _addedToCart = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green[400]),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Added ${result['product']} to cart'),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${result['error'] ?? 'Failed to add'}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted && !_addedToCart) setState(() => _isAddingToCart = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final id = (product['id'] ?? '').toString();
-    final name = (product['name'] ?? '').toString();
-    final price = (product['price'] ?? '0').toString();
-    final vendorName = (product['vendorName'] ?? '').toString();
-    final imageUrl = (product['imageUrl'] ?? '').toString();
+    final id = (widget.product['id'] ?? '').toString();
+    final name = (widget.product['name'] ?? '').toString();
+    final price = (widget.product['price'] ?? '0').toString();
+    final vendorName = (widget.product['vendorName'] ?? '').toString();
+    final imageUrl = (widget.product['imageUrl'] ?? '').toString();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: SizedBox(
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          ListTile(
+            onTap: () => _navigateToProduct(context),
+            leading: SizedBox(
           width: 56,
           height: 56,
           child: CachedNetworkImage(
             imageUrl: getImageVAlidUrl(imageUrl),
             fit: BoxFit.cover,
-            errorWidget: (_, __, ___) => const Icon(Icons.fastfood),
+            placeholder: (_, __) => Container(
+              color: Colors.grey[100],
+              child: const Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+            errorWidget: (_, __, ___) => Container(
+              color: Colors.grey[100],
+              child: Icon(Icons.fastfood, color: Colors.grey[400]),
+            ),
           ),
         ),
         title: Text(name, maxLines: 2, overflow: TextOverflow.ellipsis),
         subtitle: Text(
-          vendorName.isNotEmpty ? vendorName : price,
+          [
+            if (vendorName.isNotEmpty) vendorName,
+            amountShow(amount: price),
+          ].join(' • '),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        trailing: TextButton(
-          onPressed: () => _addToCart(context, id),
-          child: const Text('Add to Cart'),
-        ),
+        trailing: _addedToCart
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green[600], size: 22),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Added',
+                    style: TextStyle(
+                      color: Colors.green[600],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              )
+            : _isAddingToCart
+                ? const SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: Center(
+                      child: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  )
+                : TextButton(
+                    onPressed: () => _addToCart(context, id),
+                    child: const Text('Add to Cart'),
+                  ),
+          ),
+          if (_isNavigating)
+            Positioned.fill(
+              child: Material(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(4),
+                child: const Center(
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
-  }
-
-  Future<void> _addToCart(BuildContext context, String productId) async {
-    final result = await cartService.addProductById(productId, 1);
-    if (!context.mounted) return;
-    if (result['success'] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added ${result['product']} to cart')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${result['error'] ?? 'Failed to add'}'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
   }
 }
 
@@ -311,7 +482,6 @@ class OrderStatusCard extends StatelessWidget {
         : 0;
     final vendor = (order['vendor'] ?? '').toString();
     final eta = (order['estimatedTime'] ?? '').toString();
-    final orderId = (order['orderId'] ?? '').toString();
 
     return Card(
       child: Padding(
@@ -509,9 +679,14 @@ class BookingConfirmationCard extends StatelessWidget {
 
 /// Popular items card.
 class PopularListCard extends StatelessWidget {
-  const PopularListCard({Key? key, required this.data}) : super(key: key);
+  const PopularListCard({
+    Key? key,
+    required this.data,
+    required this.cartService,
+  }) : super(key: key);
 
   final Map<String, dynamic> data;
+  final AiCartService cartService;
 
   @override
   Widget build(BuildContext context) {
@@ -541,7 +716,7 @@ class PopularListCard extends StatelessWidget {
             ),
           ),
         SizedBox(
-          height: 150,
+          height: 180,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             itemCount: popular.length,
@@ -557,6 +732,7 @@ class PopularListCard extends StatelessWidget {
                 orderCount: (p['orderCount'] ?? 0) is int
                     ? p['orderCount'] as int
                     : 0,
+                cartService: cartService,
               );
             },
           ),
@@ -566,7 +742,7 @@ class PopularListCard extends StatelessWidget {
   }
 }
 
-class _PopularItemCard extends StatelessWidget {
+class _PopularItemCard extends StatefulWidget {
   const _PopularItemCard({
     required this.id,
     required this.name,
@@ -575,6 +751,7 @@ class _PopularItemCard extends StatelessWidget {
     required this.vendorName,
     required this.imageUrl,
     required this.orderCount,
+    required this.cartService,
   });
 
   final String id;
@@ -584,6 +761,52 @@ class _PopularItemCard extends StatelessWidget {
   final String vendorName;
   final String imageUrl;
   final int orderCount;
+  final AiCartService cartService;
+
+  @override
+  State<_PopularItemCard> createState() => _PopularItemCardState();
+}
+
+class _PopularItemCardState extends State<_PopularItemCard> {
+  bool _isAddingToCart = false;
+  bool _addedToCart = false;
+  bool _isNavigating = false;
+
+  Future<void> _addToCart(BuildContext context) async {
+    if (_isAddingToCart || _addedToCart) return;
+    setState(() => _isAddingToCart = true);
+    try {
+      final result = await widget.cartService.addProductById(widget.id, 1);
+      if (!context.mounted) return;
+      if (result['success'] == true) {
+        setState(() {
+          _isAddingToCart = false;
+          _addedToCart = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green[400]),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Added to cart!')),
+              ],
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${result['error'] ?? 'Failed to add'}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted && !_addedToCart) setState(() => _isAddingToCart = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -594,63 +817,152 @@ class _PopularItemCard extends StatelessWidget {
         margin: const EdgeInsets.only(right: 12),
         child: Card(
           clipBehavior: Clip.antiAlias,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Stack(
             children: [
-              Stack(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(
-                    height: 80,
-                    width: double.infinity,
-                    child: CachedNetworkImage(
-                      imageUrl: getImageVAlidUrl(imageUrl),
-                      fit: BoxFit.cover,
-                      errorWidget: (_, __, ___) =>
-                          const Icon(Icons.fastfood),
-                    ),
-                  ),
-                  if (orderCount > 0)
-                    Positioned(
-                      top: 4,
-                      right: 4,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          '$orderCount orders',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
+                  Stack(
+                    children: [
+                      SizedBox(
+                        height: 80,
+                        width: double.infinity,
+                        child: CachedNetworkImage(
+                          imageUrl: getImageVAlidUrl(widget.imageUrl),
+                          fit: BoxFit.cover,
+                          placeholder: (_, __) => Container(
+                            height: 80,
+                            color: Colors.grey[100],
+                            child: const Center(
+                              child: SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                          ),
+                          errorWidget: (_, __, ___) => Container(
+                            height: 80,
+                            color: Colors.grey[100],
+                            child: Icon(
+                              Icons.fastfood,
+                              color: Colors.grey[400],
+                            ),
                           ),
                         ),
                       ),
+                      if (widget.orderCount > 0)
+                        Positioned(
+                          top: 4,
+                          right: 4,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              '${widget.orderCount} orders',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                        Text(
+                          amountShow(amount: widget.price),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            _addedToCart
+                                ? Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.check_circle,
+                                        color: Colors.green[600],
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Added',
+                                        style: TextStyle(
+                                          color: Colors.green[600],
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : _isAddingToCart
+                                    ? const SizedBox(
+                                        width: 28,
+                                        height: 28,
+                                        child: Center(
+                                          child: SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                    : IconButton(
+                                        icon: Icon(
+                                          Icons.add_shopping_cart,
+                                          size: 20,
+                                          color: Color(COLOR_PRIMARY),
+                                        ),
+                                        onPressed: () => _addToCart(context),
+                                        tooltip: 'Add to cart',
+                                        splashRadius: 20,
+                                      ),
+                          ],
+                        ),
+                      ],
                     ),
+                  ),
                 ],
               ),
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelMedium,
+              if (_isNavigating)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black54,
+                    child: const Center(
+                      child: SizedBox(
+                        width: 28,
+                        height: 28,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      ),
                     ),
-                    Text(
-                      amountShow(amount: price),
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
+                  ),
                 ),
-              ),
             ],
           ),
         ),
@@ -659,24 +971,30 @@ class _PopularItemCard extends StatelessWidget {
   }
 
   Future<void> _onTap(BuildContext context) async {
-    final firestore = FireStoreUtils();
-    ProductModel? product;
+    if (_isNavigating) return;
+    setState(() => _isNavigating = true);
     try {
-      product = await firestore.getProductByProductID(id);
-    } catch (_) {}
-    if (product == null || product.id.isEmpty || !context.mounted) return;
-    VendorModel? vendor;
-    if (vendorId.isNotEmpty) {
-      vendor = await firestore.getVendorByVendorID(vendorId);
+      final firestore = FireStoreUtils();
+      ProductModel? product;
+      try {
+        product = await firestore.getProductByProductID(widget.id);
+      } catch (_) {}
+      if (product == null || product.id.isEmpty || !context.mounted) return;
+      VendorModel? vendor;
+      if (widget.vendorId.isNotEmpty) {
+        vendor = await firestore.getVendorByVendorID(widget.vendorId);
+      }
+      if (vendor == null || !context.mounted) return;
+      push(
+        context,
+        ProductDetailsScreen(
+          productModel: product,
+          vendorModel: vendor,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isNavigating = false);
     }
-    if (vendor == null || !context.mounted) return;
-    push(
-      context,
-      ProductDetailsScreen(
-        productModel: product!,
-        vendorModel: vendor,
-      ),
-    );
   }
 }
 

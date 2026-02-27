@@ -9,6 +9,7 @@ import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/ai_cart_service.dart';
 import 'package:foodie_customer/services/ai_product_search_service.dart';
+import 'package:foodie_customer/services/vector_search_service.dart';
 import 'package:foodie_customer/services/coupon_service.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 
@@ -28,6 +29,7 @@ class AiChatToolHandler {
 
   final FireStoreUtils _firestoreUtils = FireStoreUtils();
   final AiProductSearchService _searchService = AiProductSearchService();
+  final VectorSearchService _vectorSearchService = VectorSearchService();
 
   static const _authError = 'Please sign in to use this feature.';
 
@@ -446,7 +448,10 @@ class AiChatToolHandler {
     if (query.isEmpty) {
       return {'message': 'No search query.', 'products': []};
     }
-    final products = await _searchService.searchProducts(query);
+    var products = await _vectorSearchService.searchProducts(query);
+    if (products.isEmpty) {
+      products = await _searchService.searchProducts(query);
+    }
     return {
       'message': products.isEmpty
           ? 'No products found for "$query".'

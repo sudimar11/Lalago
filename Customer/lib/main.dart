@@ -145,6 +145,24 @@ Future<void> _appendCursorDebugLog({
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    debugPrint('💥 [CRASH] ErrorWidget caught: ${details.exception}');
+    debugPrint('💥 [STACK] ${details.stack}');
+    return Material(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              'Error: ${details.exception}\n\n${details.stack}',
+              style: const TextStyle(color: Colors.red, fontSize: 12),
+            ),
+          ),
+        ),
+      ),
+    );
+  };
   // #region agent log
   unawaited(_appendDebugLog(
     hypothesisId: 'H0',

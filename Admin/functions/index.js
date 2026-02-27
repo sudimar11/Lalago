@@ -6978,3 +6978,11 @@ const { computeUserPreferences } = require('./computeUserPreferences');
 exports.computeItemSimilarities = computeItemSimilarities;
 exports.computeUserPreferences = computeUserPreferences;
 
+// Multi-stage vector search for AI product search
+const {
+  onProductWrite,
+  vectorSearchProducts,
+} = require('./vectorSearch');
+exports.onProductWrite = onProductWrite;
+exports.vectorSearchProducts = vectorSearchProducts;
+
