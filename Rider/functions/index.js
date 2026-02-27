@@ -899,10 +899,10 @@ exports.checkZoneCapacity = functions
 
 /**
  * Monitor rider inactivity and auto-logout riders who have been inactive
- * for longer than the configured threshold. Runs every 5 minutes.
+ * for longer than the configured threshold. Runs every 2 minutes.
  */
 exports.monitorRiderInactivity = functions.pubsub
-  .schedule('every 5 minutes')
+  .schedule('every 2 minutes')
   .timeZone('Asia/Manila')
   .onRun(async (context) => {
     const db = admin.firestore();
@@ -927,7 +927,9 @@ exports.monitorRiderInactivity = functions.pubsub
     for (const riderDoc of ridersSnap.docs) {
       const data = riderDoc.data();
       const avail = data.riderAvailability;
-      if (avail !== 'available' && avail !== 'on_delivery') continue;
+      if (avail !== 'available' &&
+          avail !== 'on_delivery' &&
+          avail !== 'on_break') continue;
 
       const orders = data.inProgressOrderID || [];
       const hasActiveOrders = orders.length > 0;
@@ -964,6 +966,8 @@ exports.monitorRiderInactivity = functions.pubsub
         isOnline: false,
         riderAvailability: 'offline',
         riderDisplayStatus: 'Offline',
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+        inactiveReason: 'timeout',
       });
       loggedOut++;
       console.log(

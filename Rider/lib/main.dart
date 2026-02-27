@@ -532,6 +532,13 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
               MyAppState.currentUser!,
             );
           } catch (_) {}
+          try {
+            await FireStoreUtils.touchLastActivity(
+              MyAppState.currentUser!.userID,
+            );
+          } catch (e) {
+            print('Error updating activity on resume: $e');
+          }
         }
       }
     }

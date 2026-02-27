@@ -278,6 +278,38 @@ Map<String, Map<String, int>> _aggregateOrdersByDriver(
   return result;
 }
 
+String _getRiderDisplayStatus(Map<String, dynamic> riderData) {
+  final availability =
+      riderData['riderAvailability'] as String? ?? 'offline';
+  final lastActive =
+      riderData['lastActivityTimestamp'] as Timestamp?;
+  final locationUpdated =
+      riderData['locationUpdatedAt'] as Timestamp?;
+
+  if (availability == 'offline' || availability == 'checked_out') {
+    return 'Offline';
+  }
+
+  final lastActivity = lastActive ?? locationUpdated;
+  if (lastActivity != null) {
+    final minutesSince =
+        DateTime.now().difference(lastActivity.toDate()).inMinutes;
+    if (minutesSince > 15) return 'Inactive';
+    if (minutesSince > 10) return 'Away';
+  }
+
+  switch (availability) {
+    case 'available':
+      return 'Available';
+    case 'on_delivery':
+      return 'On Delivery';
+    case 'on_break':
+      return 'On Break';
+    default:
+      return 'Unknown';
+  }
+}
+
 String? _parseLocation(Map<String, dynamic> userData) {
   final loc = userData['location'];
   if (loc == null) return null;
@@ -455,9 +487,7 @@ class _RiderOverviewTable extends StatelessWidget {
           final firstName = riderData['firstName'] ?? '';
           final lastName = riderData['lastName'] ?? '';
           final phoneNumber = riderData['phoneNumber'] ?? '';
-          final displayStatus =
-              riderData['riderDisplayStatus'] as String? ??
-                  '⚪ Offline';
+          final displayStatus = _getRiderDisplayStatus(riderData);
           final riderName = '$firstName $lastName'.trim();
           final displayName = riderName.isEmpty
               ? 'Rider ${riderId.substring(0, 8)}...'

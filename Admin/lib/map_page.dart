@@ -66,6 +66,50 @@ class _DriversMapPageState extends State<DriversMapPage> {
         '${value.day.toString().padLeft(2, '0')} $hour:$minute';
   }
 
+  String _getRiderDisplayStatus(Map<String, dynamic> data) {
+    final availability =
+        data['riderAvailability'] as String? ?? 'offline';
+    final lastActive =
+        data['lastActivityTimestamp'] as Timestamp?;
+    final locationUpdated =
+        data['locationUpdatedAt'] as Timestamp?;
+
+    if (availability == 'offline' || availability == 'checked_out') {
+      return 'Offline';
+    }
+
+    final lastActivity = lastActive ?? locationUpdated;
+    if (lastActivity != null) {
+      final minutesSince =
+          DateTime.now().difference(lastActivity.toDate()).inMinutes;
+      if (minutesSince > 15) return 'Inactive';
+      if (minutesSince > 10) return 'Away';
+    }
+
+    switch (availability) {
+      case 'available':
+        return 'Available';
+      case 'on_delivery':
+        return 'On Delivery';
+      case 'on_break':
+        return 'On Break';
+      default:
+        return 'Unknown';
+    }
+  }
+
+  bool _hasRecentActivity(Map<String, dynamic> data) {
+    final lastActive =
+        data['lastActivityTimestamp'] as Timestamp?;
+    final locationUpdated =
+        data['locationUpdatedAt'] as Timestamp?;
+    final lastActivity = lastActive ?? locationUpdated;
+    if (lastActivity == null) return false;
+    final minutesSince =
+        DateTime.now().difference(lastActivity.toDate()).inMinutes;
+    return minutesSince <= 15;
+  }
+
   Future<void> _checkoutAllRiders(BuildContext context) async {
     if (_activeRiders.isEmpty) return;
 
@@ -304,10 +348,13 @@ class _DriversMapPageState extends State<DriversMapPage> {
             final String riderName =
                 fullName.isEmpty ? 'Unknown Rider' : fullName;
             final String displayStatus =
-                data['riderDisplayStatus'] as String? ?? '⚪ Offline';
+                _getRiderDisplayStatus(data);
+            final String availability =
+                data['riderAvailability'] as String? ?? 'offline';
             final bool isActive =
-                data['riderAvailability'] == 'available' ||
-                data['riderAvailability'] == 'on_delivery';
+                (availability == 'available' ||
+                    availability == 'on_delivery') &&
+                _hasRecentActivity(data);
             if (isActive) {
               activeCount++;
               final String riderId = doc.id;

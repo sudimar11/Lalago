@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:developer';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:foodie_driver/constants.dart';
@@ -29,6 +30,8 @@ import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
 import 'package:foodie_driver/ui/heat_map/DriverHeatMapScreen.dart';
 import 'package:foodie_driver/widgets/shared_bottom_navigation_bar.dart';
+import 'package:foodie_driver/services/helper.dart';
+import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/widgets/shared_app_bar.dart';
 import 'package:geolocator/geolocator.dart' hide LocationAccuracy;
 import 'package:intl/intl.dart';
@@ -53,7 +56,8 @@ class ContainerScreen extends StatefulWidget {
   }
 }
 
-class _ContainerScreen extends State<ContainerScreen> {
+class _ContainerScreen extends State<ContainerScreen>
+    with WidgetsBindingObserver {
   String _appBarTitle = 'Orders';
   final fireStoreUtils = FireStoreUtils();
   late Widget _currentWidget;
@@ -67,10 +71,12 @@ class _ContainerScreen extends State<ContainerScreen> {
   Timer? _closingTimeCheckTimer;
   Timer? _inactivityWarningTimer;
   DateTime? _lastInactivityWarningAt;
+  DateTime? _lastActivityWriteAt;
   StreamSubscription? _locationSubscription;
   bool? _lastCheckedInStatus;
   bool _isSuspended = false;
   bool _remittanceDialogDismissed = false;
+  String? _lastKnownAvailability;
 
   @override
   void initState() {
@@ -103,6 +109,7 @@ class _ContainerScreen extends State<ContainerScreen> {
       });
       _checkAttendanceStatus();
       _startInactivityWarningTimer();
+      WidgetsBinding.instance.addObserver(this);
       // Start shared user document listener, health telemetry, then
       // remittance enforcement
       final userId = MyAppState.currentUser?.userID;
@@ -110,6 +117,25 @@ class _ContainerScreen extends State<ContainerScreen> {
         UserListenerService.instance.addCallback('container', (data) {
           if (!mounted) return;
           final updatedUser = User.fromJson(data);
+          final newAvail = data['riderAvailability'] as String?;
+          if (newAvail == 'offline' &&
+              _lastKnownAvailability != null &&
+              _lastKnownAvailability != 'offline') {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'You have been set to offline due to inactivity',
+                    ),
+                    backgroundColor: Colors.orange,
+                    duration: Duration(seconds: 5),
+                  ),
+                );
+              }
+            });
+          }
+          _lastKnownAvailability = newAvail;
           MyAppState.currentUser = updatedUser;
           setState(() {});
         });
@@ -143,13 +169,60 @@ class _ContainerScreen extends State<ContainerScreen> {
     );
   }
 
+  void _resetInactivityTimer() {
+    _inactivityWarningTimer?.cancel();
+    _startInactivityWarningTimer();
+  }
+
+  void _pauseInactivityTimer() {
+    _inactivityWarningTimer?.cancel();
+  }
+
+  Future<void> _updateLastActivityTimestamp() async {
+    final user = MyAppState.currentUser;
+    if (user == null) return;
+    final now = DateTime.now();
+    if (_lastActivityWriteAt != null &&
+        now.difference(_lastActivityWriteAt!).inSeconds < 60) {
+      return;
+    }
+    try {
+      await FirebaseFirestore.instance
+          .collection(USERS)
+          .doc(user.userID)
+          .update({
+        'lastActivityTimestamp': FieldValue.serverTimestamp(),
+      });
+      _lastActivityWriteAt = now;
+    } catch (e) {
+      log('Error updating activity: $e');
+    }
+  }
+
+  void _handleUserInteraction() {
+    _resetInactivityTimer();
+    _updateLastActivityTimestamp();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _updateLastActivityTimestamp();
+      _resetInactivityTimer();
+    } else if (state == AppLifecycleState.paused) {
+      _pauseInactivityTimer();
+    }
+  }
+
   Future<void> _checkInactivityWarning() async {
     if (!mounted) return;
     final user = MyAppState.currentUser;
     if (user == null) return;
 
     final avail = user.riderAvailability;
-    if (avail != 'available' && avail != 'on_delivery') return;
+    if (avail != 'available' &&
+        avail != 'on_delivery' &&
+        avail != 'on_break') return;
 
     final lastActTs = user.lastActivityTimestamp ?? user.locationUpdatedAt;
     if (lastActTs == null) return;
@@ -166,7 +239,10 @@ class _ContainerScreen extends State<ContainerScreen> {
 
     final warningThreshold = (timeoutMinutes - 5).clamp(1, 59);
     if (inactiveMinutes < warningThreshold) return;
-    if (inactiveMinutes >= timeoutMinutes) return;
+    if (inactiveMinutes >= timeoutMinutes) {
+      _logoutDueToInactivity();
+      return;
+    }
 
     final minsLeft = timeoutMinutes - inactiveMinutes;
     final throttle = Duration(minutes: 2);
@@ -184,9 +260,79 @@ class _ContainerScreen extends State<ContainerScreen> {
           '${minsLeft > 0 ? minsLeft : 5} minutes',
         ),
         backgroundColor: Colors.orange,
-        duration: const Duration(seconds: 5),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'STAY ONLINE',
+          textColor: Colors.white,
+          onPressed: () {
+            _handleUserInteraction();
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Staying online'),
+                  backgroundColor: Colors.green,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          },
+        ),
       ),
     );
+  }
+
+  Future<void> _logoutDueToInactivity() async {
+    if (!mounted) return;
+
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Session Expired'),
+        content: const Text(
+          'You have been inactive for too long. '
+          'Please log in again to continue receiving orders.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('STAY ONLINE'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('LOG OUT'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldLogout == true) {
+      final userId = MyAppState.currentUser?.userID;
+      if (userId != null) {
+        try {
+          await FirebaseFirestore.instance
+              .collection(USERS)
+              .doc(userId)
+              .update({
+            'riderAvailability': 'offline',
+            'riderDisplayStatus': 'Offline',
+            'lastSeen': FieldValue.serverTimestamp(),
+          });
+        } catch (e) {
+          log('Error updating status on logout: $e');
+        }
+      }
+      try {
+        await auth.FirebaseAuth.instance.signOut();
+      } catch (e) {
+        log('Error signing out: $e');
+      }
+      if (mounted) {
+        pushAndRemoveUntil(context, AuthScreen(), false);
+      }
+    } else {
+      _handleUserInteraction();
+    }
   }
 
   void _updateClosingTimeTimer() {
@@ -276,6 +422,7 @@ class _ContainerScreen extends State<ContainerScreen> {
     HealthTelemetryService.instance.stop();
     UserListenerService.instance.removeCallback('container');
     UserListenerService.instance.stop();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -960,8 +1107,12 @@ class _ContainerScreen extends State<ContainerScreen> {
               }
             });
 
-            return Scaffold(
-              appBar: SharedAppBar(
+            return GestureDetector(
+              onTap: _handleUserInteraction,
+              onPanDown: (_) => _handleUserInteraction(),
+              behavior: HitTestBehavior.opaque,
+              child: Scaffold(
+                appBar: SharedAppBar(
                 title: _appBarTitle,
                 user: user,
                 automaticallyImplyLeading: false,
@@ -1011,6 +1162,7 @@ class _ContainerScreen extends State<ContainerScreen> {
                 onTap: _onBottomNavTap,
                 isDisabled: user.suspended == true,
               ),
+            ),
             );
           },
         ),
