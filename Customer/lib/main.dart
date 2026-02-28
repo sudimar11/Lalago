@@ -153,10 +153,14 @@ void main() async {
       child: Center(
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: SingleChildScrollView(
-            child: SelectableText(
-              'Error: ${details.exception}\n\n${details.stack}',
-              style: const TextStyle(color: Colors.red, fontSize: 12),
+          child: Text(
+            kDebugMode
+                ? 'Error: ${details.exception}\n\n${details.stack}'
+                : 'Something went wrong. Please restart the app.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: kDebugMode ? Colors.red : Colors.black87,
+              fontSize: kDebugMode ? 12 : 16,
             ),
           ),
         ),

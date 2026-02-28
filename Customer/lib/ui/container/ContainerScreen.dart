@@ -790,9 +790,26 @@ if (fbUser == null) {
                     ),
                   ],
                 ),
-                floatingActionButton: FloatingActionButton(
-                  onPressed: () => push(context, AiChatScreen()),
-                  child: const Icon(Icons.smart_toy),
+                floatingActionButton: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 280),
+                  switchInCurve: Curves.easeOut,
+                  switchOutCurve: Curves.easeIn,
+                  transitionBuilder: (Widget child, Animation<double> animation) {
+                    return FadeTransition(
+                      opacity: animation,
+                      child: ScaleTransition(
+                        scale: animation,
+                        child: child,
+                      ),
+                    );
+                  },
+                  child: _currentBottomNav == BottomNavSelection.Home
+                      ? FloatingActionButton(
+                          key: const ValueKey('ai_fab'),
+                          onPressed: () => push(context, AiChatScreen()),
+                          child: const Icon(Icons.smart_toy),
+                        )
+                      : const SizedBox(key: ValueKey('ai_fab_empty')),
                 ),
                 appBar: null);
   }

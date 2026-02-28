@@ -41,6 +41,8 @@ class RestaurantListCard extends StatelessWidget {
             child: Text(
               message,
               style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 5,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         SizedBox(
@@ -74,7 +76,12 @@ class RestaurantListCard extends StatelessWidget {
         color: Colors.grey[300],
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Text(text, style: Theme.of(context).textTheme.bodyMedium),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.bodyMedium,
+        maxLines: 10,
+        overflow: TextOverflow.ellipsis,
+      ),
     );
   }
 }
@@ -250,6 +257,8 @@ class ProductListCard extends StatelessWidget {
             child: Text(
               message,
               style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 5,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ...products.map((p) => _ProductTile(
@@ -579,6 +588,8 @@ class OrderListCard extends StatelessWidget {
             child: Text(
               message,
               style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 5,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ...orders.map((o) => _OrderTile(order: o)),
@@ -713,6 +724,8 @@ class PopularListCard extends StatelessWidget {
             child: Text(
               message,
               style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 5,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         SizedBox(
@@ -1018,6 +1031,8 @@ class CouponResultCard extends StatelessWidget {
         child: Text(
           message.isNotEmpty ? message : 'No coupons available.',
           style: Theme.of(context).textTheme.bodyMedium,
+          maxLines: 5,
+          overflow: TextOverflow.ellipsis,
         ),
       );
     }
@@ -1034,6 +1049,8 @@ class CouponResultCard extends StatelessWidget {
                 child: Text(
                   message,
                   style: Theme.of(context).textTheme.bodyMedium,
+                  maxLines: 5,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             if (code.isNotEmpty)

@@ -12,6 +12,7 @@ import 'package:foodie_customer/services/word_correction_service.dart';
 import 'package:foodie_customer/services/tausug_teachings_service.dart';
 import 'package:foodie_customer/services/ai_tool_declarations.dart';
 import 'package:foodie_customer/services/ai_chat_tool_handler.dart';
+import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/screens/ai_chat_cards.dart';
 
@@ -28,9 +29,10 @@ class FoodLoadingIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+      child: ClipRect(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
           SizedBox(
             width: 60,
             height: 40,
@@ -73,6 +75,7 @@ class FoodLoadingIndicator extends StatelessWidget {
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -153,6 +156,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
   final List<ChatMessage> _messages = [];
   bool _isLoading = false;
   bool _greetingAdded = false;
+  bool _disposed = false;
 
   Timer? _loadingMessageTimer;
   int _currentMessageIndex = 0;
@@ -414,10 +418,79 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
     }
   }
 
+  bool _isSimpleGreeting(String message) {
+    final lower = message.trim().toLowerCase();
+    const greetings = [
+      'hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening',
+      'howdy', 'greetings', 'sup', 'what\'s up', 'how are you', 'kamusta',
+      'musta', 'hello po', 'hi po', 'musta na', 'good pm', 'good am',
+      'magandang umaga', 'magandang hapon', 'magandang gabi',
+    ];
+    if (greetings.contains(lower)) return true;
+    if (greetings.any((g) => lower.startsWith(g) && lower.length < 25)) {
+      return true;
+    }
+    if (lower.contains('thank') && lower.length < 30) return true;
+    if (lower.contains('bye') && lower.length < 25) return true;
+    return false;
+  }
+
+  String _getGreetingResponse(String userMessage) {
+    final lower = userMessage.toLowerCase();
+    if (lower.contains('kamusta') || lower.contains('musta')) {
+      return 'Mustang maganda! Ako si Ash, ang iyong Lalago assistant. '
+          'Paano kita matutulungan ngayon?';
+    }
+    if (lower.contains('good morning') || lower.contains('magandang umaga')) {
+      return 'Good morning! Ash here. What can I help you with today?';
+    }
+    if (lower.contains('good afternoon') || lower.contains('magandang hapon')) {
+      return 'Good afternoon! This is Ash. How may I assist you?';
+    }
+    if (lower.contains('good evening') || lower.contains('magandang gabi')) {
+      return 'Good evening! Ash here. Looking for food recommendations?';
+    }
+    if (lower.contains('thank')) {
+      return 'You\'re welcome! Let me know if you need anything else.';
+    }
+    if (lower.contains('bye')) {
+      return 'Goodbye! Thanks for chatting. Come back anytime.';
+    }
+    return 'Hello! I\'m Ash, your Lalago assistant. How can I help you today?';
+  }
+
   void _sendMessage() async {
     if (_controller.text.trim().isEmpty) return;
 
-    final userQuery = _controller.text;
+    final userQuery = _controller.text.trim();
+    if (_isSimpleGreeting(userQuery)) {
+      debugPrint('⚡ [FAST PATH] Chit-chat detected, responding instantly');
+      setState(() {
+        _messages.add(ChatMessage(
+          type: MessageType.text,
+          text: userQuery,
+          isUser: true,
+          timestamp: DateTime.now(),
+        ));
+        _isLoading = true;
+      });
+      _controller.clear();
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!_disposed && mounted) {
+        setState(() {
+          _messages.add(ChatMessage(
+            type: MessageType.text,
+            text: _getGreetingResponse(userQuery),
+            isUser: false,
+            timestamp: DateTime.now(),
+          ));
+          _isLoading = false;
+        });
+      }
+      debugPrint('⏱️ Fast-path response completed');
+      return;
+    }
+
     setState(() {
       _messages.add(ChatMessage(
         type: MessageType.text,
@@ -433,7 +506,7 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
     _loadingMessageTimer = Timer.periodic(
       const Duration(seconds: 3),
       (timer) {
-        if (!_isLoading || !mounted) {
+        if (!_isLoading || _disposed || !mounted) {
           timer.cancel();
           _loadingMessageTimer = null;
           return;
@@ -445,6 +518,25 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
       },
     );
     _controller.clear();
+
+    final isOnline = await hasNetwork();
+    if (!isOnline) {
+      _loadingMessageTimer?.cancel();
+      _loadingMessageTimer = null;
+      if (!_disposed && mounted) {
+        setState(() {
+          _isLoading = false;
+          _messages.add(ChatMessage(
+            type: MessageType.text,
+            text: 'No internet connection. Please check your network '
+                'and try again.',
+            isUser: false,
+            timestamp: DateTime.now(),
+          ));
+        });
+      }
+      return;
+    }
 
     try {
       debugPrint('📤 [SEND] Sending message: "$userQuery"');
@@ -464,7 +556,7 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
             );
             _sessionTeachings[result.tausugWord] = result.englishMeaning;
           }
-          if (mounted) {
+          if (!_disposed && mounted) {
             setState(() {
               _messages.add(ChatMessage(
                 type: MessageType.text,
@@ -476,7 +568,7 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
             });
           }
         } else {
-          if (mounted) {
+          if (!_disposed && mounted) {
             setState(() {
               _messages.add(ChatMessage(
                 type: MessageType.text,
@@ -493,11 +585,13 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
 
       final correctionHint =
           await WordCorrectionService.getCorrectionHintForQuery(userQuery);
+      if (_disposed || !mounted) return;
       final teachingsHint =
           await TausugTeachingsService.getTeachingsHintForQuery(
         userQuery,
         sessionCache: _sessionTeachings,
       );
+      if (_disposed || !mounted) return;
       final hints = [correctionHint, teachingsHint]
           .where((h) => h.isNotEmpty)
           .join('');
@@ -506,13 +600,15 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
           : Content.text(userQuery);
       debugPrint('📤 [SEND] Calling _chat.sendMessage...');
       var response = await _chat.sendMessage(content);
+      if (_disposed || !mounted) return;
       String? lastToolName;
       Map<String, dynamic>? lastResult;
 
       int loopCount = 0;
       const int maxLoops = 10;
 
-      while (response.functionCalls.isNotEmpty) {
+      while (response.functionCalls.isNotEmpty && loopCount <= maxLoops) {
+        if (_disposed || !mounted) break;
         loopCount++;
         if (loopCount > maxLoops) {
           debugPrint('❌ [ERROR] Function-calling loop exceeded $maxLoops '
@@ -531,7 +627,9 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
                 'book_table',
                 _toDynamicMap(fc.args),
               );
-              if (details['pendingConfirmation'] == true && mounted) {
+              if (details['pendingConfirmation'] == true &&
+                  !_disposed &&
+                  mounted) {
                 final confirmed = await _showBookingConfirmDialog(details);
                 if (confirmed) {
                   result = await _toolHandler.performBookTable(
@@ -556,13 +654,15 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
           }
           lastToolName = fc.name;
           lastResult = result;
+          if (_disposed || !mounted) break;
           response = await _chat.sendMessage(
             Content.functionResponse(fc.name, result),
           );
         }
+        if (_disposed || !mounted) break;
       }
 
-      if (mounted) {
+      if (!_disposed && mounted) {
         setState(() {
           final richType = _messageTypeForTool(lastToolName, lastResult);
           if (richType != null && lastResult != null) {
@@ -596,11 +696,12 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
     } catch (e, st) {
       debugPrint('❌ [ERROR] _sendMessage failed: $e');
       debugPrint('💥 [STACK] $st');
-      if (mounted) {
+      final friendlyMessage = _toFriendlyError(e);
+      if (!_disposed && mounted) {
         setState(() {
           _messages.add(ChatMessage(
             type: MessageType.text,
-            text: 'Error: $e',
+            text: friendlyMessage,
             isUser: false,
             timestamp: DateTime.now(),
           ));
@@ -609,7 +710,7 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
     } finally {
       _loadingMessageTimer?.cancel();
       _loadingMessageTimer = null;
-      if (mounted) {
+      if (!_disposed && mounted) {
         setState(() => _isLoading = false);
       }
     }
@@ -617,6 +718,21 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
 
   Map<String, dynamic> _toDynamicMap(Map<String, Object?> args) {
     return Map<String, dynamic>.from(args);
+  }
+
+  String _toFriendlyError(Object e) {
+    final s = e.toString().toLowerCase();
+    if (s.contains('socket') ||
+        s.contains('connection') ||
+        s.contains('network') ||
+        s.contains('failed host lookup') ||
+        s.contains('no internet')) {
+      return 'No internet connection. Please check your network and try again.';
+    }
+    if (s.contains('timeout') || s.contains('timed out')) {
+      return 'Request timed out. Please try again.';
+    }
+    return 'Something went wrong. Please try again.';
   }
 
   MessageType? _messageTypeForTool(
@@ -672,7 +788,7 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
         correction: correctionText,
         detectedWords: _detectTausugWords(userMessage.text),
       );
-      if (mounted) {
+      if (!_disposed && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Thank you for teaching me!')),
         );
@@ -717,7 +833,9 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
   @override
   void dispose() {
     debugPrint('🔴 [LIFECYCLE] AiChatScreen dispose START');
+    _disposed = true;
     _loadingMessageTimer?.cancel();
+    _loadingMessageTimer = null;
     _controller.dispose();
     super.dispose();
     debugPrint('🔴 [LIFECYCLE] AiChatScreen dispose COMPLETE');
@@ -1000,6 +1118,8 @@ class _ChatBubbleState extends State<ChatBubble> {
       child: Text(
         widget.message.text,
         style: const TextStyle(color: Colors.white, fontSize: 15),
+        maxLines: 50,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }
@@ -1060,6 +1180,8 @@ class _ChatBubbleState extends State<ChatBubble> {
               color: widget.isDark ? Colors.white : Colors.black87,
               fontSize: 15,
             ),
+            maxLines: 50,
+            overflow: TextOverflow.ellipsis,
           ),
         );
     }

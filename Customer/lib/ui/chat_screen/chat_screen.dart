@@ -931,10 +931,11 @@ class _ChatScreensState extends State<ChatScreens> {
                                               context,
                                               FullScreenImageViewer(
                                                 imageUrl: data.url!.url,
+                                                heroTag: 'chat_image_${data.id}',
                                               ));
                                         },
                                         child: Hero(
-                                          tag: data.url!.url,
+                                          tag: 'chat_image_${data.id}',
                                           child: CachedNetworkImage(
                                             imageUrl: data.url!.url,
                                             placeholder: (context, url) => Center(
@@ -1017,10 +1018,11 @@ class _ChatScreensState extends State<ChatScreens> {
                                                 context,
                                                 FullScreenImageViewer(
                                                   imageUrl: data.url!.url,
+                                                  heroTag: 'chat_image_${data.id}',
                                                 ));
                                           },
                                           child: Hero(
-                                            tag: data.url!.url,
+                                            tag: 'chat_image_${data.id}',
                                             child: CachedNetworkImage(
                                               imageUrl: data.url!.url,
                                               placeholder: (context, url) => Center(

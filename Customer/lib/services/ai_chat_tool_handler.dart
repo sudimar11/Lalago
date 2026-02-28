@@ -33,6 +33,21 @@ class AiChatToolHandler {
 
   static const _authError = 'Please sign in to use this feature.';
 
+  static String _sanitizeError(Object e) {
+    final s = e.toString().toLowerCase();
+    if (s.contains('socket') ||
+        s.contains('connection') ||
+        s.contains('network') ||
+        s.contains('failed host lookup') ||
+        s.contains('no internet')) {
+      return 'No internet connection. Please check your network and try again.';
+    }
+    if (s.contains('timeout') || s.contains('timed out')) {
+      return 'Request timed out. Please try again.';
+    }
+    return 'Something went wrong. Please try again.';
+  }
+
   Future<Map<String, dynamic>> executeTool(
     String name,
     Map<String, dynamic> args,
@@ -130,7 +145,7 @@ class AiChatToolHandler {
         },
       };
     } catch (e) {
-      return {'error': e.toString()};
+      return {'error': _sanitizeError(e)};
     }
   }
 
@@ -188,7 +203,7 @@ class AiChatToolHandler {
         },
       };
     } catch (e) {
-      return {'error': e.toString()};
+      return {'error': _sanitizeError(e)};
     }
   }
 
@@ -219,7 +234,11 @@ class AiChatToolHandler {
         'orders': list,
       };
     } catch (e) {
-      return {'message': 'Could not load orders.', 'orders': [], 'error': e.toString()};
+      return {
+        'message': 'Could not load orders.',
+        'orders': [],
+        'error': _sanitizeError(e),
+      };
     }
   }
 
@@ -329,7 +348,7 @@ class AiChatToolHandler {
             '${bestDiscount.toStringAsFixed(2)}. Enter this code in Cart.',
       };
     } catch (e) {
-      return {'error': e.toString(), 'bestCoupon': null, 'discount': 0};
+      return {'error': _sanitizeError(e), 'bestCoupon': null, 'discount': 0};
     }
   }
 
@@ -368,7 +387,7 @@ class AiChatToolHandler {
         'occasion': args['occasion'] ?? '',
       };
     } catch (e) {
-      return {'error': e.toString()};
+      return {'error': _sanitizeError(e)};
     }
   }
 
@@ -417,7 +436,7 @@ class AiChatToolHandler {
 
       return {'success': true, 'message': 'Report submitted successfully'};
     } catch (e) {
-      return {'error': e.toString()};
+      return {'error': _sanitizeError(e)};
     }
   }
 
@@ -439,7 +458,7 @@ class AiChatToolHandler {
         'isReferralPath': user.isReferralPath,
       };
     } catch (e) {
-      return {'error': e.toString()};
+      return {'error': _sanitizeError(e)};
     }
   }
 
@@ -448,16 +467,24 @@ class AiChatToolHandler {
     if (query.isEmpty) {
       return {'message': 'No search query.', 'products': []};
     }
-    var products = await _vectorSearchService.searchProducts(query);
-    if (products.isEmpty) {
-      products = await _searchService.searchProducts(query);
+    try {
+      var products = await _vectorSearchService.searchProducts(query);
+      if (products.isEmpty) {
+        products = await _searchService.searchProducts(query);
+      }
+      return {
+        'message': products.isEmpty
+            ? 'No products found for "$query".'
+            : 'Here are some products that match:',
+        'products': products,
+      };
+    } catch (e) {
+      return {
+        'message': 'Could not search products.',
+        'products': [],
+        'error': _sanitizeError(e),
+      };
     }
-    return {
-      'message': products.isEmpty
-          ? 'No products found for "$query".'
-          : 'Here are some products that match:',
-      'products': products,
-    };
   }
 
   Future<Map<String, dynamic>> _searchRestaurants(
@@ -546,7 +573,7 @@ class AiChatToolHandler {
       return {
         'message': 'Could not search restaurants.',
         'restaurants': [],
-        'error': e.toString(),
+        'error': _sanitizeError(e),
       };
     }
   }
@@ -565,7 +592,7 @@ class AiChatToolHandler {
       return {
         'message': 'Could not load popular items.',
         'popular': [],
-        'error': e.toString(),
+        'error': _sanitizeError(e),
       };
     }
   }
@@ -610,7 +637,7 @@ class AiChatToolHandler {
         'status': order.status,
       };
     } catch (e) {
-      return {'error': e.toString()};
+      return {'error': _sanitizeError(e)};
     }
   }
 
