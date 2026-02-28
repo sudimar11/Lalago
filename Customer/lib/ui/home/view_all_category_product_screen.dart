@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/AppGlobal.dart';
@@ -25,6 +27,7 @@ class ViewAllCategoryProductScreen extends StatefulWidget {
 class _ViewAllCategoryProductScreenState extends State<ViewAllCategoryProductScreen> {
   List<VendorModel> productList = [];
   bool showLoader = true;
+  StreamSubscription<List<VendorModel>>? _categorySubscription;
 
   List<String> lstFav = [];
   late Future<List<FavouriteModel>> lstFavourites;
@@ -52,17 +55,21 @@ class _ViewAllCategoryProductScreenState extends State<ViewAllCategoryProductScr
     getProductByCategoryId();
   }
 
-  getProductByCategoryId() async {
-
-    FireStoreUtils().getCategoryRestaurants(widget.vendorCategoryModel!.id.toString()).asBroadcastStream().listen((event) {
-      setState(() {
-        productList = event;
-      });
+  void getProductByCategoryId() {
+    _categorySubscription = FireStoreUtils()
+        .getCategoryRestaurants(widget.vendorCategoryModel!.id.toString())
+        .listen((List<VendorModel> event) {
+      if (mounted) {
+        setState(() => productList = event);
+      }
     });
+    setState(() => showLoader = false);
+  }
 
-    setState(() {
-      showLoader = false;
-    });
+  @override
+  void dispose() {
+    _categorySubscription?.cancel();
+    super.dispose();
   }
 
   @override
@@ -128,6 +135,8 @@ class _ViewAllCategoryProductScreenState extends State<ViewAllCategoryProductScr
                   children: [
                     CachedNetworkImage(
                       imageUrl: getImageVAlidUrl(vendorModel.photo),
+                      memCacheWidth: 200,
+                      memCacheHeight: 200,
                       imageBuilder: (context, imageProvider) => Container(
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
@@ -139,10 +148,14 @@ class _ViewAllCategoryProductScreenState extends State<ViewAllCategoryProductScr
                         valueColor: AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
                       )),
                       errorWidget: (context, url, error) => ClipRRect(
-                        borderRadius: BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
-                        child: Image.network(
-                          AppGlobal.placeHolderImage!,
+                        borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(20),
+                            topRight: Radius.circular(20)),
+                        child: CachedNetworkImage(
+                          imageUrl: AppGlobal.placeHolderImage!,
                           width: MediaQuery.of(context).size.width * 0.75,
+                          memCacheWidth: 200,
+                          memCacheHeight: 200,
                           fit: BoxFit.contain,
                         ),
                       ),

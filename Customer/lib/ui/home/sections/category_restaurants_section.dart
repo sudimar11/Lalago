@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -64,78 +65,141 @@ class CategoryRestaurantsSection extends StatelessWidget {
       physics: const BouncingScrollPhysics(),
       padding: EdgeInsets.zero,
       itemBuilder: (context, index) {
-        final categoryId = categoryWiseProductList[index].id.toString();
-        final categoryTitle = categoryWiseProductList[index].title.toString();
-        debugPrint('🏪 CategoryRestaurantsSection[$index]: Building section for categoryId="$categoryId" title="$categoryTitle"');
-        return StreamBuilder<List<VendorModel>>(
-          stream: fireStoreUtils.getCategoryRestaurants(categoryId),
-          builder: (context, snapshot) {
-            debugPrint('🏪 CategoryRestaurantsSection[$index] "$categoryTitle": StreamBuilder - connectionState=${snapshot.connectionState}, hasData=${snapshot.hasData}, dataLength=${snapshot.data?.length ?? -1}');
-            if (snapshot.hasError && onRetry != null) {
-              return HomeSectionUtils.sectionError(
-                message: 'Failed to load restaurants for $categoryTitle',
-                onRetry: onRetry!,
-              );
-            }
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return Container();
-            }
+        final category = categoryWiseProductList[index];
+        return _CategoryRestaurantRow(
+          category: category,
+          allProducts: allProducts,
+          currencyModel: currencyModel,
+          fireStoreUtils: fireStoreUtils,
+          onRetry: onRetry,
+        );
+      },
+    );
+  }
+}
 
-            if (snapshot.hasData || (snapshot.data?.isNotEmpty ?? false)) {
-              if (snapshot.data!.isEmpty) {
-                debugPrint('❌ CategoryRestaurantsSection[$index] "$categoryTitle": RETURNING EMPTY CONTAINER (no restaurants found within radius)');
-                return Container();
-              }
-              debugPrint('✅ CategoryRestaurantsSection[$index] "$categoryTitle": RENDERING SECTION with ${snapshot.data!.length} restaurants');
-              return Column(
-                      children: [
-                        HomeSectionUtils.buildTitleRow(
-                          titleValue:
-                              categoryWiseProductList[index].title.toString(),
-                          onClick: () {
-                            push(
-                              context,
-                              ViewAllCategoryProductScreen(
-                                vendorCategoryModel:
-                                    categoryWiseProductList[index],
-                              ),
-                            );
-                          },
-                          isViewAll: false,
-                        ),
-                        SizedBox(
-                          width: MediaQuery.of(context).size.width,
-                          height: MediaQuery.of(context).size.height * 0.29,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            child: RepaintBoundary(
-                              child: ListView.builder(
-                                shrinkWrap: true,
-                                scrollDirection: Axis.horizontal,
-                                physics: const BouncingScrollPhysics(),
-                                padding: EdgeInsets.zero,
-                                cacheExtent: 400.0,
-                                itemCount: snapshot.data!.length,
-                                itemBuilder: (context, index) {
-                                VendorModel vendorModel = snapshot.data![index];
-                                return _CategoryRestaurantCard(
-                                  vendorModel: vendorModel,
-                                  allProducts: allProducts,
-                                  currencyModel: currencyModel,
-                                );
-                              },
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-            } else {
-              return Container();
+class _CategoryRestaurantRow extends StatefulWidget {
+  final VendorCategoryModel category;
+  final List<ProductModel> allProducts;
+  final CurrencyModel? currencyModel;
+  final FireStoreUtils fireStoreUtils;
+  final VoidCallback? onRetry;
+
+  const _CategoryRestaurantRow({
+    required this.category,
+    required this.allProducts,
+    this.currencyModel,
+    required this.fireStoreUtils,
+    this.onRetry,
+  });
+
+  @override
+  State<_CategoryRestaurantRow> createState() => _CategoryRestaurantRowState();
+}
+
+class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
+  final ScrollController _scrollController = ScrollController();
+  List<VendorModel> _vendors = [];
+  int _displayedCount = 5;
+  StreamSubscription<List<VendorModel>>? _streamSubscription;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _streamSubscription = widget.fireStoreUtils
+        .getCategoryRestaurants(widget.category.id.toString())
+        .listen(
+          (List<VendorModel> data) {
+            if (mounted) {
+              setState(() {
+                _vendors = data;
+                _hasError = false;
+              });
+            }
+          },
+          onError: (_) {
+            if (mounted) {
+              setState(() => _hasError = true);
             }
           },
         );
-      },
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients || _displayedCount >= _vendors.length) {
+      return;
+    }
+    final pos = _scrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent - 200) {
+      setState(() {
+        _displayedCount = (_displayedCount + 5).clamp(0, _vendors.length);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _streamSubscription?.cancel();
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasError && widget.onRetry != null) {
+      return HomeSectionUtils.sectionError(
+        message: 'Failed to load restaurants for ${widget.category.title}',
+        onRetry: widget.onRetry!,
+      );
+    }
+    if (_vendors.isEmpty) {
+      return Container();
+    }
+    final count = _displayedCount.clamp(0, _vendors.length);
+    return Column(
+      children: [
+        HomeSectionUtils.buildTitleRow(
+          titleValue: widget.category.title.toString(),
+          onClick: () {
+            push(
+              context,
+              ViewAllCategoryProductScreen(
+                vendorCategoryModel: widget.category,
+              ),
+            );
+          },
+          isViewAll: false,
+        ),
+        SizedBox(
+          width: MediaQuery.of(context).size.width,
+          height: MediaQuery.of(context).size.height * 0.29,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: RepaintBoundary(
+              child: ListView.builder(
+                controller: _scrollController,
+                shrinkWrap: true,
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                padding: EdgeInsets.zero,
+                cacheExtent: 400.0,
+                itemCount: count,
+                itemBuilder: (context, index) {
+                  final vendorModel = _vendors[index];
+                  return _CategoryRestaurantCard(
+                    vendorModel: vendorModel,
+                    allProducts: widget.allProducts,
+                    currencyModel: widget.currencyModel,
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -189,6 +253,8 @@ class _CategoryRestaurantCard extends StatelessWidget {
                       children: [
                         CachedNetworkImage(
                           imageUrl: _getStableRandomProductImage(vendorModel),
+                          memCacheWidth: 200,
+                          memCacheHeight: 200,
                           imageBuilder: (context, imageProvider) => Container(
                             decoration: BoxDecoration(
                               borderRadius: const BorderRadius.only(
@@ -264,6 +330,8 @@ class _CategoryRestaurantCard extends StatelessWidget {
                               borderRadius: BorderRadius.circular(20),
                               child: CachedNetworkImage(
                                 imageUrl: getImageVAlidUrl(vendorModel.photo),
+                                memCacheWidth: 200,
+                                memCacheHeight: 200,
                                 fit: BoxFit.cover,
                                 placeholder: (context, url) => const Center(
                                   child: Icon(

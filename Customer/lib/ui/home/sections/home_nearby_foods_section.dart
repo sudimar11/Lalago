@@ -191,8 +191,10 @@ class HomeNearbyFoodsSection extends StatelessWidget {
                 ),
                 errorWidget: (context, url, error) => ClipRRect(
                   borderRadius: BorderRadius.circular(20),
-                  child: Image.network(
-                    AppGlobal.placeHolderImage!,
+                  child: CachedNetworkImage(
+                    imageUrl: AppGlobal.placeHolderImage!,
+                    memCacheWidth: 200,
+                    memCacheHeight: 200,
                     fit: BoxFit.cover,
                   ),
                 ),

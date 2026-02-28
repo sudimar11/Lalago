@@ -116,8 +116,12 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                                 ),
                               ),
                               errorWidget: (context, url, error) =>
-                                  Image.network(placeholderImage,
-                                      fit: BoxFit.cover),
+                                  CachedNetworkImage(
+                                imageUrl: placeholderImage,
+                                memCacheWidth: 200,
+                                memCacheHeight: 200,
+                                fit: BoxFit.cover,
+                              ),
                             ),
                           ),
                         ],

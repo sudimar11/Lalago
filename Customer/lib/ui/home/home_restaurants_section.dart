@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/AppGlobal.dart';
 import 'package:foodie_customer/constants.dart';
@@ -138,17 +139,32 @@ class HomeRestaurantsSection extends StatelessWidget {
                                               children: [
                                                 // Restaurant image with rating overlay
                                                 ClipRRect(
-                                                  borderRadius: BorderRadius.only(
+                                                  borderRadius: const BorderRadius.only(
                                                       topLeft: Radius.circular(20),
                                                       topRight: Radius.circular(20)),
-                                                  child: Image.network(
-                                                    getImageVAlidUrl(vendorModel.photo),
+                                                  child: CachedNetworkImage(
+                                                    imageUrl: getImageVAlidUrl(
+                                                        vendorModel.photo),
                                                     width: double.infinity,
                                                     height: double.infinity,
+                                                    memCacheWidth: 200,
+                                                    memCacheHeight: 200,
                                                     fit: BoxFit.cover,
-                                                    errorBuilder: (context, error, stackTrace) =>
-                                                        Image.network(
-                                                      AppGlobal.placeHolderImage!,
+                                                    placeholder: (context, url) =>
+                                                        Center(
+                                                      child: CircularProgressIndicator
+                                                          .adaptive(
+                                                        valueColor: AlwaysStoppedAnimation(
+                                                            Color(COLOR_PRIMARY)),
+                                                      ),
+                                                    ),
+                                                    errorWidget:
+                                                        (context, url, error) =>
+                                                            CachedNetworkImage(
+                                                      imageUrl: AppGlobal
+                                                          .placeHolderImage!,
+                                                      memCacheWidth: 200,
+                                                      memCacheHeight: 200,
                                                       fit: BoxFit.cover,
                                                     ),
                                                   ),

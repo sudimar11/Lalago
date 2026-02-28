@@ -156,11 +156,11 @@ class _ViewAllDineInRestaurantState extends State<ViewAllDineInRestaurant> {
                       )),
                       errorWidget: (context, url, error) => ClipRRect(
                           borderRadius: BorderRadius.circular(10),
-                          child: Image.network(
-                            AppGlobal.placeHolderImage!,
+                          child: CachedNetworkImage(
+                            imageUrl: AppGlobal.placeHolderImage!,
+                            memCacheWidth: 200,
+                            memCacheHeight: 200,
                             fit: BoxFit.cover,
-                            cacheHeight: 100,
-                            cacheWidth: 100,
                           )),
                       fit: BoxFit.cover,
                     ),

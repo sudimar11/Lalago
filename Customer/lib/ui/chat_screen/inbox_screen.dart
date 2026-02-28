@@ -72,8 +72,10 @@ class _InboxScreenState extends State<InboxScreen> {
                         ),
                     errorWidget: (context, url, error) => ClipRRect(
                         borderRadius: BorderRadius.circular(5),
-                        child: Image.network(
-                          AppGlobal.placeHolderImage!,
+                        child: CachedNetworkImage(
+                          imageUrl: AppGlobal.placeHolderImage!,
+                          memCacheWidth: 120,
+                          memCacheHeight: 120,
                           fit: BoxFit.cover,
                         ))),
               ),

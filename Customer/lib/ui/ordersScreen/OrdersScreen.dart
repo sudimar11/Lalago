@@ -1,5 +1,6 @@
 // ignore_for_file: must_be_immutable
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/constants.dart';
@@ -615,12 +616,14 @@ class _OrdersScreenState extends State<OrdersScreen>
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(12),
-                        child: Image.network(
-                          (orderModel.products.first.photo.isNotEmpty)
+                        child: CachedNetworkImage(
+                          imageUrl: (orderModel.products.first.photo.isNotEmpty)
                               ? orderModel.products.first.photo
                               : placeholderImage,
+                          memCacheWidth: 200,
+                          memCacheHeight: 200,
                           fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) {
+                          errorWidget: (context, url, error) {
                             return Container(
                               color: Colors.grey.shade200,
                               child: Icon(

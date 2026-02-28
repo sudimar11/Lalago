@@ -590,8 +590,10 @@ class _DineInScreenState extends State<DineInScreen> {
                 )),
                 errorWidget: (context, url, error) => ClipRRect(
                   borderRadius: BorderRadius.circular(20),
-                  child: Image.network(
-                    AppGlobal.placeHolderImage!,
+                  child: CachedNetworkImage(
+                    imageUrl: AppGlobal.placeHolderImage!,
+                    memCacheWidth: 200,
+                    memCacheHeight: 200,
                     width: MediaQuery.of(context).size.width * 0.75,
                     fit: BoxFit.fitHeight,
                   ),
@@ -739,8 +741,10 @@ class _DineInScreenState extends State<DineInScreen> {
                 ),
                 errorWidget: (context, url, error) => ClipRRect(
                     borderRadius: BorderRadius.circular(15),
-                    child: Image.network(
-                      AppGlobal.placeHolderImage!,
+                    child: CachedNetworkImage(
+                      imageUrl: AppGlobal.placeHolderImage!,
+                      memCacheWidth: 200,
+                      memCacheHeight: 200,
                       fit: BoxFit.cover,
                       width: MediaQuery.of(context).size.width,
                       height: MediaQuery.of(context).size.height,
@@ -839,8 +843,10 @@ class _DineInScreenState extends State<DineInScreen> {
                   )),
                   errorWidget: (context, url, error) => ClipRRect(
                       borderRadius: BorderRadius.circular(20),
-                      child: Image.network(
-                        placeholderImage,
+                      child: CachedNetworkImage(
+                        imageUrl: placeholderImage,
+                        memCacheWidth: 200,
+                        memCacheHeight: 200,
                         width: MediaQuery.of(context).size.width * 0.75,
                         fit: BoxFit.fitWidth,
                       )),
@@ -1032,8 +1038,10 @@ class _DineInScreenState extends State<DineInScreen> {
                         Center(child: CircularProgressIndicator()),
                     errorWidget: (context, url, error) => ClipRRect(
                         borderRadius: BorderRadius.circular(10),
-                        child: Image.network(
-                          AppGlobal.placeHolderImage!,
+                        child: CachedNetworkImage(
+                          imageUrl: AppGlobal.placeHolderImage!,
+                          memCacheWidth: 120,
+                          memCacheHeight: 120,
                           fit: BoxFit.cover,
                         )),
                   ),

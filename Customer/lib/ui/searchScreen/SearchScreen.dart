@@ -102,21 +102,25 @@ class SearchScreenState extends State<SearchScreen> {
     });
 
     fireStoreUtils.getVendors().then((value) {
-      setState(() {
-        vendorList = value;
-        // Build cache for optimized search performance
-        _cachedVendors = value.map((v) => CachedVendor(v)).toList();
-        isLoadingVendors = false;
-      });
+      if (mounted) {
+        setState(() {
+          vendorList = value;
+          // Build cache for optimized search performance
+          _cachedVendors = value.map((v) => CachedVendor(v)).toList();
+          isLoadingVendors = false;
+        });
+      }
     });
     fireStoreUtils.getAllProducts().then((value) {
-      setState(() {
-        // only keep products that are published
-        productList = value.where((p) => p.publish == true).toList();
-        // Build cache for optimized search performance
-        _cachedProducts = productList.map((p) => CachedProduct(p)).toList();
-        isLoadingProducts = false;
-      });
+      if (mounted) {
+        setState(() {
+          // only keep products that are published
+          productList = value.where((p) => p.publish == true).toList();
+          // Build cache for optimized search performance
+          _cachedProducts = productList.map((p) => CachedProduct(p)).toList();
+          isLoadingProducts = false;
+        });
+      }
     });
     BundleService.getActiveBundles(limit: 100).then((value) {
       if (mounted) setState(() => _cachedBundles = value);
@@ -984,6 +988,8 @@ class SearchScreenState extends State<SearchScreen> {
     return CachedNetworkImage(
       height: MediaQuery.of(context).size.height * 0.075,
       width: MediaQuery.of(context).size.width * 0.16,
+      memCacheWidth: 200,
+      memCacheHeight: 200,
       imageUrl: getImageVAlidUrl(vendorModel.photo),
       imageBuilder: (context, imageProvider) => Container(
         decoration: BoxDecoration(
@@ -996,10 +1002,12 @@ class SearchScreenState extends State<SearchScreen> {
       ),
       errorWidget: (context, url, error) => ClipRRect(
         borderRadius: BorderRadius.circular(5),
-        child: Image.network(
-          AppGlobal.placeHolderImage!,
+        child: CachedNetworkImage(
+          imageUrl: AppGlobal.placeHolderImage!,
+          memCacheWidth: 200,
+          memCacheHeight: 200,
           fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => Container(
+          errorWidget: (context, url, e) => Container(
             color: Colors.grey[300],
             child: const Icon(Icons.restaurant, color: Colors.grey),
           ),
@@ -1126,6 +1134,8 @@ class SearchScreenState extends State<SearchScreen> {
     return CachedNetworkImage(
       height: MediaQuery.of(context).size.height * 0.075,
       width: MediaQuery.of(context).size.width * 0.16,
+      memCacheWidth: 200,
+      memCacheHeight: 200,
       imageUrl: getImageVAlidUrl(productModel.photo),
       imageBuilder: (context, imageProvider) => Container(
         decoration: BoxDecoration(
@@ -1138,10 +1148,12 @@ class SearchScreenState extends State<SearchScreen> {
       ),
       errorWidget: (context, url, error) => ClipRRect(
         borderRadius: BorderRadius.circular(5),
-        child: Image.network(
-          AppGlobal.placeHolderImage!,
+        child: CachedNetworkImage(
+          imageUrl: AppGlobal.placeHolderImage!,
+          memCacheWidth: 200,
+          memCacheHeight: 200,
           fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => Container(
+          errorWidget: (context, url, e) => Container(
             color: Colors.grey[300],
             child: const Icon(Icons.fastfood, color: Colors.grey),
           ),

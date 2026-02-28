@@ -293,9 +293,11 @@ class _MapViewScreenState extends State<MapViewScreen> {
                                                           borderRadius:
                                                               BorderRadius
                                                                   .circular(15),
-                                                          child: Image.network(
-                                                            AppGlobal
+                                                          child: CachedNetworkImage(
+                                                            imageUrl: AppGlobal
                                                                 .placeHolderImage!,
+                                                            memCacheWidth: 200,
+                                                            memCacheHeight: 200,
                                                             fit: BoxFit.cover,
                                                             width:
                                                                 MediaQuery.of(

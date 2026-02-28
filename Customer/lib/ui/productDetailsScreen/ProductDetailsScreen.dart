@@ -664,8 +664,10 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                                           ClipRRect(
                                               borderRadius:
                                                   BorderRadius.circular(15),
-                                              child: Image.network(
-                                                placeholderImage,
+                                              child: CachedNetworkImage(
+                                                imageUrl: placeholderImage,
+                                                memCacheWidth: 200,
+                                                memCacheHeight: 200,
                                                 fit: BoxFit.cover,
                                               )),
                                       fit: BoxFit.cover,
@@ -1523,8 +1525,10 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                                                       borderRadius:
                                                           BorderRadius.circular(
                                                               35),
-                                                      child: Image.network(
-                                                        placeholderImage,
+                                                      child: CachedNetworkImage(
+                                                        imageUrl: placeholderImage,
+                                                        memCacheWidth: 200,
+                                                        memCacheHeight: 200,
                                                         fit: BoxFit.cover,
                                                       )),
                                               fit: BoxFit.cover,

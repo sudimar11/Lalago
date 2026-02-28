@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
@@ -22,6 +24,7 @@ class ViewAllPopularFoodNearByScreen extends StatefulWidget {
 class _ViewAllPopularFoodNearByScreenState
     extends State<ViewAllPopularFoodNearByScreen> {
   late Stream<List<VendorModel>> vendorsFuture;
+  StreamSubscription<List<VendorModel>>? _storeSubscription;
   final fireStoreUtils = FireStoreUtils();
   Stream<List<VendorModel>>? lstAllStore;
   late Future<List<ProductModel>> productsFuture;
@@ -39,7 +42,7 @@ class _ViewAllPopularFoodNearByScreenState
     getFoodType();
     fireStoreUtils.getRestaurantNearBy().whenComplete(() {
       lstAllStore = fireStoreUtils.getAllRestaurants().asBroadcastStream();
-      lstAllStore!.listen((event) {
+      _storeSubscription = lstAllStore!.listen((event) {
         vendors.clear();
         vendors.addAll(event);
       });
@@ -70,11 +73,17 @@ class _ViewAllPopularFoodNearByScreenState
           }
         }
 
-        setState(() {
-          showLoader = false;
-        });
+        if (mounted) {
+          setState(() => showLoader = false);
+        }
       });
     });
+  }
+
+  @override
+  void dispose() {
+    _storeSubscription?.cancel();
+    super.dispose();
   }
 
   getFoodType() async {
@@ -171,8 +180,10 @@ class _ViewAllPopularFoodNearByScreenState
                 )),
                 errorWidget: (context, url, error) => ClipRRect(
                     borderRadius: BorderRadius.circular(15),
-                    child: Image.network(
-                      AppGlobal.placeHolderImage!,
+                    child: CachedNetworkImage(
+                      imageUrl: AppGlobal.placeHolderImage!,
+                      memCacheWidth: 200,
+                      memCacheHeight: 200,
                       fit: BoxFit.cover,
                       width: MediaQuery.of(context).size.width,
                       height: MediaQuery.of(context).size.height,

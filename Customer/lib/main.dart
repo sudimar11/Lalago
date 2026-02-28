@@ -14,6 +14,7 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/firebase_options.dart';
 import 'package:foodie_customer/model/AddressModel.dart';
@@ -145,6 +146,10 @@ Future<void> _appendCursorDebugLog({
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Limit image cache to reduce memory (OutOfMemoryError mitigation)
+  PaintingBinding.instance.imageCache.maximumSize = 100;
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 50 << 20; // 50 MB
 
   ErrorWidget.builder = (FlutterErrorDetails details) {
     debugPrint('💥 [CRASH] ErrorWidget caught: ${details.exception}');

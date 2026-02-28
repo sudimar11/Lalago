@@ -197,12 +197,13 @@ class HomePopularTodaySection extends StatelessWidget {
                 ),
                 errorWidget: (context, url, error) => ClipRRect(
                   borderRadius: BorderRadius.circular(20),
-                  child: Image.network(
-                    AppGlobal.placeHolderImage!,
+                  child: CachedNetworkImage(
+                    imageUrl: AppGlobal.placeHolderImage!,
+                    memCacheWidth: 200,
+                    memCacheHeight: 200,
                     fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return const Icon(Icons.broken_image);
-                    },
+                    errorWidget: (context, url, e) =>
+                        const Icon(Icons.broken_image),
                   ),
                 ),
                 fit: BoxFit.cover,

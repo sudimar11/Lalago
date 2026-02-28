@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:math';
+
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
@@ -1066,12 +1068,14 @@ class _BannerContentState extends State<_BannerContent> {
                                       ],
                                     )
                                   : (productImageUrl.isNotEmpty
-                                      ? Image.network(
-                                          getImageVAlidUrl(productImageUrl),
+                                      ? CachedNetworkImage(
+                                          imageUrl:
+                                              getImageVAlidUrl(productImageUrl),
+                                          memCacheWidth: 200,
+                                          memCacheHeight: 200,
                                           fit: BoxFit.cover,
-                                          errorBuilder:
-                                              (context, error, stackTrace) =>
-                                                  Icon(
+                                          errorWidget: (context, url, error) =>
+                                              Icon(
                                             Icons.fastfood,
                                             color: Color(COLOR_PRIMARY),
                                           ),
@@ -1291,15 +1295,17 @@ class _BannerContentState extends State<_BannerContent> {
                                                             aspectRatio:
                                                                 16 / 10,
                                                             child:
-                                                                Image.network(
-                                                              getImageVAlidUrl(
-                                                                  p.photo),
+                                                                CachedNetworkImage(
+                                                              imageUrl:
+                                                                  getImageVAlidUrl(
+                                                                      p.photo),
+                                                              memCacheWidth: 200,
+                                                              memCacheHeight: 200,
                                                               fit: BoxFit.cover,
-                                                              errorBuilder:
-                                                                  (context,
-                                                                          error,
-                                                                          stackTrace) =>
-                                                                      Container(
+                                                              errorWidget: (context,
+                                                                      url,
+                                                                      error) =>
+                                                                  Container(
                                                                 color: Color(
                                                                         COLOR_PRIMARY)
                                                                     .withOpacity(
@@ -1633,15 +1639,18 @@ class _BannerContentState extends State<_BannerContent> {
                                                     .driver!
                                                     .profilePictureURL
                                                     .isNotEmpty
-                                            ? Image.network(
-                                                getImageVAlidUrl(widget.order
-                                                    .driver!.profilePictureURL),
+                                            ? CachedNetworkImage(
+                                                imageUrl: getImageVAlidUrl(
+                                                    widget.order.driver!
+                                                        .profilePictureURL),
+                                                memCacheWidth: 120,
+                                                memCacheHeight: 120,
                                                 fit: BoxFit.cover,
                                                 width: 70,
                                                 height: 70,
-                                                errorBuilder: (context, error,
-                                                        stackTrace) =>
-                                                    Container(
+                                                errorWidget:
+                                                    (context, url, error) =>
+                                                        Container(
                                                   width: 70,
                                                   height: 70,
                                                   decoration: BoxDecoration(

@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
@@ -278,12 +279,21 @@ class _ProductTile extends StatelessWidget {
           ClipRRect(
             borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(20), topRight: Radius.circular(20)),
-            child: Image.network(
-              getImageVAlidUrl(product.photo),
+            child: CachedNetworkImage(
+              imageUrl: getImageVAlidUrl(product.photo),
               width: double.infinity,
               height: 120,
+              memCacheWidth: 200,
+              memCacheHeight: 200,
               fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) => Container(
+              placeholder: (context, url) => Container(
+                height: 120,
+                color: Colors.grey.shade200,
+                child: const Center(
+                  child: CircularProgressIndicator.adaptive(),
+                ),
+              ),
+              errorWidget: (context, url, error) => Container(
                 height: 120,
                 color: Colors.grey.shade200,
                 child: const Icon(Icons.image_not_supported),

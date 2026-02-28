@@ -119,6 +119,8 @@ class RestaurantCard extends StatelessWidget {
                         imageUrl: getImageVAlidUrl(cardImage),
                         width: MediaQuery.of(context).size.width,
                         height: 180,
+                        memCacheWidth: 200,
+                        memCacheHeight: 200,
                         fit: BoxFit.cover,
                         placeholder: (context, url) => Center(
                             child: CircularProgressIndicator.adaptive(
@@ -127,10 +129,12 @@ class RestaurantCard extends StatelessWidget {
                         )),
                         errorWidget: (context, url, error) => ClipRRect(
                             borderRadius: BorderRadius.circular(20),
-                            child: Image.network(
-                              AppGlobal.placeHolderImage!,
+                            child: CachedNetworkImage(
+                              imageUrl: AppGlobal.placeHolderImage!,
                               width: MediaQuery.of(context).size.width,
                               height: 180,
+                              memCacheWidth: 200,
+                              memCacheHeight: 200,
                               fit: BoxFit.cover,
                             )),
                       ),

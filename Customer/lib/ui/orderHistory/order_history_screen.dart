@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -541,12 +542,15 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(12),
                         child: orderModel.products.isNotEmpty
-                            ? Image.network(
-                                orderModel.products.first.photo.isNotEmpty
+                            ? CachedNetworkImage(
+                                imageUrl: orderModel.products.first.photo
+                                    .isNotEmpty
                                     ? orderModel.products.first.photo
                                     : placeholderImage,
+                                memCacheWidth: 200,
+                                memCacheHeight: 200,
                                 fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => Container(
+                                errorWidget: (_, __, ___) => Container(
                                   color: Colors.grey.shade200,
                                   child: Icon(
                                     Icons.restaurant,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -23,10 +25,10 @@ class ViewAllRestaurant extends StatefulWidget {
 
 class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
   List<VendorModel> vendors = [];
-
+  StreamSubscription<List<DocumentSnapshot>>? _geoSubscription;
   bool isLoading = true;
 
-  getProducts() async {
+  void getProducts() {
     setState(() {
       isLoading = true;
     });
@@ -44,17 +46,24 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
             radius: radiusValue,
             field: field,
             strictMode: true);
-    stream.listen((documentList) {
-      for (var document in documentList) {
-        final data = document.data() as Map<String, dynamic>;
+    _geoSubscription = stream.listen((List<DocumentSnapshot> documentList) {
+      if (mounted) {
         setState(() {
-          vendors.add(VendorModel.fromJson(data));
+          vendors.clear();
+          for (var document in documentList) {
+            final data = document.data() as Map<String, dynamic>;
+            vendors.add(VendorModel.fromJson(data));
+          }
         });
       }
     });
-    setState(() {
-      isLoading = false;
-    });
+    setState(() => isLoading = false);
+  }
+
+  @override
+  void dispose() {
+    _geoSubscription?.cancel();
+    super.dispose();
   }
 
   late Future<List<FavouriteModel>> lstFavourites;
@@ -158,11 +167,11 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
                           )),
                           errorWidget: (context, url, error) => ClipRRect(
                               borderRadius: BorderRadius.circular(10),
-                              child: Image.network(
-                                AppGlobal.placeHolderImage!,
+                              child: CachedNetworkImage(
+                                imageUrl: AppGlobal.placeHolderImage!,
+                                memCacheWidth: 200,
+                                memCacheHeight: 200,
                                 fit: BoxFit.cover,
-                                cacheHeight: 100,
-                                cacheWidth: 100,
                               )),
                           fit: BoxFit.cover,
                         ),
