@@ -25,6 +25,25 @@ function toRadians(degrees) {
 }
 
 /**
+ * Returns array of FCM tokens for a user. Prefers fcmTokens array,
+ * falls back to single fcmToken for backward compatibility.
+ */
+async function _getUserFcmTokens(db, userId) {
+  const doc = await db.collection('users').doc(userId).get();
+  if (!doc.exists) return [];
+  const data = doc.data() || {};
+  const arr = data.fcmTokens;
+  if (Array.isArray(arr) && arr.length > 0) {
+    return arr.filter(t => typeof t === 'string' && t.trim().length > 0).map(t => t.trim());
+  }
+  const single = data.fcmToken;
+  if (single && typeof single === 'string' && single.trim().length > 0) {
+    return [single.trim()];
+  }
+  return [];
+}
+
+/**
  * Group orders by restaurant location proximity (500m radius)
  */
 function groupByProximity(orders) {
@@ -434,58 +453,42 @@ exports.notifyCustomerOnDriverAssigned = functions
     try {
       const db = admin.firestore();
 
-      // Get customer FCM token
-      let customerFcmToken = null;
-      let customerId = null;
+      // Get customer ID and FCM tokens
+      const customerId = afterData.authorID || afterData.authorId ||
+        (afterData.author && (afterData.author.id || afterData.author.customerID)) || null;
 
-      // Try to get from order.author
-      const author = afterData.author || {};
-      customerFcmToken = author.fcmToken || null;
-      customerId = author.id || author.customerID || null;
-
-      // Fallback: read from users collection if token not in order
-      if (!customerFcmToken && customerId) {
-        try {
-          const userDoc = await db.collection('users').doc(customerId).get();
-          if (userDoc.exists) {
-            const userData = userDoc.data();
-            customerFcmToken = userData?.fcmToken || null;
-            console.log(
-              `[notifyCustomerOnDriverAssigned] Order ${orderId}: Retrieved FCM token from users collection`
-            );
-          }
-        } catch (userError) {
-          console.error(
-            `[notifyCustomerOnDriverAssigned] Order ${orderId}: Error reading user doc:`,
-            userError
-          );
-        }
+      if (!customerId) {
+        console.log(
+          `[notifyCustomerOnDriverAssigned] Order ${orderId}: No customer ID`
+        );
+        return null;
       }
 
-      if (!customerFcmToken) {
+      const customerTokens = await _getUserFcmTokens(db, customerId);
+
+      if (customerTokens.length === 0) {
         console.log(
           `[notifyCustomerOnDriverAssigned] Order ${orderId}: No FCM token found for customer`
         );
         return null;
       }
 
-      // Send notification
-      const message = {
+      // Send notification to all devices
+      const messagePayload = {
         notification: {
           title: 'Driver Accepted',
           body: 'Driver accepted your order',
         },
-        token: customerFcmToken,
         data: {
           type: 'order_update',
           orderId: orderId,
           status: afterData.status || 'Driver Accepted',
         },
       };
-
-      const messageId = await admin.messaging().send(message);
+      const multicastMessage = { ...messagePayload, tokens: customerTokens };
+      const resp = await admin.messaging().sendEachForMulticast(multicastMessage);
       console.log(
-        `[notifyCustomerOnDriverAssigned] Order ${orderId}: Notification sent. MessageId: ${messageId.substring(0, 20)}...`
+        `[notifyCustomerOnDriverAssigned] Order ${orderId}: Notification sent ${resp.successCount}/${customerTokens.length}`
       );
 
       // Write idempotency marker
@@ -619,10 +622,13 @@ exports.processDriverLocationLifecycle = functions
             restaurantLng
           );
 
-          // Get customer info
+          // Get customer info and tokens
           const author = orderData.author || {};
-          let customerFcmToken = author.fcmToken || null;
-          const customerId = author.id || author.customerID || null;
+          const customerId = orderData.authorID || orderData.authorId ||
+            author.id || author.customerID || null;
+          const customerTokens = customerId
+            ? await _getUserFcmTokens(db, customerId)
+            : [];
 
           // A) "Driver is on the way to the restaurant"
           if (
@@ -632,37 +638,21 @@ exports.processDriverLocationLifecycle = functions
             distanceFromAccept > 100 &&
             !lifecycleNotifs.onWayToRestaurantAt
           ) {
-            // Fallback: get token from users collection if needed
-            if (!customerFcmToken && customerId) {
+            if (customerTokens.length > 0) {
               try {
-                const userDoc = await db.collection('users').doc(customerId).get();
-                if (userDoc.exists) {
-                  customerFcmToken = userDoc.data()?.fcmToken || null;
-                }
-              } catch (err) {
-                console.error(
-                  `[processDriverLocationLifecycle] Error reading customer user:`,
-                  err
-                );
-              }
-            }
-
-            if (customerFcmToken) {
-              try {
-                const message = {
+                const messagePayload = {
                   notification: {
                     title: 'Driver On The Way',
                     body: 'Driver is on the way to the restaurant',
                   },
-                  token: customerFcmToken,
                   data: {
                     type: 'order_update',
                     orderId: String(orderId),
                     status: orderStatus,
                   },
                 };
-
-                await admin.messaging().send(message);
+                const multicastMessage = { ...messagePayload, tokens: customerTokens };
+                await admin.messaging().sendEachForMulticast(multicastMessage);
                 batch.update(orderRef, {
                   'customerLifecycleNotifs.onWayToRestaurantAt':
                     admin.firestore.FieldValue.serverTimestamp(),
@@ -685,37 +675,21 @@ exports.processDriverLocationLifecycle = functions
             distanceToRestaurant <= 50 &&
             !lifecycleNotifs.arrivedRestaurantAt
           ) {
-            // Fallback: get token from users collection if needed
-            if (!customerFcmToken && customerId) {
+            if (customerTokens.length > 0) {
               try {
-                const userDoc = await db.collection('users').doc(customerId).get();
-                if (userDoc.exists) {
-                  customerFcmToken = userDoc.data()?.fcmToken || null;
-                }
-              } catch (err) {
-                console.error(
-                  `[processDriverLocationLifecycle] Error reading customer user:`,
-                  err
-                );
-              }
-            }
-
-            if (customerFcmToken) {
-              try {
-                const message = {
+                const messagePayload = {
                   notification: {
                     title: 'Driver At Restaurant',
                     body: 'Driver is at the restaurant',
                   },
-                  token: customerFcmToken,
                   data: {
                     type: 'order_update',
                     orderId: String(orderId),
                     status: orderStatus,
                   },
                 };
-
-                await admin.messaging().send(message);
+                const multicastMessage = { ...messagePayload, tokens: customerTokens };
+                await admin.messaging().sendEachForMulticast(multicastMessage);
                 batch.update(orderRef, {
                   'customerLifecycleNotifs.arrivedRestaurantAt':
                     admin.firestore.FieldValue.serverTimestamp(),
@@ -739,37 +713,21 @@ exports.processDriverLocationLifecycle = functions
             distanceToRestaurant >= 80 &&
             !lifecycleNotifs.leftRestaurantAt
           ) {
-            // Fallback: get token from users collection if needed
-            if (!customerFcmToken && customerId) {
+            if (customerTokens.length > 0) {
               try {
-                const userDoc = await db.collection('users').doc(customerId).get();
-                if (userDoc.exists) {
-                  customerFcmToken = userDoc.data()?.fcmToken || null;
-                }
-              } catch (err) {
-                console.error(
-                  `[processDriverLocationLifecycle] Error reading customer user:`,
-                  err
-                );
-              }
-            }
-
-            if (customerFcmToken) {
-              try {
-                const message = {
+                const messagePayload = {
                   notification: {
                     title: 'Driver On The Way',
                     body: 'Driver left the restaurant and is on the way',
                   },
-                  token: customerFcmToken,
                   data: {
                     type: 'order_update',
                     orderId: String(orderId),
                     status: 'In Transit',
                   },
                 };
-
-                await admin.messaging().send(message);
+                const multicastMessage = { ...messagePayload, tokens: customerTokens };
+                await admin.messaging().sendEachForMulticast(multicastMessage);
 
                 // Update status to "In Transit" if not already; set pickedUpAt for pipeline metrics
                 const updates = {

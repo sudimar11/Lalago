@@ -299,7 +299,11 @@ class FireStoreUtils {
 
     user.fcmToken = newToken;
     try {
-      await updateCurrentUser(user);
+      await firestore.collection(USERS).doc(user.userID).update({
+        'fcmToken': newToken,
+        'fcmTokens': FieldValue.arrayUnion([newToken]),
+        'lastTokenUpdate': FieldValue.serverTimestamp(),
+      });
       MyAppState.currentUser = user;
       dlog('[FCM_TOKEN] Token saved to users/${user.userID}.fcmToken (refreshed)');
       return true;
@@ -338,6 +342,33 @@ class FireStoreUtils {
     await firestore.collection(USERS).doc(userId).update({
       'lastActivityTimestamp': FieldValue.serverTimestamp(),
     });
+  }
+
+  /// Adds token to user's fcmTokens array. Call on login.
+  static Future<void> addFcmTokenToArray(String userId, String token) async {
+    try {
+      if (userId.isEmpty || token.isEmpty) return;
+      await firestore.collection(USERS).doc(userId).update({
+        'fcmTokens': FieldValue.arrayUnion([token]),
+        'lastTokenUpdate': FieldValue.serverTimestamp(),
+      });
+      dlog('[FCM_TOKEN] Token added to array for user: $userId');
+    } catch (e) {
+      dlog('[FCM_TOKEN] addFcmTokenToArray failed: $e');
+    }
+  }
+
+  /// Removes token from user's fcmTokens array. Call on logout.
+  static Future<void> removeFcmToken(String userId, String token) async {
+    try {
+      if (userId.isEmpty || token.isEmpty) return;
+      await firestore.collection(USERS).doc(userId).update({
+        'fcmTokens': FieldValue.arrayRemove([token]),
+      });
+      dlog('[FCM_TOKEN] Token removed from array for user: $userId');
+    } catch (e) {
+      dlog('[FCM_TOKEN] removeFcmToken failed: $e');
+    }
   }
 
   static const String _defaultContactEmail = 'alshidarabdelnasir19@gmail.com';

@@ -9,14 +9,15 @@ class WordCorrectionService {
   static final _firestore = FirebaseFirestore.instance;
 
   /// Stores a word correction. Call when user submits a correction.
-  static Future<void> store({
+  /// Returns the document reference for logging.
+  static Future<DocumentReference> store({
     required String userId,
     required String userQuery,
     required String aiResponse,
     required String correction,
     required List<String> detectedWords,
   }) async {
-    await _firestore.collection(wordCorrectionsCollection).add({
+    final ref = await _firestore.collection(wordCorrectionsCollection).add({
       'userId': userId,
       'userQuery': userQuery,
       'aiResponse': aiResponse,
@@ -24,6 +25,20 @@ class WordCorrectionService {
       'detectedWords': detectedWords,
       'timestamp': FieldValue.serverTimestamp(),
     });
+    return ref;
+  }
+
+  /// Returns the count of corrections contributed by the user.
+  static Future<int> getCorrectionCount(String userId) async {
+    try {
+      final snapshot = await _firestore
+          .collection(wordCorrectionsCollection)
+          .where('userId', isEqualTo: userId)
+          .get();
+      return snapshot.docs.length;
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// Returns a hint string from recent corrections relevant to the query.

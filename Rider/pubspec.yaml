@@ -22,6 +22,7 @@ dependencies:
   firebase_storage: ^11.7.7
   firebase_messaging: ^14.9.4
   flutter_local_notifications: ^18.0.1
+  flutter_timezone: ^1.0.8
   geoflutterfire2: ^2.3.15
   geolocator: ^10.1.1
   geocoding: ^3.0.0

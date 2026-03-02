@@ -71,6 +71,8 @@ class _RecommendationPerformanceState extends State<RecommendationPerformance> {
           children: [
             _buildStrategyComparison(),
             const SizedBox(height: 24),
+            _buildRecommendationNotifications(),
+            const SizedBox(height: 24),
             _buildABTestConfig(),
             const SizedBox(height: 24),
             _buildManualBoostSettings(),
@@ -150,6 +152,118 @@ class _RecommendationPerformanceState extends State<RecommendationPerformance> {
                           DataCell(Text('$clicks')),
                           DataCell(Text('$orders')),
                           DataCell(Text('$conv%')),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Stream<QuerySnapshot> _getAshRecommendationStream() {
+    final startTs = Timestamp.fromDate(_startDate);
+    return FirebaseFirestore.instance
+        .collection('ash_notification_history')
+        .where('type', isEqualTo: 'ash_recommendation')
+        .where('sentAt', isGreaterThanOrEqualTo: startTs)
+        .orderBy('sentAt', descending: true)
+        .limit(2000)
+        .snapshots();
+  }
+
+  Widget _buildRecommendationNotifications() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: _getAshRecommendationStream(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+        final docs = snapshot.data!.docs;
+        final byType = <String, List<QueryDocumentSnapshot<Object?>>>{};
+        for (final d in docs) {
+          var type = d.get('recommendationType')?.toString();
+          if (type == null || type.isEmpty) {
+            final data = d.get('data');
+            if (data is Map && data['reason'] != null) {
+              type = data['reason'].toString();
+            }
+          }
+          type ??= 'unknown';
+          byType.putIfAbsent(type, () => []).add(d);
+        }
+        final types = byType.keys.toList()..sort();
+        if (types.isEmpty) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Ash Recommendation Notifications',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No ash_recommendation notifications sent yet.',
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Ash Recommendation Notifications',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: DataTable(
+                    columns: const [
+                      DataColumn(label: Text('Type')),
+                      DataColumn(label: Text('Sent')),
+                      DataColumn(label: Text('Opened')),
+                      DataColumn(label: Text('Open %')),
+                    ],
+                    rows: types.map((type) {
+                      final list = byType[type]!;
+                      final sent = list.length;
+                      final opened = list
+                          .where((d) => d.get('openedAt') != null)
+                          .length;
+                      final openRate = sent > 0
+                          ? (opened / sent * 100).toStringAsFixed(1)
+                          : '0';
+                      return DataRow(
+                        cells: [
+                          DataCell(Text(type)),
+                          DataCell(Text('$sent')),
+                          DataCell(Text('$opened')),
+                          DataCell(Text('$openRate%')),
                         ],
                       );
                     }).toList(),

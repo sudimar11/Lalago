@@ -2937,6 +2937,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
         extras_price: product.extras_price ?? "0.0",
         extras: extrasString,
         variant_info: variantInfo,
+        addedAt: product.addedAt,
       );
     } catch (e) {
       debugPrint("Error validating CartProduct: $e");

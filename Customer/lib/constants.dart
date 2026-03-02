@@ -84,6 +84,7 @@ const ORDER_STATUS_DRIVER_REJECTED = 'Driver Rejected';
 const ORDER_STATUS_SHIPPED = 'Order Shipped';
 const ORDER_STATUS_IN_TRANSIT = 'In Transit';
 const ORDER_STATUS_COMPLETED = 'Order Completed';
+const ORDER_STATUS_PAYMENT_FAILED = 'Payment Failed';
 
 const USER_ROLE_DRIVER = 'driver';
 const USER_ROLE_CUSTOMER = 'customer';
@@ -101,6 +102,7 @@ const FavouriteRestaurant = "favorite_restaurant";
 const SEARCH_ANALYTICS = 'search_analytics';
 const USER_CLICKS = 'user_clicks';
 const CUSTOMER_FEEDBACK = 'customer_feedback';
+const RECOMMENDATION_FEEDBACK = 'recommendation_feedback';
 const VENDOR_VIEWERS = 'vendor_viewers';
 const VENDOR_VISITS = 'vendor_visits';
 

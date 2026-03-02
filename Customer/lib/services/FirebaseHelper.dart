@@ -38,6 +38,7 @@ import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/Ratingmodel.dart';
 import 'package:foodie_customer/model/ReviewAttributeModel.dart';
 import 'package:foodie_customer/model/User.dart';
+import 'package:foodie_customer/utils/session_manager.dart';
 import 'package:foodie_customer/model/VendorCategoryModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/conversation_model.dart';
@@ -373,7 +374,11 @@ class FireStoreUtils {
     }
     user.fcmToken = token;
     try {
-      await updateCurrentUser(user);
+      await firestore.collection(USERS).doc(user.userID).update({
+        'fcmToken': token,
+        'fcmTokens': FieldValue.arrayUnion([token]),
+        'lastTokenUpdate': FieldValue.serverTimestamp(),
+      });
       debugPrint(
           '[FCM_DEBUG] token saved to Firestore: users/${user.userID} '
           'preview=${_tokenPreview(token)}');
@@ -393,6 +398,19 @@ class FireStoreUtils {
   static Future<void> updateActiveOrdersFcmTokenForUser(
       String customerId, String token) =>
       _updateActiveOrdersFcmToken(customerId, token);
+
+  /// Removes token from user's fcmTokens array. Call on logout.
+  static Future<void> removeFcmToken(String userId, String token) async {
+    try {
+      if (userId.isEmpty || token.isEmpty) return;
+      await firestore.collection(USERS).doc(userId).update({
+        'fcmTokens': FieldValue.arrayRemove([token]),
+      });
+      debugPrint('[FCM_DEBUG] Token removed from array for user: $userId');
+    } catch (e) {
+      debugPrint('[FCM_DEBUG] removeFcmToken failed: $e');
+    }
+  }
 
   static Future<void> _updateActiveOrdersFcmToken(String customerId, String token) async {
     try {
@@ -1321,6 +1339,48 @@ class FireStoreUtils {
   Future<List<ProductModel>> fetchAllProducts() async {
     List<ProductModel> products = await getAllProducts();
     return products;
+  }
+
+  /// Paginated products with publish filter for home screen.
+  /// Requires Firestore composite index: publish (ASC) + createdAt (DESC).
+  Future<List<ProductModel>> getProductsPaginatedWithPublish({
+    required int limit,
+    DocumentSnapshot? lastDocument,
+  }) async {
+    try {
+      Query<Map<String, dynamic>> query = firestore
+          .collection(PRODUCTS)
+          .where('publish', isEqualTo: true)
+          .orderBy('createdAt', descending: true);
+
+      if (lastDocument != null) {
+        query = query.startAfterDocument(lastDocument);
+      }
+
+      query = query.limit(limit);
+
+      final snapshot = await query.get();
+      final products = snapshot.docs.map((doc) {
+        final data = doc.data();
+        if (data.isEmpty) return null;
+        try {
+          return ProductModel.fromJson(data);
+        } catch (e) {
+          debugPrint('Error parsing product ${doc.id}: $e');
+          return null;
+        }
+      }).whereType<ProductModel>().toList();
+
+      return products;
+    } catch (e) {
+      debugPrint('Error loading home screen products: $e');
+      return [];
+    }
+  }
+
+  /// Load products for home screen with pagination. Default limit 50.
+  Future<List<ProductModel>> getHomeScreenProducts({int limit = 50}) async {
+    return getProductsPaginatedWithPublish(limit: limit, lastDocument: null);
   }
 
   Future<List<String>> getMostOrderedProductIdsForToday({int limit = 30}) async {
@@ -2471,7 +2531,9 @@ class FireStoreUtils {
     DocumentReference documentReference =
         firestore.collection(ORDERS).doc(UserPreference.getOrderId());
     orderModel.id = documentReference.id;
-    await documentReference.set(orderModel.toJson());
+    final json = orderModel.toJson();
+    json['sessionId'] = SessionManager.sessionId;
+    await documentReference.set(json);
 
     // Reserve manual coupon if one was applied
     final manualCouponId = orderModel.manualCouponId;
@@ -2677,7 +2739,9 @@ class FireStoreUtils {
     } else {
       documentReference = firestore.collection(ORDERS).doc(orderModel.id);
     }
-    await documentReference.set(orderModel.toJson());
+    final json = orderModel.toJson();
+    json['sessionId'] = SessionManager.sessionId;
+    await documentReference.set(json);
     return orderModel;
   }
 

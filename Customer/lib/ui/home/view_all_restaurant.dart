@@ -62,6 +62,7 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
 
   @override
   void dispose() {
+    // Cancel geo stream subscription to prevent memory leaks
     _geoSubscription?.cancel();
     super.dispose();
   }
@@ -153,6 +154,8 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
                           imageUrl: getImageVAlidUrl(vendorModel.photo),
                           height: 100,
                           width: 100,
+                          memCacheWidth: 200,
+                          memCacheHeight: 200,
                           imageBuilder: (context, imageProvider) => Container(
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(10),

@@ -40,10 +40,16 @@ import 'package:brgy/pages/search_history_page.dart';
 import 'package:brgy/pages/search_analytics_dashboard.dart';
 import 'package:brgy/pages/click_analytics_dashboard.dart';
 import 'package:brgy/pages/recommendation_performance.dart';
+import 'package:brgy/pages/intelligent_timing_dashboard.dart';
+import 'package:brgy/pages/unified_analytics_dashboard.dart';
 import 'package:brgy/analytics_today.dart';
 import 'package:brgy/analytics_weekly.dart';
 import 'package:brgy/pages/dispatch_analytics_page.dart';
 import 'package:brgy/pages/rider_overview_page.dart';
+import 'package:brgy/pages/ash_notification_tester.dart';
+import 'package:brgy/pages/user_role_management.dart';
+import 'package:brgy/utils/admin_permission_helpers.dart';
+import 'package:brgy/main.dart';
 
 /// Categorized hub for all operations, replacing the expanded dashboard nav.
 class FullOperationsPage extends StatelessWidget {
@@ -129,6 +135,39 @@ class FullOperationsPage extends StatelessWidget {
               _NavItem('Collect from driver', Icons.money_off, () => _push(context, const DriverCollectionPage())),
             ],
           ),
+          if (isAdmin(MyAppState.currentUser))
+            _buildSection(
+              context,
+              'User Management',
+              [
+                _NavItem(
+                  'User role management',
+                  Icons.manage_accounts,
+                  () {
+                    if (!isAdmin(MyAppState.currentUser)) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Admin access required')),
+                      );
+                      return;
+                    }
+                    _push(context, const UserRoleManagementPage());
+                  },
+                ),
+                _NavItem(
+                  'Audit logs',
+                  Icons.history,
+                  () {
+                    if (!isAdmin(MyAppState.currentUser)) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Admin access required')),
+                      );
+                      return;
+                    }
+                    _push(context, const AuditLogViewerPage());
+                  },
+                ),
+              ],
+            ),
           _buildSection(
             context,
             'Marketing',
@@ -140,12 +179,25 @@ class FullOperationsPage extends StatelessWidget {
           ),
           _buildSection(
             context,
+            'Testing',
+            [
+              _NavItem(
+                'Ash Notification Tester',
+                Icons.notifications_active,
+                () => _push(context, const AshNotificationTesterPage()),
+              ),
+            ],
+          ),
+          _buildSection(
+            context,
             'Search & analytics',
             [
+              _NavItem('Unified analytics', Icons.dashboard, () => _push(context, const UnifiedAnalyticsDashboard())),
               _NavItem('Search history', Icons.search, () => _push(context, const SearchHistoryPage())),
               _NavItem('Search analytics', Icons.analytics, () => _push(context, const SearchAnalyticsDashboard())),
               _NavItem('Click analytics', Icons.touch_app, () => _push(context, const ClickAnalyticsDashboard())),
               _NavItem('Recommendation performance', Icons.insights, () => _push(context, const RecommendationPerformance())),
+              _NavItem('Intelligent timing', Icons.schedule, () => _push(context, const IntelligentTimingDashboard())),
               _NavItem('Analytics today', Icons.analytics, () => _push(context, const AnalyticsTodayPage())),
               _NavItem('Analytics (week)', Icons.analytics_outlined, () => _push(context, const AnalyticsWeeklyPage())),
               _NavItem('Dispatch analytics', Icons.local_shipping, () => _push(context, const DispatchAnalyticsPage())),

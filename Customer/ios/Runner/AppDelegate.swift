@@ -1,8 +1,13 @@
 import Flutter
+import Network
 import UIKit
 import Security
 import GoogleMaps
 import FirebaseCore
+import UserNotifications
+
+private let kConnectivityLastCheck = "connectivity_last_check"
+private let kConnectivityWasOnline = "connectivity_was_online"
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -93,6 +98,39 @@ import FirebaseCore
       UserDefaults.standard.set(jsonString, forKey: "debug.mapsKeyStatus")
     }
     GeneratedPluginRegistrant.register(with: self)
+    if #available(iOS 10.0, *) {
+      UNUserNotificationCenter.current().delegate = self
+      let acceptAction = UNNotificationAction(
+        identifier: "accept_order",
+        title: "Accept",
+        options: [.foreground]
+      )
+      let declineAction = UNNotificationAction(
+        identifier: "decline_order",
+        title: "Decline",
+        options: [.destructive]
+      )
+      let orderCategory = UNNotificationCategory(
+        identifier: "order_notification",
+        actions: [acceptAction, declineAction],
+        intentIdentifiers: [],
+        options: []
+      )
+      let remindAction = UNNotificationAction(
+        identifier: "remind_later",
+        title: "Remind Later",
+        options: []
+      )
+      let reminderCategory = UNNotificationCategory(
+        identifier: "reminder_notification",
+        actions: [remindAction],
+        intentIdentifiers: [],
+        options: []
+      )
+      UNUserNotificationCenter.current().setNotificationCategories(
+        [orderCategory, reminderCategory]
+      )
+    }
     if let controller = window?.rootViewController as? FlutterViewController {
       let channel = FlutterMethodChannel(
         name: "cursor.debug/keychain",
@@ -131,8 +169,46 @@ import FirebaseCore
           result(FlutterMethodNotImplemented)
         }
       }
+      let connChannel = FlutterMethodChannel(
+        name: "connection_tester/status",
+        binaryMessenger: controller.binaryMessenger
+      )
+      connChannel.setMethodCallHandler { _, result in
+        let ts = UserDefaults.standard.double(forKey: kConnectivityLastCheck)
+        let online = UserDefaults.standard.bool(forKey: kConnectivityWasOnline)
+        result([
+          "timestampMs": Int(ts * 1000),
+          "wasOnline": online,
+        ])
+      }
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  override func application(
+    _ application: UIApplication,
+    performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+  ) {
+    let monitor = NWPathMonitor()
+    let queue = DispatchQueue(label: "connection_tester")
+    var didComplete = false
+    let complete: (UIBackgroundFetchResult) -> Void = { result in
+      queue.async {
+        guard !didComplete else { return }
+        didComplete = true
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: kConnectivityLastCheck)
+        UserDefaults.standard.set(result == .newData, forKey: kConnectivityWasOnline)
+        monitor.cancel()
+        DispatchQueue.main.async { completionHandler(result) }
+      }
+    }
+    monitor.pathUpdateHandler = { path in
+      complete(path.status == .satisfied ? .newData : .noData)
+    }
+    monitor.start(queue: queue)
+    queue.asyncAfter(deadline: .now() + 8) {
+      complete(.noData)
+    }
   }
 
   private func keychainStatus() -> [String: Any] {

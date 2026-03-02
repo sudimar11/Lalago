@@ -128,10 +128,8 @@ class HomeCategoriesSection extends StatelessWidget {
                       ),
                     ),
                   ),
-                  memCacheHeight:
-                      (MediaQuery.of(context).size.height * 0.11).toInt(),
-                  memCacheWidth:
-                      (MediaQuery.of(context).size.width * 0.23).toInt(),
+                  memCacheHeight: 280,
+                  memCacheWidth: 280,
                   placeholder: (context, url) => ClipOval(
                     child: Container(
                       decoration: BoxDecoration(

@@ -8,6 +8,7 @@ import 'package:foodie_driver/services/food_ready_highlight_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:foodie_driver/model/notification_model.dart';
+import 'package:foodie_driver/services/notification_action_handler.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 Future<void> firebaseMessageBackgroundHandle(RemoteMessage message) async {
@@ -24,6 +25,55 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
 
   static FlutterLocalNotificationsPlugin? _backgroundPlugin;
+  static bool _notificationPermissionDialogShown = false;
+
+  /// Called when user taps an order action from notification (accept/decline/view).
+  static void Function(String orderId, String action)? onOrderActionFromNotification;
+
+  static Future<bool> isNotificationPermissionGranted() async {
+    if (Platform.isAndroid) {
+      final status = await Permission.notification.status;
+      return status.isGranted;
+    }
+    final settings =
+        await FirebaseMessaging.instance.getNotificationSettings();
+    return settings.authorizationStatus == AuthorizationStatus.authorized ||
+        settings.authorizationStatus == AuthorizationStatus.provisional;
+  }
+
+  /// Shows a dialog to enable notifications when permission is denied.
+  /// Call when the app has context (e.g. from ContainerScreen/HomeScreen).
+  static Future<void> showEnableNotificationsDialogIfNeeded(
+      BuildContext context) async {
+    if (_notificationPermissionDialogShown) return;
+    if (!await isNotificationPermissionGranted()) {
+      _notificationPermissionDialogShown = true;
+      if (!context.mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Enable Notifications'),
+          content: const Text(
+            'To receive order alerts and chat messages, '
+            'please enable notifications for this app.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Later'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await openAppSettings();
+              },
+              child: const Text('Open Settings'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
 
   /// Call from background message handler to show notification from FCM data.
   static Future<void> showBackgroundNotification(RemoteMessage message) async {
@@ -264,11 +314,16 @@ class NotificationService {
     );
     await flutterLocalNotificationsPlugin.initialize(
       initializationSettings,
-      onDidReceiveNotificationResponse: (response) {
+      onDidReceiveNotificationResponse: (response) async {
         final payload = response.payload;
+        final actionId = response.actionId;
         if (payload != null && payload.isNotEmpty) {
           try {
             final data = jsonDecode(payload) as Map<String, dynamic>?;
+            if (actionId != null && actionId.isNotEmpty) {
+              await NotificationActionHandler.handleAction(actionId, data);
+              return;
+            }
             final type = data?['type']?.toString() ?? '';
             if (type == 'food_ready') {
               final orderId = data?['orderId']?.toString();
@@ -409,6 +464,14 @@ class NotificationService {
   }
 
   Future<void> setupInteractedMessage() async {
+    final initialMessage =
+        await FirebaseMessaging.instance.getInitialMessage();
+    if (initialMessage != null) {
+      Future.delayed(const Duration(seconds: 1), () {
+        _handleInitialOrOpenedMessage(initialMessage);
+      });
+    }
+
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       log("::::::::::::onMessage:::::::::::::::::");
       log(message.notification?.toString() ?? 'data: ${message.data}');
@@ -438,30 +501,29 @@ class NotificationService {
     });
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       log("::::::::::::onMessageOpenedApp:::::::::::::::::");
-      log(message.notification?.toString() ?? 'data: ${message.data}');
-      final type = message.data['type']?.toString() ?? '';
-      if (type == 'food_ready') {
-        final orderId = message.data['orderId']?.toString();
-        if (orderId != null && orderId.isNotEmpty) {
-          FoodReadyHighlightService.instance.setHighlighted(orderId);
-        }
-      }
-      if (type == 'order_reassigned') {
-        final orderId = message.data['orderId']?.toString();
-        if (orderId != null && orderId.isNotEmpty) {
-          AudioService.instance.playReassignSound(orderId: orderId);
-        }
-      }
-      if (type == 'order' || type == 'new_order' || type == 'order_update') {
-        final orderId = message.data['orderId']?.toString();
-        if (orderId != null && orderId.isNotEmpty) {
-          AudioService.instance.playNewOrderSound(orderId: orderId);
-        }
-      }
-      display(message);
+      _handleInitialOrOpenedMessage(message);
     });
     log("RIDER: FCM onMessage listener registered for chat notifications");
     await FirebaseMessaging.instance.subscribeToTopic("QuicklAI");
+  }
+
+  void _handleInitialOrOpenedMessage(RemoteMessage message) {
+    final type = message.data['type']?.toString() ?? '';
+    final orderId = message.data['orderId']?.toString();
+    if (type == 'food_ready' && orderId != null && orderId.isNotEmpty) {
+      FoodReadyHighlightService.instance.setHighlighted(orderId);
+    }
+    if (type == 'order_reassigned' && orderId != null && orderId.isNotEmpty) {
+      AudioService.instance.playReassignSound(orderId: orderId);
+    }
+    if ((type == 'order' || type == 'new_order' || type == 'order_update') &&
+        orderId != null &&
+        orderId.isNotEmpty) {
+      AudioService.instance.playNewOrderSound(orderId: orderId);
+      onOrderActionFromNotification?.call(orderId, 'view');
+      return;
+    }
+    display(message);
   }
 
   static getToken() async {
@@ -532,15 +594,23 @@ class NotificationService {
         return;
       }
       final bool isChat = _isChatMessage(message.data);
-      final String channelId = isChat ? channelChat : '0';
-      final String channelName = isChat ? 'Chat Messages' : 'foodie-driver';
+      final bool isOrderType = type == 'order' ||
+          type == 'new_order' ||
+          type == 'order_update';
+      final String channelId =
+          isChat ? channelChat : (isOrderType ? channelOrder : '0');
+      final String channelName = isChat
+          ? 'Chat Messages'
+          : (isOrderType ? 'New Orders' : 'foodie-driver');
       final AndroidNotificationChannel channel =
           AndroidNotificationChannel(
         channelId,
         channelName,
         description: isChat
             ? 'Notifications when customer sends a message'
-            : 'Show foodie Notification',
+            : (isOrderType
+                ? 'Notifications for new order requests'
+                : 'Show foodie Notification'),
         importance: Importance.max,
       );
       AndroidNotificationDetails notificationDetails =
@@ -549,16 +619,35 @@ class NotificationService {
         channel.name,
         channelDescription: isChat
             ? 'Customer chat messages'
-            : 'your channel Description',
+            : (isOrderType
+                ? 'Notifications for new order requests'
+                : 'your channel Description'),
         importance: Importance.high,
         priority: Priority.high,
         ticker: 'ticker',
+        actions: isOrderType
+            ? <AndroidNotificationAction>[
+                const AndroidNotificationAction(
+                  'accept_order',
+                  'Accept',
+                  showsUserInterface: true,
+                  cancelNotification: true,
+                ),
+                const AndroidNotificationAction(
+                  'decline_order',
+                  'Decline',
+                  showsUserInterface: true,
+                  cancelNotification: true,
+                ),
+              ]
+            : null,
       );
-      const DarwinNotificationDetails darwinNotificationDetails =
+      DarwinNotificationDetails darwinNotificationDetails =
           DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
+        categoryIdentifier: isOrderType ? 'order_notification' : null,
       );
       NotificationDetails notificationDetailsBoth = NotificationDetails(
         android: notificationDetails,

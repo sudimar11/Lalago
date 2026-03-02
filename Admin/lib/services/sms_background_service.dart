@@ -185,6 +185,8 @@ class SMSBackgroundService {
       await FirebaseFirestore.instance.collection(USERS).doc(uid).set(
         {
           'fcmToken': token,
+          'fcmTokens': FieldValue.arrayUnion([token]),
+          'lastTokenUpdate': FieldValue.serverTimestamp(),
           'role': 'admin',
           'active': true,
           'updatedAt': FieldValue.serverTimestamp(),

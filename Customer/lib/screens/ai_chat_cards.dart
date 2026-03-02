@@ -7,6 +7,7 @@ import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/ai_cart_service.dart';
+import 'package:foodie_customer/services/restaurant_status_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/dineInScreen/my_booking_screen.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/OrderDetailsScreen.dart';
@@ -264,6 +265,7 @@ class ProductListCard extends StatelessWidget {
         ...products.map((p) => _ProductTile(
               product: p,
               cartService: cartService,
+              vendorId: (p['vendorID'] ?? '').toString(),
             )),
       ],
     );
@@ -285,10 +287,12 @@ class _ProductTile extends StatefulWidget {
   const _ProductTile({
     required this.product,
     required this.cartService,
+    required this.vendorId,
   });
 
   final Map<String, dynamic> product;
   final AiCartService cartService;
+  final String vendorId;
 
   @override
   State<_ProductTile> createState() => _ProductTileState();
@@ -298,6 +302,25 @@ class _ProductTileState extends State<_ProductTile> {
   bool _isAddingToCart = false;
   bool _addedToCart = false;
   bool _isNavigating = false;
+  bool? _isRestaurantOpen;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.vendorId.isNotEmpty) {
+      RestaurantStatusService.checkRestaurantStatus(widget.vendorId)
+          .then((status) {
+        if (mounted) {
+          setState(() {
+            _isRestaurantOpen =
+                status['exists'] == true && (status['isOpen'] as bool? ?? false);
+          });
+        }
+      });
+    } else {
+      _isRestaurantOpen = false; // Treat empty/unknown vendor as closed
+    }
+  }
 
   Future<void> _navigateToProduct(BuildContext context) async {
     if (_isNavigating) return;
@@ -428,6 +451,14 @@ class _ProductTileState extends State<_ProductTile> {
                   ),
                 ],
               )
+            : _isRestaurantOpen == false
+                ? Text(
+                    'Closed',
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 13,
+                    ),
+                  )
             : _isAddingToCart
                 ? const SizedBox(
                     width: 40,
@@ -441,7 +472,9 @@ class _ProductTileState extends State<_ProductTile> {
                     ),
                   )
                 : TextButton(
-                    onPressed: () => _addToCart(context, id),
+                    onPressed: _isRestaurantOpen != true
+                        ? null
+                        : () => _addToCart(context, id),
                     child: const Text('Add to Cart'),
                   ),
           ),
@@ -784,6 +817,25 @@ class _PopularItemCardState extends State<_PopularItemCard> {
   bool _isAddingToCart = false;
   bool _addedToCart = false;
   bool _isNavigating = false;
+  bool? _isRestaurantOpen;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.vendorId.isNotEmpty) {
+      RestaurantStatusService.checkRestaurantStatus(widget.vendorId)
+          .then((status) {
+        if (mounted) {
+          setState(() {
+            _isRestaurantOpen =
+                status['exists'] == true && (status['isOpen'] as bool? ?? false);
+          });
+        }
+      });
+    } else {
+      _isRestaurantOpen = false; // Treat empty/unknown vendor as closed
+    }
+  }
 
   Future<void> _addToCart(BuildContext context) async {
     if (_isAddingToCart || _addedToCart) return;
@@ -929,6 +981,14 @@ class _PopularItemCardState extends State<_PopularItemCard> {
                                       ),
                                     ],
                                   )
+                                : _isRestaurantOpen == false
+                                    ? Text(
+                                        'Closed',
+                                        style: TextStyle(
+                                          color: Colors.grey[600],
+                                          fontSize: 12,
+                                        ),
+                                      )
                                 : _isAddingToCart
                                     ? const SizedBox(
                                         width: 28,
@@ -947,9 +1007,15 @@ class _PopularItemCardState extends State<_PopularItemCard> {
                                         icon: Icon(
                                           Icons.add_shopping_cart,
                                           size: 20,
-                                          color: Color(COLOR_PRIMARY),
+                                          color:
+                                              _isRestaurantOpen == true
+                                                  ? Color(COLOR_PRIMARY)
+                                                  : Colors.grey[400],
                                         ),
-                                        onPressed: () => _addToCart(context),
+                                        onPressed:
+                                            _isRestaurantOpen == true
+                                                ? () => _addToCart(context)
+                                                : null,
                                         tooltip: 'Add to cart',
                                         splashRadius: 20,
                                       ),

@@ -14,3 +14,4 @@ const String ORDER_STATUS_DRIVER_REJECTED = 'Driver Rejected';
 const String ORDER_STATUS_SHIPPED = 'Order Shipped';
 const String ORDER_STATUS_IN_TRANSIT = 'In Transit';
 const String ORDER_STATUS_COMPLETED = 'Order Completed';
+const String ORDER_STATUS_PAYMENT_FAILED = 'Payment Failed';

@@ -9,6 +9,7 @@ import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/cart_sync_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:intl/intl.dart';
 import 'package:foodie_customer/ui/accountDetails/AccountDetailsScreen.dart';
@@ -567,6 +568,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     //user.active = false;
                     user.lastOnlineTimestamp = Timestamp.now();
                     await FireStoreUtils.updateCurrentUser(user);
+                    if (user.fcmToken.isNotEmpty) {
+                      unawaited(FireStoreUtils.removeFcmToken(
+                          user.userID, user.fcmToken));
+                    }
+                    await CartSyncService.onLogout();
                     await auth.FirebaseAuth.instance.signOut();
                     MyAppState.currentUser = null;
                     pushAndRemoveUntil(context, LoginScreen(), false);

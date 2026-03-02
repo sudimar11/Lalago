@@ -28,9 +28,13 @@ class _SignUpPageState extends State<SignUpPage> {
       if (user != null) {
         // Save user details to Firestore
         await _firestore.collection('users').doc(user.uid).set({
+          'id': user.uid,
           'uid': user.uid,
           'email': user.email,
           'userLevel': _selectedUserLevel,
+          'role': _selectedUserLevel,
+          'active': true,
+          'createdAt': FieldValue.serverTimestamp(),
         });
         // Navigate to dashboard or login page after successful sign-up
         Navigator.pop(context);

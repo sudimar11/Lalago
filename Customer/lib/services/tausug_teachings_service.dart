@@ -86,19 +86,54 @@ class TausugTeachingsService {
   }
 
   /// Stores a teaching. verified=false by default for admin review.
-  static Future<void> store({
+  /// Returns the document reference for logging.
+  static Future<DocumentReference> store({
     required String userId,
     required String tausugWord,
     required String englishMeaning,
     bool verified = false,
   }) async {
-    await _firestore.collection(tausugTeachingsCollection).add({
+    final ref = await _firestore.collection(tausugTeachingsCollection).add({
       'userId': userId,
       'tausugWord': tausugWord.trim(),
       'englishMeaning': englishMeaning.trim(),
       'verified': verified,
       'timestamp': FieldValue.serverTimestamp(),
     });
+    return ref;
+  }
+
+  /// Returns the count of teachings contributed by the user.
+  static Future<int> getTeachingCount(String userId) async {
+    try {
+      final snapshot = await _firestore
+          .collection(tausugTeachingsCollection)
+          .where('userId', isEqualTo: userId)
+          .get();
+      return snapshot.docs.length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Returns recent teachings by the user for contribution history.
+  static Future<List<Map<String, dynamic>>> getRecentTeachings(
+    String userId, {
+    int limit = 20,
+  }) async {
+    try {
+      final snapshot = await _firestore
+          .collection(tausugTeachingsCollection)
+          .where('userId', isEqualTo: userId)
+          .orderBy('timestamp', descending: true)
+          .limit(limit)
+          .get();
+      return snapshot.docs
+          .map((d) => {...d.data(), 'id': d.id})
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   /// Returns a hint string for the AI, merging Firestore teachings with

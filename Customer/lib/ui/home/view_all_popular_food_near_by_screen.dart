@@ -82,6 +82,7 @@ class _ViewAllPopularFoodNearByScreenState
 
   @override
   void dispose() {
+    // Cancel stream subscription to prevent memory leaks
     _storeSubscription?.cancel();
     super.dispose();
   }
@@ -167,6 +168,8 @@ class _ViewAllPopularFoodNearByScreenState
                 imageUrl: getImageVAlidUrl(lstNearByFood[index].photo),
                 height: 100,
                 width: 100,
+                memCacheWidth: 200,
+                memCacheHeight: 200,
                 imageBuilder: (context, imageProvider) => Container(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(20),

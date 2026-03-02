@@ -52,6 +52,8 @@ class PopularsCard extends StatelessWidget {
                         imageUrl: getImageVAlidUrl(vendorModel.photo),
                         width: double.infinity,
                         height: double.infinity,
+                        memCacheWidth: 280,
+                        memCacheHeight: 280,
                         fit: BoxFit.cover,
                         placeholder: (context, url) => Container(
                           decoration: BoxDecoration(

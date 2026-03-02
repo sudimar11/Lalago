@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:easy_localization/easy_localization.dart';
@@ -121,6 +123,7 @@ class _ContainerScreen extends State<ContainerScreen> {
     super.initState();
     NotificationService.onPrepTimeReminder = _showPrepTimeReminderDialog;
     NotificationService.onNewOrder = _openOrderAcceptanceScreen;
+    NotificationService.onDeclineOrder = _openOrderAcceptanceScreen;
     setCurrency();
 
     // Initialize user from widget.user if available, otherwise from MyAppState
@@ -172,12 +175,21 @@ class _ContainerScreen extends State<ContainerScreen> {
       provisional: false,
       sound: true,
     );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 800), () {
+        if (mounted) {
+          NotificationService.showEnableNotificationsDialogIfNeeded(context);
+        }
+      });
+    });
   }
 
   @override
   void dispose() {
     NotificationService.onPrepTimeReminder = null;
     NotificationService.onNewOrder = null;
+    NotificationService.onDeclineOrder = null;
     super.dispose();
   }
 
@@ -782,6 +794,14 @@ class _ContainerScreen extends State<ContainerScreen> {
                   Navigator.pop(context);
                   //user.active = false;
                   user!.lastOnlineTimestamp = Timestamp.now();
+                  if (user!.fcmToken.isNotEmpty) {
+                    unawaited(FireStoreUtils.removeFcmToken(
+                      user!.userID,
+                      user!.fcmToken,
+                      vendorId:
+                          user!.vendorID.isEmpty ? null : user!.vendorID,
+                    ));
+                  }
                   await FireStoreUtils.firestore
                       .collection(USERS)
                       .doc(user!.userID)

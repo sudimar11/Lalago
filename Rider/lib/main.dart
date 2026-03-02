@@ -14,6 +14,7 @@ import 'package:foodie_driver/services/notification_service.dart'
     show NotificationService, firebaseMessageBackgroundHandle;
 import 'package:foodie_driver/services/enhanced_notification_manager.dart';
 import 'package:foodie_driver/services/session_service.dart';
+import 'package:foodie_driver/services/timezone_service.dart';
 import 'package:foodie_driver/services/time_tracking_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
@@ -725,6 +726,8 @@ class OnBoardingState extends State<OnBoarding> {
                 print(
                     '⚠️ FCM token refresh skipped or failed (iOS may retry with delay)');
               }
+
+              unawaited(TimezoneService.updateUserTimezone());
             }
 
             // Start notification listeners after user is set

@@ -2306,7 +2306,8 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             category_id: element.category_id,
             extras_price: extrasPrice.toString(),
             extras: joinTitleString,
-            discountPrice: element.discountPrice ?? ""));
+            discountPrice: element.discountPrice ?? "",
+            addedAt: element.addedAt));
       } else {
         await cartDatabase.updateProduct(CartProduct(
             id: productModel.id +
@@ -2323,7 +2324,8 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             extras_price: extrasPrice.toString(),
             extras: joinTitleString,
             category_id: productModel.categoryID,
-            variant_info: productModel.variantInfo));
+            variant_info: productModel.variantInfo,
+            addedAt: DateTime.now()));
       }
 
       //  });
@@ -2458,7 +2460,8 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             category_id: element.category_id,
             extras_price: extrasPrice.toString(),
             extras: joinTitleString,
-            discountPrice: element.discountPrice ?? ""));
+            discountPrice: element.discountPrice ?? "",
+            addedAt: element.addedAt));
       } else {
         await cartDatabase.updateProduct(CartProduct(
             id: productModel.id +
@@ -2483,7 +2486,8 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             extras_price: extrasPrice.toString(),
             extras: joinTitleString,
             category_id: productModel.categoryID,
-            variant_info: productModel.variantInfo));
+            variant_info: productModel.variantInfo,
+            addedAt: DateTime.now()));
       }
     } else {
       cartDatabase.removeProduct(productModel.id +

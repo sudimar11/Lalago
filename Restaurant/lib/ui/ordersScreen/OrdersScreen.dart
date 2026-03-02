@@ -1091,8 +1091,81 @@ class _OrdersScreenState extends State<OrdersScreen> {
     }
   }
 
+  static const _rejectionOptions = [
+    {'label': 'Out of stock', 'value': 'out_of_stock'},
+    {'label': 'Item not available', 'value': 'item_not_available'},
+    {'label': 'Restaurant closed', 'value': 'restaurant_closed'},
+    {'label': 'Too busy', 'value': 'too_busy'},
+    {'label': 'Distance too far', 'value': 'distance_too_far'},
+    {'label': 'Technical issues', 'value': 'technical_issues'},
+    {'label': 'Other', 'value': 'other'},
+  ];
+
+  Future<String?> _showRejectionReasonDialog() async {
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reject Order'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _rejectionOptions
+                .map(
+                  (opt) => ListTile(
+                    title: Text(opt['label']!),
+                    onTap: () => Navigator.pop(ctx, opt['value']),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<String?> _showCustomReasonDialog() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Other Reason'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'Enter reason',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 2,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final text = controller.text.trim();
+              Navigator.pop(ctx, text.isNotEmpty ? text : 'other');
+            },
+            child: const Text('Submit'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> rejectOrder(OrderModel orderModel) async {
     try {
+      final reason = await _showRejectionReasonDialog();
+      if (reason == null) return;
+
+      String selectedReason = reason;
+      if (reason == 'other') {
+        final custom = await _showCustomReasonDialog();
+        if (custom == null) return;
+        selectedReason = custom;
+      }
+
       final confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -1121,7 +1194,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
           .update({
         'status': ORDER_STATUS_REJECTED,
         'rejectedAt': FieldValue.serverTimestamp(),
-        'rejectionReason': 'restaurant_rejected',
+        'rejectionReason': selectedReason,
       });
 
       final vendorId = MyAppState.currentUser?.vendorID;

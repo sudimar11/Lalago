@@ -100,7 +100,9 @@ class _CategoryRestaurantRow extends StatefulWidget {
 class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
   final ScrollController _scrollController = ScrollController();
   List<VendorModel> _vendors = [];
-  int _displayedCount = 5;
+  static const int _initialDisplayCount = 10;
+  static const int _loadMoreCount = 10;
+  int _displayedCount = _initialDisplayCount;
   StreamSubscription<List<VendorModel>>? _streamSubscription;
   bool _hasError = false;
 
@@ -134,7 +136,8 @@ class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
     final pos = _scrollController.position;
     if (pos.pixels >= pos.maxScrollExtent - 200) {
       setState(() {
-        _displayedCount = (_displayedCount + 5).clamp(0, _vendors.length);
+        _displayedCount =
+            (_displayedCount + _loadMoreCount).clamp(0, _vendors.length);
       });
     }
   }

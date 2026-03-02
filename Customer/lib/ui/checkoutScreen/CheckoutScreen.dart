@@ -9,6 +9,7 @@ import 'package:foodie_customer/model/OrderModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/dispatch_precheck_service.dart';
 import 'package:foodie_customer/services/helper.dart';
+import 'package:foodie_customer/services/analytics_service.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/placeOrderScreen/PlaceOrderScreen.dart';
@@ -17,6 +18,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../model/TaxModel.dart';
 import 'package:foodie_customer/services/happy_hour_helper.dart';
 import 'package:foodie_customer/services/happy_hour_service.dart';
+import 'package:foodie_customer/services/network_safe_api.dart';
+import 'package:foodie_customer/services/restaurant_status_service.dart';
 
 class CheckoutScreen extends StatefulWidget {
   final String paymentOption, paymentType;
@@ -127,6 +130,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   void initState() {
     super.initState();
+
+    final userId = MyAppState.currentUser?.userID;
+    if (userId != null && userId.isNotEmpty) {
+      AnalyticsService.trackFunnelStep(userId, 'checkout_start');
+    }
 
     if (MyAppState.currentUser == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -579,6 +587,59 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
       print('[CHECKOUT] Proceeding with order...');
 
+      // Validate restaurant open status for all unique vendors in cart
+      final uniqueVendorIds = widget.products
+          .map((p) => p.vendorID)
+          .where((id) => id.isNotEmpty)
+          .toSet()
+          .toList();
+
+      if (uniqueVendorIds.isNotEmpty) {
+        final statusFutures = uniqueVendorIds.map((vid) =>
+            RestaurantStatusService.checkRestaurantStatusWithClosingSoon(
+          vid,
+          closingSoonWithin: const Duration(minutes: 30),
+        ));
+        final statusResults = await Future.wait(statusFutures);
+
+        final closedVendors = <Map<String, dynamic>>[];
+        final closingSoonVendors = <Map<String, dynamic>>[];
+
+        for (var i = 0; i < uniqueVendorIds.length; i++) {
+          final s = statusResults[i];
+          final vid = uniqueVendorIds[i];
+          if (s['exists'] != true) continue;
+          final isOpen = s['isOpen'] as bool? ?? false;
+          final vendorName = (s['vendorName'] ?? 'Restaurant').toString();
+          if (!isOpen) {
+            closedVendors.add({'vendorId': vid, 'vendorName': vendorName});
+          } else {
+            final closingSoon = s['closingSoon'] as bool? ?? false;
+            final mins = s['minutesUntilClosing'] as int?;
+            if (closingSoon && mins != null) {
+              closingSoonVendors.add({
+                'vendorName': vendorName,
+                'minutesUntilClosing': mins,
+              });
+            }
+          }
+        }
+
+        log('[CHECKOUT] Status check: vendorIds=$uniqueVendorIds, '
+            'closed=$closedVendors, closingSoon=$closingSoonVendors');
+
+        if (closedVendors.isNotEmpty) {
+          await _showRestaurantClosedDialog(closedVendors);
+          return;
+        }
+
+        if (closingSoonVendors.isNotEmpty) {
+          final proceed =
+              await _showRestaurantClosingSoonDialog(closingSoonVendors);
+          if (proceed != true) return;
+        }
+      }
+
       log("Step 2: Fetching vendor details");
       final vendorModel = await fireStoreUtils
           .getVendorByVendorID(widget.products.first.vendorID)
@@ -710,8 +771,31 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       );
 
       log("Placing order with Firestore...");
-      OrderModel placedOrder = await fireStoreUtils.placeOrder(orderModel);
+      final placedOrder = await NetworkSafeAPI.runWithNetworkCheck(
+        () => fireStoreUtils.placeOrder(orderModel),
+        onOffline: () {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'No network. Please check your connection and try again.',
+                ),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        },
+      );
       log("Order placed successfully: ${placedOrder.id}");
+
+      final userId = MyAppState.currentUser?.userID;
+      if (userId != null && userId.isNotEmpty) {
+        AnalyticsService.trackFunnelStep(
+          userId,
+          'order_place',
+          metadata: {'orderId': placedOrder.id},
+        );
+      }
 
       // Mark first order as completed if this is the user's first order
       if (MyAppState.currentUser != null &&
@@ -790,18 +874,132 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         backgroundColor: Colors.transparent,
         builder: (context) => PlaceOrderScreen(orderModel: placedOrder),
       );
+    } on NetworkUnavailableException catch (e) {
+      log("Place order failed: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message ?? 'No network. Please try again.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } catch (e) {
       log("Error in placeOrder: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Failed to place order: $e"),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Failed to place order: $e"),
+          ),
+        );
+      }
     } finally {
       setState(() {
         isLoading = false; // Hide loading indicator
       });
     }
+  }
+
+  Future<void> _showRestaurantClosedDialog(
+    List<Map<String, dynamic>> closedVendors,
+  ) async {
+    if (!mounted) return;
+    final names = closedVendors
+        .map((v) => v['vendorName'] as String? ?? 'Unknown')
+        .join(', ');
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.store_mall_directory_outlined, size: 28),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Restaurant Closed',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        content: SelectableText.rich(
+          TextSpan(
+            text: 'The following restaurant(s) are currently closed: '
+                '$names. Please try again during operating hours.',
+            style: TextStyle(
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.white70
+                  : Colors.black87,
+              fontSize: 15,
+              height: 1.4,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool?> _showRestaurantClosingSoonDialog(
+    List<Map<String, dynamic>> closingSoonVendors,
+  ) async {
+    if (!mounted) return null;
+    final lines = closingSoonVendors.map((v) {
+      final name = v['vendorName'] as String? ?? 'Restaurant';
+      final mins = v['minutesUntilClosing'] as int? ?? 0;
+      return '$name (closing in $mins minutes)';
+    }).join('\n');
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.access_time, size: 28),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Closing Soon',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        content: SelectableText.rich(
+          TextSpan(
+            text: 'The following restaurant(s) will close soon:\n\n$lines\n\n'
+                'Your order may not be fulfilled. Proceed anyway?',
+            style: TextStyle(
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.white70
+                  : Colors.black87,
+              fontSize: 15,
+              height: 1.4,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Proceed anyway'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showCheckoutBlockedDialog({required String message}) async {

@@ -68,6 +68,7 @@ class _ViewAllCategoryProductScreenState extends State<ViewAllCategoryProductScr
 
   @override
   void dispose() {
+    // Cancel stream subscription to prevent memory leaks
     _categorySubscription?.cancel();
     super.dispose();
   }

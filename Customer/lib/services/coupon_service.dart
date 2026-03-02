@@ -1,6 +1,7 @@
 import 'dart:developer';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:foodie_customer/utils/future_utils.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/offer_model.dart';
@@ -243,7 +244,10 @@ class CouponService {
         // For now, we'll get all enabled coupons and filter by restaurantId in code
       }
 
-      final querySnapshot = await query.get();
+      final querySnapshot = await withTimeout(
+        query.get(),
+        timeout: const Duration(seconds: 8),
+      );
       final now = DateTime.now();
       final List<OfferModel> activeCoupons = [];
 

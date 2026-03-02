@@ -2,7 +2,7 @@ name: foodie_customer
 description: A new Flutter application.
 
 publish_to: "none" # Remove this line if you wish to publish to pub.dev
-version: 3.2.13+43
+version: 3.2.15+45
 
 environment:
   sdk: ">=3.0.5 <4.0.0"
@@ -22,6 +22,7 @@ dependencies:
   cloud_firestore: ^5.6.12
   firebase_storage: ^12.4.10
   firebase_messaging: ^15.2.10
+  flutter_timezone: ^1.0.8
   cloud_functions: ^5.6.2
   flutter_local_notifications: ^18.0.1
   google_sign_in: ^6.1.0
@@ -79,6 +80,7 @@ dependencies:
   shimmer: ^3.0.0
   curved_navigation_bar: ^1.0.3
   fl_chart: ^0.70.0
+  device_info_plus: ^10.1.0
 
 dependency_overrides:
   #webview_flutter: ^4.4.2
@@ -90,6 +92,8 @@ dependency_overrides:
 
 dev_dependencies:
   flutter_launcher_icons: ^0.11.0
+  build_runner: ^2.4.0
+  moor_generator: ^4.4.0
 
 flutter_icons:
   image_path: assets/app_logo.png

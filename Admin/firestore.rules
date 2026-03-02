@@ -116,6 +116,150 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    // Ash scheduled notifications: user can read/create/update/delete own docs
+    match /ash_scheduled_notifications/{notificationId} {
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // Ash notification history: user can read own; create via Cloud Functions only
+    match /ash_notification_history/{historyId} {
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow create: if false;
+      allow update: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // User carts: user can read/write own cart for cart recovery sync
+    match /user_carts/{userId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == userId;
+    }
+
+    // Cart recovery analytics: read for admin, write via Cloud Functions only
+    match /cart_recovery_analytics/{doc} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // Order failures: admin/Cloud Functions only (write by Cloud Functions)
+    match /order_failures/{failure} {
+      allow read, write: if false;
+    }
+
+    // Retry attempts: admin/Cloud Functions only
+    match /retry_attempts/{attempt} {
+      allow read, write: if false;
+    }
+
+    // Trending products: read for all, write via Cloud Functions only
+    match /trending_products/{product} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Recommendation feedback: authenticated users create own feedback
+    match /recommendation_feedback/{feedback} {
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if false;
+    }
+
+    // A/B tests: read for authenticated, write admin only
+    match /ab_tests/{test} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // A/B assignments: user can read own, write via Cloud Functions only
+    match /ab_assignments/{assignment} {
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    // Notification action stats: read for admin, write via Cloud Functions only
+    match /action_stats/{stat} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Notification action analytics: read for admin, write via Cloud Functions only
+    match /action_analytics/{analytic} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Ash voice metrics: read for admin, write via Cloud Functions only
+    match /ash_voice_metrics/{metric} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Ash voice analysis: read for admin, write via Cloud Functions only
+    match /ash_voice_analysis/{analysis} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Audit logs: read for authenticated (admin), create/write via Cloud Functions only
+    match /audit_logs/{logId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // Analytics aggregates: read for authenticated, write via Cloud Functions only
+    match /notification_aggregates/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /user_daily_metrics/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /revenue_daily_metrics/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /ltv_aggregates/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /ab_test_results/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Analytics events: create for authenticated, read for authenticated
+    match /notification_actions/{doc} {
+      allow read, create: if request.auth != null;
+      allow update, delete: if false;
+    }
+    match /conversion_events/{doc} {
+      allow read, create: if request.auth != null;
+      allow update, delete: if false;
+    }
+    match /user_engagement/{doc} {
+      allow read, create: if request.auth != null;
+      allow update, delete: if false;
+    }
+    match /funnel_steps/{doc} {
+      allow read, create: if request.auth != null;
+      allow update, delete: if false;
+    }
+
+    // Weekly reports: read for authenticated (admin)
+    match /weekly_reports/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
     // TODO: Replace with proper security rules before production deployment
     // Example of proper rules:
     // match /users/{userId} {

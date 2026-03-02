@@ -82,6 +82,7 @@ class _ContainerScreen extends State<ContainerScreen>
   void initState() {
     super.initState();
     setCurrency();
+    NotificationService.onOrderActionFromNotification = _handleOrderActionFromNotification;
 
     /// On iOS, we request notification permissions, Does nothing and returns null on Android
     FireStoreUtils.firebaseMessaging.requestPermission(
@@ -323,6 +324,10 @@ class _ContainerScreen extends State<ContainerScreen>
         }
       }
       try {
+        final u = MyAppState.currentUser;
+        if (u != null && u.fcmToken.isNotEmpty) {
+          unawaited(FireStoreUtils.removeFcmToken(u.userID, u.fcmToken));
+        }
         await auth.FirebaseAuth.instance.signOut();
       } catch (e) {
         log('Error signing out: $e');
@@ -406,8 +411,19 @@ class _ContainerScreen extends State<ContainerScreen>
     });
   }
 
+  void _handleOrderActionFromNotification(String orderId, String action) {
+    if (!mounted) return;
+    setState(() {
+      _currentIndex = 0;
+      _bottomNavSelection = BottomNavSelection.MyOrders;
+      _appBarTitle = 'Orders';
+      _currentWidget = OrdersBlankScreen();
+    });
+  }
+
   @override
   void dispose() {
+    NotificationService.onOrderActionFromNotification = null;
     _closingTimeCheckTimer?.cancel();
     _inactivityWarningTimer?.cancel();
     _locationSubscription?.cancel();

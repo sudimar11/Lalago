@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer';
 
 import 'package:bottom_picker/bottom_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -47,6 +48,8 @@ import 'package:foodie_customer/model/addon_promo_model.dart';
 import 'package:foodie_customer/services/addon_promo_service.dart';
 import 'package:foodie_customer/ui/addon/addon_promo_card.dart';
 import 'package:foodie_customer/utils/extensions/cart_product_extension.dart';
+import 'package:foodie_customer/services/analytics_service.dart';
+import 'package:foodie_customer/services/restaurant_status_service.dart';
 
 /// Temporarily set to false to silence cart debug logs while tracing FCM.
 const bool _kShowCartLogs = false;
@@ -205,6 +208,9 @@ class _CartScreenState extends State<CartScreen> {
   DateTime? _cacheTimestamp;
   Timer? _distanceCalculationDebounceTimer;
   String? _estimatedDeliveryTimeText;
+
+  Timer? _statusCheckTimer;
+  List<Map<String, dynamic>>? _closedVendorsInCart;
 
   static const int _defaultPrepMinutes = 20;
   static const int _etaBufferMinutes = 10;
@@ -845,6 +851,10 @@ class _CartScreenState extends State<CartScreen> {
   @override
   void initState() {
     super.initState();
+    final userId = MyAppState.currentUser?.userID;
+    if (userId != null && userId.isNotEmpty) {
+      AnalyticsService.trackFunnelStep(userId, 'cart_view');
+    }
 
     addressModel = MyAppState.selectedPosition;
 
@@ -860,6 +870,11 @@ class _CartScreenState extends State<CartScreen> {
         _initializeData();
       }
     });
+
+    _statusCheckTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => _checkCartRestaurantStatus(),
+    );
   }
 
   // Initialize data after first frame
@@ -2016,13 +2031,163 @@ class _CartScreenState extends State<CartScreen> {
     await Future.delayed(const Duration(milliseconds: 300));
   }
 
+  Future<void> _checkCartRestaurantStatus() async {
+    if (!mounted) return;
+    try {
+      final products = await cartDatabase.allCartProducts;
+      if (products.isEmpty) {
+        if (_closedVendorsInCart != null && _closedVendorsInCart!.isNotEmpty) {
+          setState(() => _closedVendorsInCart = null);
+        }
+        return;
+      }
+
+      final uniqueVendorIds = products
+          .map((p) => p.vendorID)
+          .where((id) => id.isNotEmpty)
+          .toSet()
+          .toList();
+      if (uniqueVendorIds.isEmpty) return;
+
+      final statusMap = await RestaurantStatusService
+          .checkMultipleVendorsStatus(uniqueVendorIds);
+      final closed = <Map<String, dynamic>>[];
+      for (final vid in uniqueVendorIds) {
+        final s = statusMap[vid];
+        if (s == null) continue;
+        if ((s['isOpen'] as bool? ?? false) != true) {
+          closed.add({
+            'vendorId': vid,
+            'vendorName': (s['vendorName'] ?? 'Restaurant').toString(),
+          });
+        }
+      }
+
+      log('[CART_STATUS] Check: vendorIds=$uniqueVendorIds, closed=$closed');
+
+      if (!mounted) return;
+      setState(() {
+        _closedVendorsInCart = closed.isEmpty ? null : closed;
+      });
+    } catch (e) {
+      log('[CART_STATUS] Error: $e');
+    }
+  }
+
+  Widget _buildClosedRestaurantBanner(BuildContext context) {
+    final closed = _closedVendorsInCart ?? [];
+    final names = closed
+        .map((v) => v['vendorName'] as String? ?? 'Restaurant')
+        .join(', ');
+    return Material(
+      color: Colors.orange.shade100,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Some restaurants in your cart have closed: $names',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.orange.shade900,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Your order may be rejected. Remove items or proceed at your own risk.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.orange.shade800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: () async {
+                      await _removeClosedVendorItems();
+                    },
+                    child: const Text('Remove closed items'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() => _closedVendorsInCart = null);
+                    },
+                    child: const Text('Dismiss'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _removeClosedVendorItems() async {
+    final closed = _closedVendorsInCart;
+    if (closed == null || closed.isEmpty) return;
+    final closedIds = closed
+        .map((v) => v['vendorId'] as String?)
+        .where((id) => id != null && id.isNotEmpty)
+        .cast<String>()
+        .toSet();
+
+    final products = await cartDatabase.allCartProducts;
+    for (final p in products) {
+      if (closedIds.contains(p.vendorID)) {
+        await cartDatabase.removeProduct(p.id);
+      }
+    }
+    if (!mounted) return;
+    setState(() => _closedVendorsInCart = null);
+  }
+
+  Future<bool> _onPopInvoked() async {
+    final products = await cartDatabase.allCartProducts;
+    if (products.isEmpty) return true;
+    final shouldExit = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Complete your order?'),
+        content: const Text(
+          'Your cart has items. Are you sure you want to leave?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Stay'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    return shouldExit ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_kShowCartLogs) debugPrint(
         '🔵 [CART_LIFECYCLE] build() called - Rebuild #${DateTime.now().millisecondsSinceEpoch}');
     cartDatabase = Provider.of<CartDatabase>(context, listen: true);
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldExit = await _onPopInvoked();
+        if (shouldExit && mounted) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
       backgroundColor: isDarkMode(context)
           ? const Color(DARK_COLOR)
           : const Color(0xffFFFFFF),
@@ -2160,6 +2325,9 @@ class _CartScreenState extends State<CartScreen> {
 
           return Column(
             children: [
+              if (_closedVendorsInCart != null &&
+                  _closedVendorsInCart!.isNotEmpty)
+                _buildClosedRestaurantBanner(context),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: _onRefresh,
@@ -2607,6 +2775,7 @@ class _CartScreenState extends State<CartScreen> {
           );
         },
       ),
+    ),
     );
   }
 
@@ -3719,7 +3888,8 @@ class _CartScreenState extends State<CartScreen> {
         bundleId: cartProduct.bundleId,
         bundleName: cartProduct.bundleName,
         addonPromoId: cartProduct.addonPromoId,
-        addonPromoName: cartProduct.addonPromoName));
+        addonPromoName: cartProduct.addonPromoName,
+        addedAt: cartProduct.addedAt));
   }
 
   removetocard(CartProduct cartProduct, qun) async {
@@ -3739,7 +3909,8 @@ class _CartScreenState extends State<CartScreen> {
           bundleId: cartProduct.bundleId,
           bundleName: cartProduct.bundleName,
           addonPromoId: cartProduct.addonPromoId,
-          addonPromoName: cartProduct.addonPromoName));
+          addonPromoName: cartProduct.addonPromoName,
+          addedAt: cartProduct.addedAt));
     } else {
       cartDatabase.removeProduct(cartProduct.id);
     }
@@ -4222,6 +4393,8 @@ class _CartScreenState extends State<CartScreen> {
 
   @override
   void dispose() {
+    _statusCheckTimer?.cancel();
+    _statusCheckTimer = null;
     // Cancel debounce timer to prevent memory leaks
     _distanceCalculationDebounceTimer?.cancel();
     _distanceCalculationDebounceTimer = null;

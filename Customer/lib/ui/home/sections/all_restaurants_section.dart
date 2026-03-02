@@ -633,6 +633,8 @@ class _AllRestaurantCardState extends State<_AllRestaurantCard> {
                               imageUrl: getImageVAlidUrl(bestImageUrl!),
                               width: cardWidth,
                               height: cardHeight,
+                              memCacheWidth: 280,
+                              memCacheHeight: 280,
                               fit: BoxFit.cover,
                               placeholder: (context, url) => neutralBackground,
                               errorWidget: (context, url, error) =>

@@ -34,6 +34,8 @@ String getStatusMessage(String status) {
       return 'Order cancelled';
     case 'driver rejected':
       return 'Rider declined';
+    case 'payment failed':
+      return 'Payment failed';
     default:
       return status;
   }
@@ -89,6 +91,7 @@ int getProgressPercentage(String status) {
     case 'order cancelled':
     case 'cancelled':
     case 'driver rejected':
+    case 'payment failed':
     default:
       return 0;
   }

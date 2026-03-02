@@ -43,6 +43,11 @@ import 'package:brgy/attendance_page.dart';
 import 'package:brgy/pages/ads_management_page.dart';
 import 'package:brgy/pages/happy_hour_settings_page.dart';
 import 'package:brgy/pages/notification_management_page.dart';
+import 'package:brgy/pages/order_recovery_dashboard.dart';
+import 'package:brgy/pages/reorder_analytics_page.dart';
+import 'package:brgy/pages/ash_voice_dashboard.dart';
+import 'package:brgy/pages/hunger_reminder_analytics.dart';
+import 'package:brgy/pages/cart_recovery_dashboard.dart';
 import 'package:brgy/pages/first_order_coupon_settings_page.dart';
 import 'package:brgy/pages/coupon_management_page.dart';
 import 'package:brgy/pages/new_user_promo_settings_page.dart';
@@ -467,6 +472,31 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             icon: Icons.notifications_active_outlined,
             label: 'Notification management',
             onTap: () => push(const NotificationManagementPage()),
+          ),
+          _QuickActionItem(
+            icon: Icons.restore,
+            label: 'Order recovery',
+            onTap: () => push(const OrderRecoveryDashboard()),
+          ),
+          _QuickActionItem(
+            icon: Icons.analytics,
+            label: 'Reorder analytics',
+            onTap: () => push(const ReorderAnalyticsPage()),
+          ),
+          _QuickActionItem(
+            icon: Icons.record_voice_over,
+            label: 'Ash voice',
+            onTap: () => push(const AshVoiceDashboard()),
+          ),
+          _QuickActionItem(
+            icon: Icons.restaurant_menu,
+            label: 'Hunger reminder analytics',
+            onTap: () => push(const HungerReminderAnalytics()),
+          ),
+          _QuickActionItem(
+            icon: Icons.shopping_cart_outlined,
+            label: 'Cart recovery',
+            onTap: () => push(const CartRecoveryDashboard()),
           ),
           _QuickActionItem(
             icon: Icons.local_offer_outlined,

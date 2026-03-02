@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:firebase_ai/firebase_ai.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
@@ -15,6 +17,9 @@ import 'package:foodie_customer/services/ai_chat_tool_handler.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/screens/ai_chat_cards.dart';
+import 'package:foodie_customer/services/ash_voice_service.dart';
+import 'package:foodie_customer/widgets/ash_avatar.dart';
+import 'package:foodie_customer/widgets/closed_restaurant_card.dart';
 
 /// Food-themed loading indicator for AI thinking state.
 class FoodLoadingIndicator extends StatelessWidget {
@@ -170,6 +175,12 @@ class _AiChatScreenState extends State<AiChatScreen> {
   /// Session cache: Tausug word -> English meaning (taught this session).
   final Map<String, String> _sessionTeachings = {};
 
+  /// True when processing a teaching message until confirmation is sent.
+  bool _isInLearningMode = false;
+
+  /// Total teachings + corrections contributed by current user.
+  int _teachingCount = 0;
+
   @override
   void initState() {
     debugPrint('🟢 [LIFECYCLE] AiChatScreen initState START');
@@ -179,7 +190,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
         setState(() {
           _messages.add(ChatMessage(
             type: MessageType.text,
-            text: "Hi! I'm Ash. How can I help you today?",
+            text: AshVoiceService.getIntro(MyAppState.currentUser?.firstName),
             isUser: false,
             timestamp: DateTime.now(),
           ));
@@ -197,6 +208,21 @@ class _AiChatScreenState extends State<AiChatScreen> {
       _chatInitialized = true;
       _initChat();
     }
+    _loadTeachingCount();
+  }
+
+  Future<void> _loadTeachingCount() async {
+    final userId = MyAppState.currentUser?.userID ??
+        FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return;
+    try {
+      final teachings = await TausugTeachingsService.getTeachingCount(userId);
+      final corrections =
+          await WordCorrectionService.getCorrectionCount(userId);
+      if (!_disposed && mounted) {
+        setState(() => _teachingCount = teachings + corrections);
+      }
+    } catch (_) {}
   }
 
   bool _chatInitialized = false;
@@ -248,8 +274,18 @@ class _AiChatScreenState extends State<AiChatScreen> {
   }
 
   String _buildSystemPrompt() {
+    final now = DateTime.now();
+    final currentTime = DateFormat('h:mm a').format(now);
+    final currentDay = DateFormat('EEEE', 'en_US').format(now);
+
     return '''
 You are Ash, a friendly and helpful food assistant for the Lalago app. Your name is Ash – short, approachable, and easy to remember.
+
+CURRENT TIME: $currentDay at $currentTime (local time)
+
+IMPORTANT RULES FOR ORDERING:
+1. Before adding items to cart, call check_restaurant_status with the restaurant's vendorId to verify it is open.
+2. Never add items from a closed restaurant. If closed, tell the user and show today's hours.
 
 You serve users in the Philippines including Tausug-speaking communities in Sulu. You can:
 - Recommend restaurants and dishes based on available data
@@ -499,7 +535,7 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
         timestamp: DateTime.now(),
       ));
       _isLoading = true;
-      _currentMessageSet = _getLoadingMessagesForQuery(userQuery);
+      _currentMessageSet = AshVoiceService.getLoadingMessages(userQuery);
       _currentMessageIndex = 0;
     });
     _loadingMessageTimer?.cancel();
@@ -543,29 +579,79 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
 
       // Handle teaching messages (correction, teach, learn, X means Y)
       if (TausugTeachingsService.isTeachingMessage(userQuery)) {
+        _loadingMessageTimer?.cancel();
+        _loadingMessageTimer = null;
+        setState(() => _isInLearningMode = true);
+
         final result =
             TausugTeachingsService.parseTeachingMessage(userQuery);
         if (result != null) {
           final userId = MyAppState.currentUser?.userID ??
               FirebaseAuth.instance.currentUser?.uid;
-          if (userId != null) {
-            await TausugTeachingsService.store(
-              userId: userId,
-              tausugWord: result.tausugWord,
-              englishMeaning: result.englishMeaning,
-            );
-            _sessionTeachings[result.tausugWord] = result.englishMeaning;
-          }
+          final successText = "Salamat! I've learned that "
+              "'${result.tausugWord}' means '${result.englishMeaning}'.";
+          final aiIndex = _messages.length;
           if (!_disposed && mounted) {
             setState(() {
               _messages.add(ChatMessage(
                 type: MessageType.text,
-                text: "Salamat! I've learned that '${result.tausugWord}' "
-                    "means '${result.englishMeaning}'.",
+                text: 'Saving…',
                 isUser: false,
                 timestamp: DateTime.now(),
+                teachingStatus: TeachingStatus.pending,
+                teachingResult: result,
               ));
             });
+          }
+          if (userId != null) {
+            try {
+              final ref = await TausugTeachingsService.store(
+                userId: userId,
+                tausugWord: result.tausugWord,
+                englishMeaning: result.englishMeaning,
+              );
+              _sessionTeachings[result.tausugWord] = result.englishMeaning;
+              developer.log(
+                '[TEACHING_SAVED] path: ${ref.path}, id: ${ref.id}',
+                name: 'AiChat',
+              );
+              developer.log(
+                '[TEACHING_SAVED] tausugWord: ${result.tausugWord}, '
+                'englishMeaning: ${result.englishMeaning}',
+                name: 'AiChat',
+              );
+              if (!_disposed && mounted) {
+                setState(() {
+                  _messages[aiIndex] = _messages[aiIndex].copyWith(
+                    text: successText,
+                    teachingStatus: TeachingStatus.saved,
+                  );
+                  _isInLearningMode = false;
+                  _teachingCount++;
+                });
+              }
+            } catch (e) {
+              debugPrint('Error storing teaching: $e');
+              if (!_disposed && mounted) {
+                setState(() {
+                  _messages[aiIndex] = _messages[aiIndex].copyWith(
+                    text: "Couldn't save – check your connection.",
+                    teachingStatus: TeachingStatus.failed,
+                  );
+                  _isInLearningMode = false;
+                });
+              }
+            }
+          } else {
+            if (!_disposed && mounted) {
+              setState(() {
+                _messages[aiIndex] = _messages[aiIndex].copyWith(
+                  text: 'Please log in to save teachings.',
+                  teachingStatus: TeachingStatus.failed,
+                );
+                _isInLearningMode = false;
+              });
+            }
           }
         } else {
           if (!_disposed && mounted) {
@@ -577,8 +663,12 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
                 isUser: false,
                 timestamp: DateTime.now(),
               ));
+              _isInLearningMode = false;
             });
           }
+        }
+        if (!_disposed && mounted) {
+          setState(() => _isLoading = false);
         }
         return;
       }
@@ -740,6 +830,10 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
     Map<String, dynamic>? result,
   ) {
     if (toolName == null || result == null) return null;
+    if (toolName == 'add_products_to_cart' &&
+        result['error'] == 'cannot_add_closed') {
+      return MessageType.closedRestaurant;
+    }
     if (result['error'] != null &&
         result['cancelled'] != true &&
         result['success'] != true) {
@@ -761,6 +855,7 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
       case 'apply_best_coupon':
         return MessageType.couponResult;
       case 'get_popular_items':
+      case 'get_popular_items_at_restaurant':
         return MessageType.popularList;
       default:
         return null;
@@ -780,21 +875,135 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
     final userMessage = _messages[aiIndex - 1];
     if (!userMessage.isUser) return;
 
+    final detectedWords = _detectTausugWords(userMessage.text);
     try {
-      await WordCorrectionService.store(
+      final ref = await WordCorrectionService.store(
         userId: userId,
         userQuery: userMessage.text,
         aiResponse: aiMessage.text,
         correction: correctionText,
-        detectedWords: _detectTausugWords(userMessage.text),
+        detectedWords: detectedWords,
+      );
+      developer.log(
+        '[TEACHING_SAVED] word_corrections path: ${ref.path}, id: ${ref.id}',
+        name: 'AiChat',
+      );
+      developer.log(
+        '[TEACHING_SAVED] userQuery: ${userMessage.text}, '
+        'correction: $correctionText, detectedWords: $detectedWords',
+        name: 'AiChat',
       );
       if (!_disposed && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Thank you for teaching me!')),
         );
+        _loadTeachingCount();
       }
     } catch (e) {
       debugPrint('Error storing word correction: $e');
+    }
+  }
+
+  Future<void> _showContributionHistoryDialog() async {
+    final userId = MyAppState.currentUser?.userID ??
+        FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return;
+
+    final teachings =
+        await TausugTeachingsService.getRecentTeachings(userId, limit: 20);
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Text('📚 '),
+            Text('Your contributions ($_teachingCount total)'),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: teachings.isEmpty
+              ? const Text('No teachings yet. Teach Ash new words!')
+              : ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: teachings.length,
+                  itemBuilder: (context, i) {
+                    final t = teachings[i];
+                    final word = (t['tausugWord'] ?? '').toString();
+                    final meaning =
+                        (t['englishMeaning'] ?? '').toString();
+                    return ListTile(
+                      dense: true,
+                      title: Text("'$word' → '$meaning'"),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _retryTeaching(int index) async {
+    if (index < 0 || index >= _messages.length) return;
+    final msg = _messages[index];
+    final result = msg.teachingResult;
+    if (result == null || msg.teachingStatus != TeachingStatus.failed) return;
+
+    final userId = MyAppState.currentUser?.userID ??
+        FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return;
+
+    setState(() {
+      _messages[index] = msg.copyWith(
+        text: 'Saving…',
+        teachingStatus: TeachingStatus.pending,
+      );
+    });
+
+    try {
+      final ref = await TausugTeachingsService.store(
+        userId: userId,
+        tausugWord: result.tausugWord,
+        englishMeaning: result.englishMeaning,
+      );
+      _sessionTeachings[result.tausugWord] = result.englishMeaning;
+      developer.log(
+        '[TEACHING_SAVED] path: ${ref.path}, id: ${ref.id}',
+        name: 'AiChat',
+      );
+      developer.log(
+        '[TEACHING_SAVED] tausugWord: ${result.tausugWord}, '
+        'englishMeaning: ${result.englishMeaning}',
+        name: 'AiChat',
+      );
+      if (!_disposed && mounted) {
+        setState(() {
+          _messages[index] = _messages[index].copyWith(
+            text: "Salamat! I've learned that '${result.tausugWord}' "
+                "means '${result.englishMeaning}'.",
+            teachingStatus: TeachingStatus.saved,
+          );
+          _teachingCount++;
+        });
+      }
+    } catch (e) {
+      debugPrint('Retry teaching failed: $e');
+      if (!_disposed && mounted) {
+        setState(() {
+          _messages[index] = _messages[index].copyWith(
+            text: "Couldn't save – check your connection.",
+            teachingStatus: TeachingStatus.failed,
+          );
+        });
+      }
     }
   }
 
@@ -861,9 +1070,47 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text('Ask Ash'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AshAvatar(radius: 16),
+            const SizedBox(width: 8),
+            const Text('Ask Ash'),
+          ],
+        ),
         backgroundColor: Color(COLOR_PRIMARY),
         foregroundColor: Colors.white,
+        actions: [
+          if (_teachingCount > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: InkWell(
+                onTap: _showContributionHistoryDialog,
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('📚', style: TextStyle(fontSize: 14)),
+                      const SizedBox(width: 4),
+                      Text(
+                        '$_teachingCount teachings',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
       body: Column(
         children: [
@@ -877,12 +1124,14 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
                         _messages[index - 1].isUser;
                 return ChatBubble(
                   message: _messages[index],
+                  messageIndex: index,
                   isDark: isDark,
                   cartService: _aiCartService,
                   isSameSenderAsPrevious: isSameSender,
                   formatTime: _formatTime,
                   onCorrectionSubmitted: (correction) =>
                       _saveWordCorrection(_messages[index], correction),
+                  onRetryTeaching: _retryTeaching,
                 );
               },
             ),
@@ -905,6 +1154,22 @@ Identify yourself as Ash when appropriate (e.g., "Hi, I'm Ash! How can I help yo
                   )
                 : const SizedBox.shrink(),
           ),
+          if (_isInLearningMode)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              color: Colors.purple.shade100,
+              child: Row(
+                children: [
+                  Text(
+                    '📚 Ash is learning...',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.purple.shade900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Container(
             decoration: BoxDecoration(
               color: isDark ? Colors.grey[900] : Colors.white,
@@ -986,7 +1251,10 @@ enum MessageType {
   bookingConfirmation,
   popularList,
   couponResult,
+  closedRestaurant,
 }
+
+enum TeachingStatus { pending, saved, failed }
 
 class ChatMessage {
   final MessageType type;
@@ -994,6 +1262,8 @@ class ChatMessage {
   final dynamic data;
   final bool isUser;
   final DateTime? timestamp;
+  final TeachingStatus? teachingStatus;
+  final TeachingResult? teachingResult;
 
   ChatMessage({
     required this.type,
@@ -1001,24 +1271,50 @@ class ChatMessage {
     this.data,
     required this.isUser,
     this.timestamp,
+    this.teachingStatus,
+    this.teachingResult,
   });
+
+  ChatMessage copyWith({
+    MessageType? type,
+    String? text,
+    dynamic data,
+    bool? isUser,
+    DateTime? timestamp,
+    TeachingStatus? teachingStatus,
+    TeachingResult? teachingResult,
+  }) {
+    return ChatMessage(
+      type: type ?? this.type,
+      text: text ?? this.text,
+      data: data ?? this.data,
+      isUser: isUser ?? this.isUser,
+      timestamp: timestamp ?? this.timestamp,
+      teachingStatus: teachingStatus ?? this.teachingStatus,
+      teachingResult: teachingResult ?? this.teachingResult,
+    );
+  }
 }
 
 class ChatBubble extends StatefulWidget {
   const ChatBubble({
     Key? key,
     required this.message,
+    this.messageIndex = -1,
     this.isDark = false,
     this.cartService,
     this.onCorrectionSubmitted,
+    this.onRetryTeaching,
     this.isSameSenderAsPrevious = false,
     this.formatTime,
   }) : super(key: key);
 
   final ChatMessage message;
+  final int messageIndex;
   final bool isDark;
   final AiCartService? cartService;
   final void Function(String correction)? onCorrectionSubmitted;
+  final void Function(int index)? onRetryTeaching;
   final bool isSameSenderAsPrevious;
   final String Function(DateTime)? formatTime;
 
@@ -1158,6 +1454,10 @@ class _ChatBubbleState extends State<ChatBubble> {
       case MessageType.couponResult:
         child = CouponResultCard(data: widget.message.data ?? {});
         break;
+      case MessageType.closedRestaurant:
+        final data = widget.message.data as Map<String, dynamic>? ?? {};
+        child = ClosedRestaurantCard(data: data);
+        break;
       default:
         child = Container(
           padding: const EdgeInsets.all(12),
@@ -1174,17 +1474,77 @@ class _ChatBubbleState extends State<ChatBubble> {
               ),
             ],
           ),
-          child: Text(
-            widget.message.text,
-            style: TextStyle(
-              color: widget.isDark ? Colors.white : Colors.black87,
-              fontSize: 15,
-            ),
-            maxLines: 50,
-            overflow: TextOverflow.ellipsis,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                widget.message.text,
+                style: TextStyle(
+                  color: widget.isDark ? Colors.white : Colors.black87,
+                  fontSize: 15,
+                ),
+                maxLines: 50,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (widget.message.teachingStatus != null) ...[
+                const SizedBox(height: 8),
+                _buildTeachingStatusRow(),
+              ],
+            ],
           ),
         );
     }
     return child;
+  }
+
+  Widget _buildTeachingStatusRow() {
+    final status = widget.message.teachingStatus!;
+    switch (status) {
+      case TeachingStatus.pending:
+        return SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(
+              Color(COLOR_PRIMARY),
+            ),
+          ),
+        );
+      case TeachingStatus.saved:
+        return Icon(
+          Icons.check_circle,
+          color: Colors.green,
+          size: 16,
+        );
+      case TeachingStatus.failed:
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Tooltip(
+              message: 'Failed to save – check connection',
+              child: Icon(
+                Icons.error_outline,
+                color: Colors.red,
+                size: 16,
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: widget.messageIndex >= 0 &&
+                      widget.onRetryTeaching != null
+                  ? () => widget.onRetryTeaching!(widget.messageIndex)
+                  : null,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Retry', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        );
+    }
   }
 }

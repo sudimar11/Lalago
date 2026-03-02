@@ -12,12 +12,21 @@ import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/model/OrderModel.dart';
+import 'package:foodie_customer/services/ash_notification_history.dart';
+import 'package:foodie_customer/services/notification_action_handler.dart';
+import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
+import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/ui/chat_screen/chat_screen.dart';
+import 'package:foodie_customer/ui/ordersScreen/OrdersScreen.dart';
 import 'package:foodie_customer/firebase_options.dart';
 import 'package:foodie_customer/main.dart';
+import 'package:foodie_customer/constants.dart';
+import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/home/HomeScreen.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/OrderDetailsScreen.dart';
+import 'package:foodie_customer/ui/order_recovery/order_recovery_screen.dart';
+import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 // #region agent log
@@ -272,7 +281,10 @@ class NotificationService {
       await flutterLocalNotificationsPlugin.initialize(
         initializationSettings,
         onDidReceiveNotificationResponse: (NotificationResponse response) {
-          _handleNotificationTap(response.payload);
+          _handleNotificationTap(
+            response.payload,
+            actionId: response.actionId,
+          );
         },
       );
       await _ensureAndroidDefaultChannel();
@@ -394,11 +406,15 @@ class NotificationService {
     }
   }
 
-  void _handleNotificationTap(String? payload) {
+  void _handleNotificationTap(String? payload, {String? actionId}) {
     if (payload == null || payload.isEmpty) return;
 
     try {
       final Map<String, dynamic> data = jsonDecode(payload);
+      if (actionId != null && actionId.isNotEmpty) {
+        NotificationActionHandler.handleAction(null, actionId, data);
+        return;
+      }
       if (isRiderChatNotification(data)) {
         _navigateToChat(data);
       } else if (isOrderUpdateNotification(data)) {
@@ -410,6 +426,9 @@ class NotificationService {
       log('Error handling notification tap: $e');
     }
   }
+
+  /// Public method for NotificationActionHandler to navigate to chat.
+  void navigateToChat(Map<String, dynamic> data) => _navigateToChat(data);
 
   Future<void> _navigateToOrderDetails(Map<String, dynamic> data) async {
     try {
@@ -456,11 +475,10 @@ class NotificationService {
     }
   }
 
-  Future<void> _navigateToHome() async {
+  Future<void> _navigateToHome({String? highlightMealPeriod}) async {
     try {
       BuildContext? context = navigatorKey.currentContext;
 
-      // If context is not available yet, wait a bit and try again
       if (context == null) {
         await Future.delayed(const Duration(seconds: 1));
         context = navigatorKey.currentContext;
@@ -470,15 +488,17 @@ class NotificationService {
         }
       }
 
-      // Navigate to ContainerScreen with HomeScreen as current widget
-      // Use pushAndRemoveUntil to ensure clean navigation stack
       pushAndRemoveUntil(
         context,
         ContainerScreen(
           user: MyAppState.currentUser,
-          currentWidget: HomeScreen(user: MyAppState.currentUser),
+          currentWidget: HomeScreen(
+            user: MyAppState.currentUser,
+            highlightMealPeriod: highlightMealPeriod,
+            filterByMeal: highlightMealPeriod != null,
+          ),
         ),
-        false, // Remove all previous routes
+        false,
       );
     } catch (e) {
       log('Error navigating to home: $e');
@@ -745,8 +765,54 @@ class NotificationService {
     _onMessageOpenedAppSubscription =
         FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       log("::::::::::::onMessageOpenedApp:::::::::::::::::");
-      if (isRiderChatNotification(message.data)) {
-        final payloadCustomerId = message.data['customerId']?.toString();
+      final data = message.data;
+      final type = data['type']?.toString() ?? '';
+
+      if (type.startsWith('ash_')) {
+        final notificationId = data['notificationId']?.toString();
+        if (notificationId != null && notificationId.isNotEmpty) {
+          unawaited(AshNotificationHistory.markOpened(
+              notificationId, action: 'opened'));
+        }
+        switch (type) {
+          case 'ash_reorder':
+            final vendorId = data['vendorId']?.toString();
+            if (vendorId != null && vendorId.isNotEmpty) {
+              unawaited(_navigateToReorderRestaurant(vendorId));
+            } else {
+              _navigateToOrders();
+            }
+            break;
+          case 'ash_recommendation':
+            unawaited(_navigateToRecommendation(
+              vendorId: data['vendorId']?.toString(),
+              productId: data['productId']?.toString(),
+              notificationId: notificationId,
+            ));
+            break;
+          case 'ash_cart':
+          case 'ash_cart_urgent':
+            _navigateToCart();
+            break;
+          case 'ash_hunger':
+            _navigateToHome(
+              highlightMealPeriod: data['mealPeriod']?.toString(),
+            );
+            break;
+          case 'ash_order_recovery':
+            _navigateToOrderRecovery(
+              Map<String, dynamic>.from(data)
+                ..['title'] = message.notification?.title ?? 'Order Recovery'
+                ..['body'] = message.notification?.body ?? '',
+            );
+            break;
+          default:
+            _navigateToHome();
+        }
+        return;
+      }
+      if (isRiderChatNotification(data)) {
+        final payloadCustomerId = data['customerId']?.toString();
         final currentId = MyAppState.currentUser?.userID.toString();
         if (MyAppState.currentUser != null &&
             payloadCustomerId != null &&
@@ -755,10 +821,10 @@ class NotificationService {
           return;
         }
         _navigateToChat(message.data);
-      } else if (message.data['type'] == 'happy_hour') {
+      } else if (data['type'] == 'happy_hour') {
         _navigateToHome();
-      } else if (isOrderUpdateNotification(message.data)) {
-        final customerId = message.data['customerId']?.toString();
+      } else if (isOrderUpdateNotification(data)) {
+        final customerId = data['customerId']?.toString();
         final currentId = MyAppState.currentUser?.userID.toString();
         if (MyAppState.currentUser != null &&
             customerId != null &&
@@ -766,7 +832,7 @@ class NotificationService {
           log('Order update customer ID mismatch, ignoring');
           return;
         }
-        _navigateToOrderDetails(message.data);
+        _navigateToOrderDetails(data);
       } else if (message.notification != null) {
         log(message.notification.toString());
         display(message);
@@ -776,9 +842,226 @@ class NotificationService {
     _listenersRegistered = true;
   }
 
+  Future<void> _navigateToCart() async {
+    try {
+      final context = navigatorKey.currentContext;
+      if (context == null) {
+        await Future.delayed(const Duration(seconds: 1));
+        final ctx = navigatorKey.currentContext;
+        if (ctx == null) return;
+        pushAndRemoveUntil(
+          ctx,
+          ContainerScreen(
+            user: MyAppState.currentUser,
+            currentWidget: CartScreen(fromContainer: true),
+          ),
+          false,
+        );
+      } else {
+        pushAndRemoveUntil(
+          context,
+          ContainerScreen(
+            user: MyAppState.currentUser,
+            currentWidget: CartScreen(fromContainer: true),
+          ),
+          false,
+        );
+      }
+    } catch (e) {
+      log('Error navigating to cart: $e');
+    }
+  }
+
+  Future<void> _navigateToOrders() async {
+    try {
+      final context = navigatorKey.currentContext;
+      if (context == null) {
+        await Future.delayed(const Duration(seconds: 1));
+        final ctx = navigatorKey.currentContext;
+        if (ctx == null) return;
+        pushAndRemoveUntil(
+          ctx,
+          ContainerScreen(
+            user: MyAppState.currentUser,
+            currentWidget: OrdersScreen(isAnimation: true),
+          ),
+          false,
+        );
+      } else {
+        pushAndRemoveUntil(
+          context,
+          ContainerScreen(
+            user: MyAppState.currentUser,
+            currentWidget: OrdersScreen(isAnimation: true),
+          ),
+          false,
+        );
+      }
+    } catch (e) {
+      log('Error navigating to orders: $e');
+    }
+  }
+
+  void _navigateToOrderRecovery(Map<String, dynamic> data) {
+    final context = navigatorKey.currentContext;
+    if (context == null) {
+      Future.delayed(const Duration(seconds: 1), () {
+        final ctx = navigatorKey.currentContext;
+        if (ctx != null) {
+          push(ctx, OrderRecoveryScreen(data: data));
+        }
+      });
+      return;
+    }
+    push(context, OrderRecoveryScreen(data: data));
+  }
+
+  Future<void> _navigateToReorderRestaurant(String vendorId) async {
+    try {
+      final vendor = await FireStoreUtils.getVendor(vendorId);
+      if (vendor == null) {
+        _navigateToOrders();
+        return;
+      }
+      BuildContext? ctx = navigatorKey.currentContext;
+      if (ctx == null) {
+        await Future.delayed(const Duration(seconds: 1));
+        ctx = navigatorKey.currentContext;
+      }
+      if (ctx == null) return;
+      pushAndRemoveUntil(
+        ctx,
+        ContainerScreen(
+          user: MyAppState.currentUser,
+          currentWidget: NewVendorProductsScreen(
+            vendorModel: vendor,
+            showReorderBanner: true,
+          ),
+        ),
+        false,
+      );
+    } catch (e) {
+      log('Error navigating to reorder restaurant: $e');
+      _navigateToOrders();
+    }
+  }
+
+  Future<void> _navigateToRecommendation({
+    String? vendorId,
+    String? productId,
+    String? notificationId,
+  }) async {
+    if (notificationId != null && notificationId.isNotEmpty) {
+      unawaited(AshNotificationHistory.markOpened(
+        notificationId,
+        action: 'tapped',
+      ));
+    }
+    BuildContext? ctx = navigatorKey.currentContext;
+    if (ctx == null) {
+      await Future.delayed(const Duration(seconds: 1));
+      ctx = navigatorKey.currentContext;
+    }
+    if (ctx == null) return;
+
+    if (vendorId != null && vendorId.isNotEmpty) {
+      try {
+        final vendor = await FireStoreUtils.getVendor(vendorId);
+        if (vendor == null) {
+          _navigateToHome();
+          return;
+        }
+        pushAndRemoveUntil(
+          ctx,
+          ContainerScreen(user: MyAppState.currentUser),
+          false,
+        );
+        final c = navigatorKey.currentContext;
+        if (c == null) return;
+        if (productId != null && productId.isNotEmpty) {
+          try {
+            final doc = await FirebaseFirestore.instance
+                .collection(PRODUCTS)
+                .doc(productId)
+                .get();
+            if (doc.exists && doc.data() != null) {
+              final d = Map<String, dynamic>.from(doc.data()!);
+              d['id'] = doc.id;
+              final product = ProductModel.fromJson(d);
+              if (product.vendorID == vendorId) {
+                push(c, ProductDetailsScreen(
+                  productModel: product,
+                  vendorModel: vendor,
+                ));
+                return;
+              }
+            }
+          } catch (_) {}
+        }
+        push(c, NewVendorProductsScreen(
+          vendorModel: vendor,
+          showReorderBanner: false,
+        ));
+      } catch (e) {
+        log('Error navigating to recommendation: $e');
+        _navigateToHome();
+      }
+    } else {
+      _navigateToHome();
+    }
+  }
+
   void _handleInitialMessage(RemoteMessage message) {
-    if (isRiderChatNotification(message.data)) {
-      final payloadCustomerId = message.data['customerId']?.toString();
+    final data = message.data;
+    final type = data['type']?.toString() ?? '';
+
+    if (type.startsWith('ash_')) {
+      final notificationId = data['notificationId']?.toString();
+      if (notificationId != null && notificationId.isNotEmpty) {
+        unawaited(AshNotificationHistory.markOpened(
+            notificationId, action: 'opened'));
+      }
+      Future.delayed(const Duration(seconds: 1), () {
+        switch (type) {
+          case 'ash_reorder':
+            final vendorId = data['vendorId']?.toString();
+            if (vendorId != null && vendorId.isNotEmpty) {
+              _navigateToReorderRestaurant(vendorId);
+            } else {
+              _navigateToOrders();
+            }
+            break;
+          case 'ash_recommendation':
+            _navigateToRecommendation(
+              vendorId: data['vendorId']?.toString(),
+              productId: data['productId']?.toString(),
+              notificationId: data['notificationId']?.toString(),
+            );
+            break;
+          case 'ash_cart':
+          case 'ash_cart_urgent':
+            _navigateToCart();
+            break;
+          case 'ash_hunger':
+            _navigateToHome(
+              highlightMealPeriod: data['mealPeriod']?.toString(),
+            );
+            break;
+          case 'ash_order_recovery':
+            _navigateToOrderRecovery(
+              Map<String, dynamic>.from(data)
+                ..['title'] = message.notification?.title ?? 'Order Recovery'
+                ..['body'] = message.notification?.body ?? '',
+            );
+            break;
+          default:
+            _navigateToHome();
+        }
+      });
+      return;
+    }
+    if (isRiderChatNotification(data)) {
+      final payloadCustomerId = data['customerId']?.toString();
       final currentId = MyAppState.currentUser?.userID.toString();
       if (MyAppState.currentUser != null &&
           payloadCustomerId != null &&
@@ -788,14 +1071,14 @@ class NotificationService {
       }
 
       Future.delayed(const Duration(seconds: 1), () {
-        _navigateToChat(message.data);
+        _navigateToChat(data);
       });
-    } else if (message.data['type'] == 'happy_hour') {
+    } else if (data['type'] == 'happy_hour') {
       Future.delayed(const Duration(seconds: 1), () {
         _navigateToHome();
       });
-    } else if (isOrderUpdateNotification(message.data)) {
-      final payloadCustomerId = message.data['customerId']?.toString();
+    } else if (isOrderUpdateNotification(data)) {
+      final payloadCustomerId = data['customerId']?.toString();
       final currentId = MyAppState.currentUser?.userID.toString();
       if (MyAppState.currentUser != null &&
           payloadCustomerId != null &&
@@ -804,7 +1087,7 @@ class NotificationService {
         return;
       }
       Future.delayed(const Duration(seconds: 1), () {
-        _navigateToOrderDetails(message.data);
+        _navigateToOrderDetails(data);
       });
     }
   }

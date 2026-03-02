@@ -6,6 +6,10 @@ const USER_ROLE_CUSTOMER = 'customer';
 const USER_ROLE_ADMIN = 'admin';
 const USER_ROLE_TEACHER = 'teacher';
 const USER_ROLE_DRIVER = 'driver';
+const USER_ROLE_VENDOR = 'vendor';
+
+const ADMIN_LEVEL_SUPER = 'super';
+const ADMIN_LEVEL_LIMITED = 'limited';
 
 // Firestore collections
 const DAILY_SUMMARIES = 'daily_summaries';

@@ -159,6 +159,9 @@ class MoreOptionsBottomSheet extends StatelessWidget {
                 Navigator.pop(context);
                 user.lastOnlineTimestamp = Timestamp.now();
                 await FireStoreUtils.updateCurrentUser(user);
+                if (user.fcmToken.isNotEmpty) {
+                  unawaited(FireStoreUtils.removeFcmToken(user.userID, user.fcmToken));
+                }
                 await auth.FirebaseAuth.instance.signOut();
                 MyAppState.currentUser = null;
                 pushAndRemoveUntil(context, AuthScreen(), false);

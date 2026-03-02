@@ -48,6 +48,7 @@ import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/services/coupon_service.dart';
 
 import 'package:foodie_customer/services/localDatabase.dart';
+import 'package:foodie_customer/utils/future_utils.dart';
 
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/categoryDetailsScreen/CategoryDetailsScreen.dart';
@@ -60,7 +61,6 @@ import 'package:foodie_customer/ui/home/view_all_category_product_screen.dart';
 
 import 'package:foodie_customer/ui/home/view_all_new_arrival_restaurant_screen.dart';
 import 'package:foodie_customer/ui/home/view_all_offer_screen.dart';
-import 'package:foodie_customer/ui/promos/PromosScreen.dart';
 
 import 'package:foodie_customer/ui/home/view_all_popular_food_near_by_screen.dart';
 
@@ -88,6 +88,7 @@ import 'package:foodie_customer/ui/home/sections/home_header_section.dart';
 import 'package:foodie_customer/ui/home/sections/banner_section.dart';
 import 'package:foodie_customer/ui/home/sections/bundle_deals_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
+import 'package:foodie_customer/ui/home/sections/promo_card.dart';
 
 import 'package:foodie_customer/model/bundle_model.dart';
 import 'package:foodie_customer/services/bundle_service.dart';
@@ -127,11 +128,21 @@ import 'package:foodie_customer/ui/home/more_stories_screen.dart';
 import 'package:foodie_customer/ui/orderHistory/order_history_screen.dart';
 import 'package:foodie_customer/ui/dialogs/PostCompletionDialog.dart';
 import 'package:foodie_customer/userPrefrence.dart';
+import 'package:foodie_customer/utils/performance_logger.dart';
+import 'package:foodie_customer/services/home_screen_cache.dart';
+import 'package:foodie_customer/services/device_capability.dart';
 
 class HomeScreen extends StatefulWidget {
   final User? user;
+  final String? highlightMealPeriod;
+  final bool filterByMeal;
 
-  HomeScreen({Key? key, this.user}) : super(key: key);
+  HomeScreen({
+    Key? key,
+    this.user,
+    this.highlightMealPeriod,
+    this.filterByMeal = false,
+  }) : super(key: key);
 
   @override
   _HomeScreenState createState() => _HomeScreenState();
@@ -360,19 +371,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Additional timers and subscriptions that need cleanup
   Timer? _debounceTimer;
+  Timer? _bannerTimeoutTimer;
+  Timer? _restaurantStreamDebounceTimer;
+  List<VendorModel>? _pendingVendorEvent;
+  bool _isRefreshing = false;
   StreamSubscription? _connectivitySubscription;
 
   // ScrollController for home screen scroll detection (for lazy loading)
   final ScrollController _homeScrollController = ScrollController();
   static const double _scrollToTopThreshold = 500.0;
-  bool _showScrollToTop = false;
+  final ValueNotifier<bool> _showScrollToTopNotifier = ValueNotifier(false);
+  final ValueNotifier<bool> _hasLoadedDeferredSectionsNotifier =
+      ValueNotifier(false);
+
   void _onHomeScroll() {
     if (!_homeScrollController.hasClients) return;
     final double offset = _homeScrollController.offset;
     final bool show = offset > _scrollToTopThreshold;
-    if (show != _showScrollToTop && mounted && !_isLeavingHome) {
-      _showScrollToTop = show;
-      _updateState();
+    final bool shouldLoadDeferred =
+        offset > 500 && !_hasLoadedDeferredSectionsNotifier.value;
+    if (!mounted || _isLeavingHome) return;
+    if (show != _showScrollToTopNotifier.value) {
+      _showScrollToTopNotifier.value = show;
+    }
+    if (shouldLoadDeferred) {
+      _hasLoadedDeferredSectionsNotifier.value = true;
     }
   }
 
@@ -423,6 +446,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool isHomeBannerLoading = true;
   bool isHomeBannerError = false;
+  bool _isLoadingBanner = false;
+  int _bannerLoadCount = 0;
 
   bool isHomeBannerMiddleLoading = true;
   bool isPromosError = false;
@@ -611,13 +636,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final cacheManager = DefaultCacheManager();
 
-      // Download all images in parallel
+      // Download all images in parallel with per-image timeout
       final results = await Future.wait(
         validBanners.map((banner) async {
           try {
             final imageUrl = banner.photo!;
-            // getSingleFile automatically checks cache first and downloads if needed
-            final file = await cacheManager.getSingleFile(imageUrl);
+            final file = await withTimeout(
+              cacheManager.getSingleFile(imageUrl),
+              timeout: const Duration(seconds: 5),
+            );
             return MapEntry(imageUrl, file);
           } catch (e) {
             return null;
@@ -827,50 +854,43 @@ class _HomeScreenState extends State<HomeScreen> {
     _setDefaultAddressIfNeeded();
   }
 
-  /// Load heavy operations that can wait
-  /// Staggered sequential loading to reduce memory/GC pressure
+  /// Load heavy operations in parallel (products first, then banners + restaurants)
   Future<void> _loadSecondaryData() async {
-    // Phase 1: Load products first (needed for order again)
+    _cachedCuisinesFuture ??= fireStoreUtils.getCuisines();
+    // Phase 1: Load products first (needed for order again and meal for one)
     await fetchAllProducts();
     if (!mounted || _isLeavingHome) return;
 
-    // Phase 2: Wait 300ms, then load banners
-    await Future.delayed(const Duration(milliseconds: 300));
-    if (mounted && !_isLeavingHome) {
-      await getBanner();
-    }
+    // Phase 2: Load banners, restaurant data, and fallback in parallel
+    await Future.wait<void>([
+      getBanner(),
+      getData(),
+      _loadMostRatedRestaurantsFallback(),
+    ]);
     if (!mounted || _isLeavingHome) return;
 
-    // Phase 3: Wait another 300ms, then start restaurant stream
-    await Future.delayed(const Duration(milliseconds: 300));
-    if (mounted && !_isLeavingHome) {
-      await getData();
-    }
-    if (!mounted || _isLeavingHome) return;
-
-    // Phase 4: Wait another 300ms, then setup completion dialog listener
-    await Future.delayed(const Duration(milliseconds: 300));
-    if (mounted && !_isLeavingHome) {
-      _setupCompletionDialogListener();
-    }
-
-    // Phase 5: Load promos (lightweight, can run independently)
-    if (mounted && !_isLeavingHome) {
-      _loadActivePromos(); // Don't await - let it run independently
+    _setupCompletionDialogListener();
+    try {
+      await withTimeout(
+        _loadActivePromos(),
+        timeout: const Duration(seconds: 10),
+      );
+    } catch (e) {
+      debugPrint('[PROMO] Load failed or timed out: $e');
+      if (mounted && !_isLeavingHome) {
+        _updateState(callback: () {
+          isLoadingPromos = false;
+          isPromosError = true;
+        });
+      }
     }
 
-    // Initialize cuisine future once
-    _cachedCuisinesFuture = fireStoreUtils.getCuisines();
-
-    // Initialize new arrival stream once
+    // Initialize cached streams/futures once
+    _cachedCuisinesFuture ??= fireStoreUtils.getCuisines();
     _cachedNewArrivalStream =
         fireStoreUtils.getVendorsForNewArrival().asBroadcastStream();
-    // Newest restaurants by createdAt for "New Restaurants" section
     _cachedNewestRestaurantsStream =
         fireStoreUtils.getNewestRestaurantsStream(limit: 15).asBroadcastStream();
-    await _loadMostRatedRestaurantsFallback();
-
-    // Initialize stories future once
     _cachedStoriesFuture = FireStoreUtils().getStory();
   }
 
@@ -888,9 +908,56 @@ class _HomeScreenState extends State<HomeScreen> {
     _updateState();
   }
 
+  Future<void> _retryPopularTodaySection() async {
+    if (!mounted || _isLeavingHome || allProducts.isEmpty) return;
+    _updateState(callback: () {
+      _popularTodayError = false;
+      _isLoadingPopularToday = true;
+    });
+    try {
+      await _loadPopularToday(allProducts);
+    } finally {
+      if (mounted) {
+        _updateState(callback: () => _isLoadingPopularToday = false);
+      }
+    }
+  }
+
+  Future<void> _retryNearbyFoodsSection() async {
+    if (!mounted || _isLeavingHome || allProducts.isEmpty) return;
+    _updateState(callback: () => _nearbyFoodsError = false);
+    _didRunNearbyFallback = false;
+    await _runNearbyFoodsFallback(allProducts, trigger: 'retry');
+  }
+
+  void _startBannerTimeout() {
+    _bannerTimeoutTimer?.cancel();
+    _bannerTimeoutTimer = Timer(const Duration(seconds: 15), () {
+      if (mounted &&
+          (isHomeBannerLoading ||
+              isHomeBannerMiddleLoading ||
+              isLoadingPromos)) {
+        debugPrint('[BANNER] Force timeout - stopping loading indicators');
+        _updateState(callback: () {
+          isHomeBannerLoading = false;
+          isHomeBannerMiddleLoading = false;
+          isLoadingPromos = false;
+        });
+      }
+    });
+  }
+
   Future<void> _loadMostRatedRestaurantsFallback() async {
     if (!mounted || _isLeavingHome) return;
     try {
+      // Show cached vendors first for instant display
+      final cached = await HomeScreenCache.getCachedVendors();
+      if (cached != null && cached.isNotEmpty && mounted && !_isLeavingHome) {
+        _updateState(callback: () {
+          mostRatedRestaurantsFallback = List.from(cached);
+        });
+      }
+
       final vendorsFallback = await fireStoreUtils.getVendors();
       vendorsFallback.sort((a, b) {
         final double ratingA =
@@ -906,6 +973,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _updateState(callback: () {
         mostRatedRestaurantsFallback = vendorsFallback;
       });
+      HomeScreenCache.cacheVendors(vendorsFallback);
     } catch (e) {
     }
   }
@@ -915,6 +983,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadActivePromos() async {
     if (!mounted || _isLeavingHome) return;
 
+    debugPrint('[PROMO] Starting _loadActivePromos');
     _updateState(callback: () {
       isLoadingPromos = true;
       isPromosError = false;
@@ -922,6 +991,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final coupons = await CouponService.getActiveCoupons(null);
+      debugPrint('[PROMO] Loaded ${coupons.length} coupons');
       if (mounted && !_isLeavingHome) {
         _updateState(callback: () {
           activePromos = coupons;
@@ -931,11 +1001,35 @@ class _HomeScreenState extends State<HomeScreen> {
         _rebuildComputationCaches();
       }
     } catch (e) {
+      debugPrint('[PROMO] Error: $e');
       if (mounted && !_isLeavingHome) {
         _updateState(callback: () {
           isLoadingPromos = false;
           isPromosError = true;
         });
+      }
+    }
+  }
+
+  void _populateOfferVendorLists() {
+    offerVendorList.clear();
+    offersList.clear();
+    final now = DateTime.now();
+    for (final coupon in offerList) {
+      if (coupon.expireOfferDate != null &&
+          coupon.expireOfferDate!.toDate().isBefore(now)) {
+        continue;
+      }
+      VendorModel? vendor;
+      for (final v in vendors) {
+        if (v.id == coupon.restaurantId) {
+          vendor = v;
+          break;
+        }
+      }
+      if (vendor != null) {
+        offersList.add(coupon);
+        offerVendorList.add(vendor);
       }
     }
   }
@@ -1001,13 +1095,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _refreshHomeData() async {
-    if (!mounted || _isLeavingHome) return;
+    if (_isRefreshing || !mounted || _isLeavingHome) return;
+    _isRefreshing = true;
 
     try {
-      // Run independent operations in parallel
       await Future.wait<void>([
         getBanner(),
-        fetchAllProducts(), // Already calls fetchOrderAgainProducts & fetchMealForOneProducts internally
+        fetchAllProducts(),
         getData(),
       ]);
     } catch (e) {
@@ -1019,25 +1113,55 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         );
       }
+    } finally {
+      if (mounted) {
+        _isRefreshing = false;
+        _updateState(callback: () {});
+      }
     }
   }
 
   getBanner() async {
-    if (!mounted || _isLeavingHome) return;
+    if (_isLoadingBanner) {
+      debugPrint('[BANNER] Load already in progress, skipping duplicate call');
+      return;
+    }
+    if (!mounted || _isLeavingHome) {
+      _updateState(callback: () {
+        isHomeBannerLoading = false;
+        isHomeBannerMiddleLoading = false;
+      });
+      return;
+    }
+    _isLoadingBanner = true;
+    PerformanceLogger.start('getBanner');
     _updateState(callback: () {
       isHomeBannerError = false;
     });
     try {
+      _bannerLoadCount++;
+      debugPrint('[BANNER] Load #$_bannerLoadCount started');
+      _startBannerTimeout();
       // Run all banner/category/offer fetches in parallel
-      final results = await Future.wait([
-        fireStoreUtils.getHomeTopBanner(),
-        fireStoreUtils.getHomePageShowCategory(),
-        fireStoreUtils.getHomeMiddleBanner(),
-        FireStoreUtils().getPublicCoupons(),
-        FirebaseFirestore.instance.collection(Setting).doc('story').get(),
-      ]);
+      final results = await withTimeout(
+        Future.wait([
+          fireStoreUtils.getHomeTopBanner(),
+          fireStoreUtils.getHomePageShowCategory(),
+          fireStoreUtils.getHomeMiddleBanner(),
+          FireStoreUtils().getPublicCoupons(),
+          FirebaseFirestore.instance.collection(Setting).doc('story').get(),
+        ]),
+        timeout: const Duration(seconds: 10),
+      );
+      debugPrint(
+          '[BANNER] Queries done: top=${(results[0] as List).length} '
+          'middle=${(results[2] as List).length} coupons=${(results[3] as List).length}');
 
       if (!mounted || _isLeavingHome) {
+        _updateState(callback: () {
+          isHomeBannerLoading = false;
+          isHomeBannerMiddleLoading = false;
+        });
         return;
       }
 
@@ -1058,6 +1182,7 @@ class _HomeScreenState extends State<HomeScreen> {
         isHomeBannerMiddleLoading = false;
 
         offerList = results[3] as List<OfferModel>;
+        _populateOfferVendorLists();
 
         final storyDoc = results[4] as DocumentSnapshot<Map<String, dynamic>>;
         storyEnable = storyDoc.data()?['isEnabled'] as bool? ?? false;
@@ -1068,28 +1193,41 @@ class _HomeScreenState extends State<HomeScreen> {
         await _downloadAndCacheBannerImages();
 
         if (mounted && !_isLeavingHome) {
+          _bannerTimeoutTimer?.cancel();
+          debugPrint('[BANNER] Setting loading=false');
           _updateState(callback: () {
             isHomeBannerLoading = false;
           });
         }
       } else {
         if (mounted) {
+          _bannerTimeoutTimer?.cancel();
           _updateState(callback: () {
             isHomeBannerLoading = false;
           });
         }
       }
+      PerformanceLogger.end('getBanner');
     } catch (e) {
+      PerformanceLogger.end('getBanner');
+      debugPrint('[BANNER] Error: $e');
+      _bannerTimeoutTimer?.cancel();
       if (!mounted || _isLeavingHome) return;
       _updateState(callback: () {
         isHomeBannerLoading = false;
         isHomeBannerError = true;
       });
+    } finally {
+      _isLoadingBanner = false;
     }
   }
 
   Future<void> fetchAllProducts() async {
-    List<ProductModel> products = await fireStoreUtils.fetchAllProducts();
+    PerformanceLogger.start('fetchAllProducts');
+    final limit = await DeviceCapability.getInitialProductLimit();
+    List<ProductModel> products =
+        await fireStoreUtils.getHomeScreenProducts(limit: limit);
+    PerformanceLogger.end('fetchAllProducts', itemCount: products.length);
     if (!mounted || _isLeavingHome) return;
     _updateState(callback: () {
       allProducts = products; // Populate global product list
@@ -1907,22 +2045,27 @@ class _HomeScreenState extends State<HomeScreen> {
                       homeContent: RefreshIndicator(
                         onRefresh: _refreshHomeData,
                         color: Color(COLOR_PRIMARY),
-                        child: SingleChildScrollView(
+                        child: CustomScrollView(
                           controller: _homeScrollController,
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      child: Container(
-                        color: isDark
-                            ? const Color.fromARGB(255, 212, 197, 128)
-                            : const Color(0xffFFFFFF),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (MyAppState.selectedPosition.usesDefaultLocation)
-                              DefaultLocationBanner(
-                                onSetLocationTap: () =>
-                                    showLocationOptionsBottomSheet(context),
-                              ),
-                            HomeHeaderSection(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: Container(
+                                color: isDark
+                                    ? const Color.fromARGB(255, 212, 197, 128)
+                                    : const Color(0xffFFFFFF),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (MyAppState.selectedPosition
+                                        .usesDefaultLocation)
+                                      DefaultLocationBanner(
+                                        onSetLocationTap: () =>
+                                            showLocationOptionsBottomSheet(
+                                                context),
+                                      ),
+                                    HomeHeaderSection(
                               selctedOrderTypeValue: selctedOrderTypeValue,
                               rotatingHints: rotatingHints,
                               onOrderTypeChanged: _handleOrderTypeChanged,
@@ -2008,11 +2151,25 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       ? 10
                                                       : activePromos.length,
                                               itemBuilder: (context, index) {
-                                                return _buildPromoCard(
-                                                    context,
-                                                    activePromos[index],
-                                                    isDark,
-                                                    screenWidth);
+                                                final coupon =
+                                                    activePromos[index];
+                                                final vendor = coupon
+                                                            .restaurantId !=
+                                                        null
+                                                    ? (_cachedVendorMap?[
+                                                        coupon.restaurantId])
+                                                    : null;
+                                                return PromoCard(
+                                                  key: ValueKey(
+                                                    coupon.offerId ??
+                                                        'promo_$index',
+                                                  ),
+                                                  coupon: coupon,
+                                                  isDark: isDark,
+                                                  screenWidth: screenWidth,
+                                                  vendor: vendor,
+                                                  index: index,
+                                                );
                                               },
                                             ),
                                           ),
@@ -2038,7 +2195,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 vendors: popularTodayVendors,
                                 isLoading: _isLoadingPopularToday,
                                 hasError: _popularTodayError,
-                                onRetry: _refreshHomeData,
+                                onRetry: _retryPopularTodaySection,
                               ),
                             ),
 
@@ -2049,7 +2206,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 isLoading: lstNearByFood.isEmpty &&
                                     !_hasReceivedVendorData,
                                 hasError: _nearbyFoodsError,
-                                onRetry: _refreshHomeData,
+                                onRetry: _retryNearbyFoodsSection,
                               ),
                             ),
 
@@ -2105,42 +2262,51 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ],
                               ),
 
-                            RepaintBoundary(
-                              child: TrendingNowSection(
-                                allProducts: allProducts,
-                                lstFav: lstFav,
-                                onFavoriteChanged: _onFavoriteChanged,
-                              ),
-                            ),
-
-                            RepaintBoundary(
-                              child: TimeBasedSection(
-                                allProducts: allProducts,
-                                lstFav: lstFav,
-                                onFavoriteChanged: _onFavoriteChanged,
-                              ),
-                            ),
-
-                            RepaintBoundary(
-                              child: PersonalizedRecommendationsSection(
-                                allProducts: allProducts,
-                                offerList: offerList,
-                                currencyModel: currencyModel,
-                              ),
-                            ),
-
-                            // Meal for One • Sulit price Section
-                            RepaintBoundary(
-                              child: MealForOneSection(
-                                mealForOneProducts: mealForOneProducts,
-                                vendors: mealForOneVendors.isNotEmpty
-                                    ? mealForOneVendors
-                                    : vendors,
-                                allProducts: allProducts,
-                                isLoadingMealForOne: isLoadingMealForOne,
-                                hasError: mealForOneError,
-                                onRetry: fetchMealForOneProducts,
-                              ),
+                            ValueListenableBuilder<bool>(
+                              valueListenable: _hasLoadedDeferredSectionsNotifier,
+                              builder: (context, hasLoaded, child) {
+                                if (!hasLoaded) return const SizedBox.shrink();
+                                return Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    RepaintBoundary(
+                                      child: TrendingNowSection(
+                                        allProducts: allProducts,
+                                        lstFav: lstFav,
+                                        onFavoriteChanged: _onFavoriteChanged,
+                                      ),
+                                    ),
+                                    RepaintBoundary(
+                                      child: TimeBasedSection(
+                                        allProducts: allProducts,
+                                        lstFav: lstFav,
+                                        onFavoriteChanged: _onFavoriteChanged,
+                                        highlightMealPeriod:
+                                            widget.highlightMealPeriod,
+                                      ),
+                                    ),
+                                    RepaintBoundary(
+                                      child: PersonalizedRecommendationsSection(
+                                        allProducts: allProducts,
+                                        offerList: offerList,
+                                        currencyModel: currencyModel,
+                                      ),
+                                    ),
+                                    RepaintBoundary(
+                                      child: MealForOneSection(
+                                        mealForOneProducts: mealForOneProducts,
+                                        vendors: mealForOneVendors.isNotEmpty
+                                            ? mealForOneVendors
+                                            : vendors,
+                                        allProducts: allProducts,
+                                        isLoadingMealForOne: isLoadingMealForOne,
+                                        hasError: mealForOneError,
+                                        onRetry: fetchMealForOneProducts,
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
                             ),
 
                             RepaintBoundary(
@@ -2218,35 +2384,41 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     ),
-                  ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 16,
+            right: 16,
+            child: ValueListenableBuilder<bool>(
+              valueListenable: _showScrollToTopNotifier,
+              builder: (context, show, child) => AnimatedOpacity(
+                opacity: show ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 200),
+                child: IgnorePointer(
+                  ignoring: !show,
+                  child: child,
                 ),
-                    Positioned(
-                      bottom: 16,
-                      right: 16,
-                      child: AnimatedOpacity(
-                        opacity: _showScrollToTop ? 1.0 : 0.0,
-                        duration: const Duration(milliseconds: 200),
-                        child: IgnorePointer(
-                          ignoring: !_showScrollToTop,
-                          child: FloatingActionButton(
-                            mini: true,
-                            backgroundColor: Color(COLOR_PRIMARY),
-                            onPressed: () {
-                              if (_homeScrollController.hasClients) {
-                                _homeScrollController.animateTo(
-                                  0,
-                                  duration: const Duration(milliseconds: 400),
-                                  curve: Curves.easeOut,
-                                );
-                              }
-                            },
-                            child: const Icon(Icons.arrow_upward),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              ),
+              child: FloatingActionButton(
+                mini: true,
+                backgroundColor: Color(COLOR_PRIMARY),
+                onPressed: () {
+                  if (_homeScrollController.hasClients) {
+                    _homeScrollController.animateTo(
+                      0,
+                      duration: const Duration(milliseconds: 400),
+                      curve: Curves.easeOut,
+                    );
+                  }
+                },
+                child: const Icon(Icons.arrow_upward),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -3186,6 +3358,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _completionDialogStreamSubscription?.cancel();
     _restaurantStreamSubscription?.cancel();
     _debounceTimer?.cancel();
+    _bannerTimeoutTimer?.cancel();
+    _restaurantStreamDebounceTimer?.cancel();
     _setStateDebounceTimer?.cancel();
     _pendingStateUpdate = false;
     _connectivitySubscription?.cancel();
@@ -3208,6 +3382,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Cancel any other streams that might be running
     lstAllRestaurant = null;
+
+    _showScrollToTopNotifier.dispose();
+    _hasLoadedDeferredSectionsNotifier.dispose();
 
     super.dispose();
   }
@@ -3759,129 +3936,6 @@ class _HomeScreenState extends State<HomeScreen> {
           );
   }
 
-  Widget _buildPromoCard(BuildContext context, OfferModel coupon, bool isDark,
-      double screenWidth) {
-    final discountText = coupon.offerId != null
-        ? (_cachedDiscountTexts[coupon.offerId!] ?? '')
-        : '';
-
-    // Look up vendor if restaurantId is available
-    VendorModel? vendor;
-    if (coupon.restaurantId != null && _cachedVendorMap != null) {
-      vendor = _cachedVendorMap![coupon.restaurantId];
-    }
-
-    return GestureDetector(
-      onTap: () {
-        push(context, PromosScreen());
-      },
-      child: Container(
-        width: screenWidth * 0.32,
-        margin: const EdgeInsets.only(right: 12, bottom: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Image section with restaurant logo
-            Stack(
-              children: [
-                // Main promo image
-                Container(
-                  height: 170,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: isDark
-                          ? const Color(DarkContainerBorderColor)
-                          : Colors.grey.shade200,
-                      width: 1,
-                    ),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: CachedNetworkImage(
-                      imageUrl: getImageVAlidUrl(coupon.imageOffer ?? ''),
-                      memCacheWidth: (screenWidth * 0.35).round(),
-                      memCacheHeight: 340,
-                      maxWidthDiskCache: 600,
-                      maxHeightDiskCache: 600,
-                      fit: BoxFit.cover,
-                      placeholder: (context, url) => Center(
-                        child: CircularProgressIndicator.adaptive(
-                          valueColor:
-                              AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
-                        ),
-                      ),
-                      errorWidget: (context, url, error) => Container(
-                        color: Colors.grey.shade100,
-                        child: Icon(
-                          Icons.local_offer,
-                          color: Colors.grey.shade400,
-                          size: 40,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                // Restaurant logo overlay (only if vendor is found)
-                if (vendor != null)
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: Container(
-                      width: 24,
-                      height: 24,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: CachedNetworkImage(
-                          imageUrl: getImageVAlidUrl(vendor.photo),
-                          memCacheWidth: 48,
-                          memCacheHeight: 48,
-                          maxWidthDiskCache: 200,
-                          maxHeightDiskCache: 200,
-                          fit: BoxFit.cover,
-                          errorWidget: (context, error, stackTrace) => Icon(
-                            Icons.restaurant,
-                            size: 16,
-                            color: Color(COLOR_PRIMARY),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            // Restaurant name (only if vendor is found)
-            if (vendor != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                vendor.title,
-                style: TextStyle(
-                  fontFamily: "Poppinsm",
-                  fontSize: 12,
-                  color: isDark ? Colors.white70 : Colors.grey.shade600,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
   String _getPromoDiscountText(OfferModel coupon) {
     if (coupon.discount == null || coupon.discountType == null) {
       return '';
@@ -4273,29 +4327,39 @@ class _HomeScreenState extends State<HomeScreen> {
 
       _restaurantStreamSubscription = lstAllRestaurant?.listen(
         (event) {
-          // Skip if already processing or disposed
-          if (_isProcessingRestaurants || !mounted || _isLeavingHome) return;
-          _isProcessingRestaurants = true;
-          _hasReceivedVendorData = true;
-          _topRestaurantsError = false;
+          _pendingVendorEvent = List<VendorModel>.from(event);
+          _restaurantStreamDebounceTimer?.cancel();
+          _restaurantStreamDebounceTimer = Timer(
+            const Duration(milliseconds: 300),
+            () {
+              final eventToProcess = _pendingVendorEvent;
+              _pendingVendorEvent = null;
+              _restaurantStreamDebounceTimer = null;
+              if (eventToProcess == null || !mounted || _isLeavingHome) return;
+              if (_isProcessingRestaurants) return;
+              _isProcessingRestaurants = true;
+              _hasReceivedVendorData = true;
+              _topRestaurantsError = false;
 
-          try {
-            vendors
-              ..clear()
-              ..addAll(event);
+              try {
+                final event = eventToProcess;
+                vendors
+                  ..clear()
+                  ..addAll(event);
 
-            nearbyFoodVendors
-              ..clear()
-              ..addAll(event);
+                nearbyFoodVendors
+                  ..clear()
+                  ..addAll(event);
 
-            allstoreList
-              ..clear()
-              ..addAll(event);
+                allstoreList
+                  ..clear()
+                  ..addAll(event);
 
-            // Rebuild caches after vendors update
-            _rebuildComputationCaches();
+                // Rebuild caches after vendors update
+                _rebuildComputationCaches();
+                _populateOfferVendorLists();
 
-            productsFuture.then((value) async {
+                productsFuture.then((value) async {
               // Safety check: don't process if widget is disposed
               if (!mounted || _isLeavingHome) return;
 
@@ -4426,10 +4490,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 _updateState();
               }
             });
-          } finally {
-            _isProcessingRestaurants = false;
-          }
-        },
+              } finally {
+                _isProcessingRestaurants = false;
+              }
+            });
+          },
         onDone: () {
           productsFuture.then((value) async {
             if (!mounted || _isLeavingHome) return;

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
@@ -6,6 +8,7 @@ import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/model/User.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
+import 'package:foodie_restaurant/services/timezone_service.dart';
 import 'package:foodie_restaurant/services/helper.dart';
 import 'package:foodie_restaurant/ui/container/ContainerScreen.dart';
 import 'package:foodie_restaurant/ui/resetPasswordScreen/ResetPasswordScreen.dart';
@@ -465,7 +468,14 @@ class _LoginScreen extends State<LoginScreen> {
     if (result != null && result is User && result.role == 'vendor') {
       if (result.active == true) {
         await FireStoreUtils.updateCurrentUser(result);
-
+        if (result.fcmToken.isNotEmpty) {
+          await FireStoreUtils.addFcmTokenToArray(
+            result.userID,
+            result.fcmToken,
+            vendorId: result.vendorID.isEmpty ? null : result.vendorID,
+          );
+        }
+        unawaited(TimezoneService.updateUserTimezone());
         pushAndRemoveUntil(context, ContainerScreen(user: result), false);
       } else {
         showAlertDialog(context, "accountDisabledContactAdmin".tr(), "", true);

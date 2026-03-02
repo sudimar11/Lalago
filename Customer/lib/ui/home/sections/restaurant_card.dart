@@ -13,6 +13,8 @@ import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/offer_model.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/widgets/performance_badge.dart';
@@ -25,6 +27,8 @@ class RestaurantCard extends StatelessWidget {
   final String? source;
   final int? position;
   final String? recommendationReason;
+  final bool showFeedbackButtons;
+  final void Function(String feedback)? onFeedback;
 
   const RestaurantCard({
     Key? key,
@@ -35,6 +39,8 @@ class RestaurantCard extends StatelessWidget {
     this.source,
     this.position,
     this.recommendationReason,
+    this.showFeedbackButtons = false,
+    this.onFeedback,
   }) : super(key: key);
 
   @override
@@ -327,7 +333,43 @@ class RestaurantCard extends StatelessWidget {
                                 )),
                           ],
                         ),
-                      )
+                      ),
+                      if (showFeedbackButtons && onFeedback != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8.0),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.thumb_up_outlined, size: 18),
+                                constraints: const BoxConstraints(
+                                  minWidth: 32,
+                                  minHeight: 32,
+                                ),
+                                padding: EdgeInsets.zero,
+                                onPressed: () => onFeedback!('like'),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.thumb_down_outlined, size: 18),
+                                constraints: const BoxConstraints(
+                                  minWidth: 32,
+                                  minHeight: 32,
+                                ),
+                                padding: EdgeInsets.zero,
+                                onPressed: () => onFeedback!('dislike'),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.close, size: 18),
+                                constraints: const BoxConstraints(
+                                  minWidth: 32,
+                                  minHeight: 32,
+                                ),
+                                padding: EdgeInsets.zero,
+                                onPressed: () => onFeedback!('dismiss'),
+                              ),
+                            ],
+                          ),
+                        ),
                     ],
                   ),
                 )

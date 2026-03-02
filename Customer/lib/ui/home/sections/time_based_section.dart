@@ -11,12 +11,14 @@ class TimeBasedSection extends StatelessWidget {
   final List<ProductModel> allProducts;
   final List<String> lstFav;
   final VoidCallback onFavoriteChanged;
+  final String? highlightMealPeriod;
 
   const TimeBasedSection({
     super.key,
     required this.allProducts,
     required this.lstFav,
     required this.onFavoriteChanged,
+    this.highlightMealPeriod,
   });
 
   static String _mealTitle(String period) {

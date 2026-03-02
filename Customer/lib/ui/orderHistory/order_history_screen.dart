@@ -173,6 +173,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
         extras_price: product.extras_price ?? '0.0',
         extras: extrasString,
         variant_info: product.variant_info,
+        addedAt: product.addedAt,
       );
     } catch (e) {
       return null;

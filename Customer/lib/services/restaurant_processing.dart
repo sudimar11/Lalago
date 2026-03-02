@@ -120,6 +120,49 @@ bool isCurrentDateInRange(DateTime startDate, DateTime endDate) {
   return currentDate.isAfter(startDate) && currentDate.isBefore(endDate);
 }
 
+/// Returns minutes until closing, or null if closed or not in a timeslot.
+int? getMinutesUntilClosing(Map<String, dynamic> vendorMap) {
+  try {
+    final VendorModel vendor = VendorModel.fromJson(vendorMap);
+    if (!vendor.reststatus) return null;
+
+    final now = DateTime.now();
+    final day = DateFormat('EEEE', 'en_US').format(now);
+    final date = DateFormat('dd-MM-yyyy').format(now);
+
+    for (var workingHour in vendor.workingHours) {
+      if (day != workingHour.day.toString()) continue;
+      if (workingHour.timeslot == null || workingHour.timeslot!.isEmpty) continue;
+
+      for (var timeSlot in workingHour.timeslot!) {
+        final start = DateFormat("dd-MM-yyyy HH:mm")
+            .parse(date + " " + timeSlot.from.toString());
+        final end = DateFormat("dd-MM-yyyy HH:mm")
+            .parse(date + " " + timeSlot.to.toString());
+
+        if (isCurrentDateInRange(start, end)) {
+          final minutes = end.difference(now).inMinutes;
+          return minutes > 0 ? minutes : 0;
+        }
+      }
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/// Returns true if the restaurant is open and closes within the given duration.
+bool isRestaurantClosingSoon(
+  Map<String, dynamic> vendorMap,
+  Duration within,
+) {
+  if (!checkRestaurantOpen(vendorMap)) return false;
+  final mins = getMinutesUntilClosing(vendorMap);
+  if (mins == null) return false;
+  return mins <= within.inMinutes && mins >= 0;
+}
+
 /// Returns true if the restaurant is currently open (within working hours).
 bool isRestaurantOpenFromModel(VendorModel vendor) {
   try {

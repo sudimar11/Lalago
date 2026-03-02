@@ -34,12 +34,18 @@ import '../../resources/colors.dart';
 import 'photos.dart';
 import 'widgets/vendor_header_delegate.dart';
 import '../searchScreen/SearchScreen.dart';
+import 'package:foodie_customer/ui/orderHistory/order_history_screen.dart';
+import 'package:foodie_customer/services/reorder_service.dart';
 
 class NewVendorProductsScreen extends StatefulWidget {
   final VendorModel vendorModel;
+  final bool showReorderBanner;
 
-  const NewVendorProductsScreen({Key? key, required this.vendorModel})
-      : super(key: key);
+  const NewVendorProductsScreen({
+    Key? key,
+    required this.vendorModel,
+    this.showReorderBanner = false,
+  }) : super(key: key);
 
   @override
   State<NewVendorProductsScreen> createState() =>
@@ -167,6 +173,58 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
         const SnackBar(content: Text('Added to favorites')),
       );
     }
+  }
+
+  Widget _buildReorderBanner() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.restore, color: Colors.orange.shade700, size: 24),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Reorder from ${widget.vendorModel.title}?',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: Colors.orange.shade900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tap to see your previous items',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.orange.shade800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: () => push(context, const OrderHistoryScreen()),
+            child: const Text('View'),
+          ),
+          TextButton(
+            onPressed: () => ReorderService.reorderFromVendor(
+              context,
+              widget.vendorModel.id,
+            ),
+            child: const Text('Reorder'),
+          ),
+        ],
+      ),
+    );
   }
 
   bool _shouldShowLowPerfWarning() {
@@ -554,6 +612,10 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
               visitorsThisWeek: _visitorsThisWeek),
           pinned: true,
         ),
+        if (widget.showReorderBanner)
+          SliverToBoxAdapter(
+            child: _buildReorderBanner(),
+          ),
         if (_shouldShowLowPerfWarning())
           SliverToBoxAdapter(
             child: _buildLowPerfWarningBanner(),

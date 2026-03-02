@@ -18,7 +18,8 @@ final List<FunctionDeclaration> aiToolDeclarations = [
   ),
   FunctionDeclaration(
     'add_products_to_cart',
-    'Add one or more products to the user\'s cart. Use product IDs from search results.',
+    'Add one or more products to the user\'s cart. Use product IDs from '
+    'search results. Never add items from a closed restaurant.',
     parameters: {
       'items': Schema.array(
         description: 'List of items to add, each with productId and quantity.',
@@ -32,6 +33,16 @@ final List<FunctionDeclaration> aiToolDeclarations = [
             ),
           },
         ),
+      ),
+    },
+  ),
+  FunctionDeclaration(
+    'check_restaurant_status',
+    'Check if a restaurant is currently open and accepting orders. Returns '
+    'open status, today\'s hours, and scheduling availability.',
+    parameters: {
+      'vendorId': Schema.string(
+        description: 'The ID of the restaurant (vendor) to check.',
       ),
     },
   ),
@@ -116,6 +127,33 @@ final List<FunctionDeclaration> aiToolDeclarations = [
     'Get today\'s most popular food items by order count. '
     'Use when user asks "what\'s popular", "popular today", "trending".',
     parameters: {},
+  ),
+  FunctionDeclaration(
+    'get_popular_items_at_restaurant',
+    'Get the most popular food items at a specific restaurant by order count. '
+    'Use when user asks "most popular at [restaurant]", "best sellers at '
+    '[restaurant]", "what\'s popular at [restaurant]". Pass vendorId if known '
+    'from search_restaurants, or restaurantName to look up the restaurant.',
+    parameters: {
+      'vendorId': Schema.string(
+        description: 'Restaurant ID from search_restaurants. Use if known.',
+        nullable: true,
+      ),
+      'restaurantName': Schema.string(
+        description: 'Restaurant name (e.g. "Coffee Cat Cafe"). '
+            'Used if vendorId not provided.',
+        nullable: true,
+      ),
+      'timeRange': Schema.string(
+        description: 'Time range: today, week, month, or all. Default: week.',
+        nullable: true,
+      ),
+      'limit': Schema.integer(
+        description: 'Max items to return. Default 10.',
+        nullable: true,
+      ),
+    },
+    optionalParameters: ['vendorId', 'restaurantName', 'timeRange', 'limit'],
   ),
   FunctionDeclaration(
     'check_delivery_deadline',

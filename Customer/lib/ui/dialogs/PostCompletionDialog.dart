@@ -242,6 +242,7 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
         quantity: product.quantity > 0 ? product.quantity : 1,
         extras: extrasString,
         variant_info: product.variant_info,
+        addedAt: product.addedAt,
       );
     } catch (e) {
       debugPrint("Error validating product: $e");

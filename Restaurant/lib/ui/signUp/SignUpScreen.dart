@@ -1252,7 +1252,11 @@ class _SignUpState extends State<SignUpScreen> {
 
                   .doc(result.vendorID)
 
-                  .update({"fcmToken": result.fcmToken});
+                  .update({
+                "fcmToken": result.fcmToken,
+                "fcmTokens": FieldValue.arrayUnion([result.fcmToken]),
+                "lastTokenUpdate": FieldValue.serverTimestamp(),
+              });
 
             }
 

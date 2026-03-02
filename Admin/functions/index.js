@@ -1,6 +1,22 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
+
+const TimezoneUtils = require('./timezoneUtils');
+const FrequencyManager = require('./frequencyManager');
+const { handlePaymentFailure } = require('./paymentFailureWebhook');
+const OrderRecoveryService = require('./orderRecoveryService');
+const ABTestingService = require('./abTesting');
+const EngagementAnalytics = require('./engagementAnalytics');
+const NotificationBuilder = require('./notificationBuilder');
+const AshNotificationBuilder = require('./ashNotificationBuilder');
+const { trackNotificationAction } = require('./notificationActionAnalytics');
+
+exports.trackNotificationAction = trackNotificationAction;
+
 // Lazy initialization functions - only called inside Cloud Functions
 function initializeAdmin() {
   if (!admin.apps.length) {
@@ -51,6 +67,74 @@ function handleCors(req, res) {
 }
 
 /**
+ * Shared helper: send FCM notification to a single token.
+ * Reused by sendIndividualNotification (HTTP) and testAshNotification (callable).
+ */
+async function _sendFcmToToken(token, title, body, data = {}, options = {}) {
+  const msgData = {
+    timestamp: Date.now().toString(),
+    ...Object.fromEntries(
+      Object.entries(data || {}).map(([k, v]) => [k, String(v)])
+    ),
+  };
+  if (options.deepLink) msgData.deepLink = String(options.deepLink);
+  const message = {
+    token,
+    notification: { title, body },
+    data: msgData,
+    android: {
+      priority: 'high',
+      notification: { sound: 'default' },
+    },
+    apns: {
+      payload: { aps: { sound: 'default' } },
+    },
+  };
+  if (options.imageUrl && typeof options.imageUrl === 'string' && options.imageUrl.trim()) {
+    message.notification.imageUrl = options.imageUrl.trim();
+  }
+  return await getMessaging().send(message);
+}
+
+/**
+ * Returns array of FCM tokens for a user. Prefers fcmTokens array,
+ * falls back to single fcmToken for backward compatibility.
+ */
+async function _getUserFcmTokens(db, userId) {
+  const doc = await db.collection('users').doc(userId).get();
+  if (!doc.exists) return [];
+  const data = doc.data() || {};
+  const arr = data.fcmTokens;
+  if (Array.isArray(arr) && arr.length > 0) {
+    return arr.filter(t => typeof t === 'string' && t.trim().length > 0).map(t => t.trim());
+  }
+  const single = data.fcmToken;
+  if (single && typeof single === 'string' && single.trim().length > 0) {
+    return [single.trim()];
+  }
+  return [];
+}
+
+/**
+ * Returns array of FCM tokens for a vendor. Prefers fcmTokens array,
+ * falls back to single fcmToken.
+ */
+async function _getVendorFcmTokens(db, vendorId) {
+  const doc = await db.collection('vendors').doc(vendorId).get();
+  if (!doc.exists) return [];
+  const data = doc.data() || {};
+  const arr = data.fcmTokens;
+  if (Array.isArray(arr) && arr.length > 0) {
+    return arr.filter(t => typeof t === 'string' && t.trim().length > 0).map(t => t.trim());
+  }
+  const single = data.fcmToken;
+  if (single && typeof single === 'string' && single.trim().length > 0) {
+    return [single.trim()];
+  }
+  return [];
+}
+
+/**
  * Firestore Trigger: Notify recipient when rider/restaurant sends quick message.
  * Triggered on order_messages/{orderId}/messages/{messageId} document create.
  */
@@ -72,32 +156,26 @@ exports.notifyOnOrderMessage = functions
       const vendorID = order.vendorID || order.vendor?.id || '';
       const driverID = order.driverID || '';
 
-      let token = '';
+      let tokens = [];
       let title = 'Order Message';
 
       if (senderType === 'rider') {
-        const vendorSnap = await db.collection('vendors').doc(vendorID).get();
-        token = vendorSnap.exists ? String(vendorSnap.data()?.fcmToken || '') : '';
+        tokens = await _getVendorFcmTokens(db, vendorID);
         title = 'Rider Message';
       } else if (senderType === 'restaurant') {
-        const driverSnap = await db.collection('users').doc(driverID).get();
-        token = driverSnap.exists ? String(driverSnap.data()?.fcmToken || '') : '';
+        tokens = await _getUserFcmTokens(db, driverID);
         title = 'Restaurant Message';
       }
 
-      if (!token) return null;
+      if (tokens.length === 0) return null;
 
-      await getMessaging().send({
-        token,
-        notification: {
-          title,
-          body: messageText.length > 100 ? messageText.substring(0, 97) + '...' : messageText,
-        },
-        data: {
-          type: 'order_message',
-          orderId: String(orderId),
-        },
-      });
+      const body = messageText.length > 100 ? messageText.substring(0, 97) + '...' : messageText;
+      const messagePayload = {
+        notification: { title, body },
+        data: { type: 'order_message', orderId: String(orderId) },
+      };
+      const multicastMessage = { ...messagePayload, tokens };
+      await getMessaging().sendEachForMulticast(multicastMessage);
     } catch (e) {
       console.error('[notifyOnOrderMessage] Error:', e);
     }
@@ -150,13 +228,10 @@ exports.notifyCustomerOnDriverChatMessage = functions
         return null;
       }
 
-      // Read customer token
-      const customerSnap = await db.collection('users').doc(customerId).get();
-      const customerToken = customerSnap.exists
-        ? customerSnap.data()?.fcmToken
-        : null;
+      // Read customer tokens (supports fcmTokens array and fcmToken fallback)
+      const customerTokens = await _getUserFcmTokens(db, customerId);
 
-      if (!customerToken) {
+      if (customerTokens.length === 0) {
         console.log(
           `[notifyCustomerOnDriverChatMessage] No FCM token for customer ${customerId}`
         );
@@ -210,8 +285,7 @@ exports.notifyCustomerOnDriverChatMessage = functions
         );
       }
 
-      const message = {
-        token: customerToken,
+      const messagePayload = {
         notification: {
           title: `New message from ${driverName}`,
           body: body,
@@ -239,9 +313,10 @@ exports.notifyCustomerOnDriverChatMessage = functions
         },
       };
 
-      const resp = await getMessaging().send(message);
+      const multicastMessage = { ...messagePayload, tokens: customerTokens };
+      const resp = await getMessaging().sendEachForMulticast(multicastMessage);
       console.log(
-        `[notifyCustomerOnDriverChatMessage] Sent FCM for order ${orderId}: ${resp}`
+        `[notifyCustomerOnDriverChatMessage] Sent FCM for order ${orderId}: ${resp.successCount}/${customerTokens.length}`
       );
       return null;
     } catch (error) {
@@ -1285,17 +1360,20 @@ async function _sendRestaurantNotificationBestEffort(orderData, orderId) {
   try {
     const token = String(orderData?.vendor?.fcmToken || '');
     if (!token) return;
-    await getMessaging().send({
-      token,
-      notification: {
-        title: orderData?.scheduleTime ? 'Scheduled Order Placed' : 'New Order',
-        body: 'A rider accepted an order. Please confirm within 5 minutes.',
-      },
-      data: {
-        type: 'new_order',
-        orderId: String(orderId),
-      },
-    });
+    const payload = { id: orderId, orderId, ...orderData };
+    if (orderData?.scheduleTime) {
+      payload.scheduleTime = orderData.scheduleTime;
+    }
+    const message = NotificationBuilder.buildOrderNotification(
+      payload,
+      'new_order',
+      { token, includeActions: true }
+    );
+    if (orderData?.scheduleTime) {
+      message.notification.title = 'Scheduled Order Placed';
+      message.notification.body = 'A rider accepted an order. Please confirm within 5 minutes.';
+    }
+    await getMessaging().send(message);
   } catch (e) {
     console.error('[RiderFirst] Failed to notify restaurant:', e);
   }
@@ -1347,19 +1425,13 @@ async function _sendPrepTimeReminder(orderId, orderData, minutesLeft) {
     }
     if (!token) return;
 
-    const shortId = orderId.length > 8 ? orderId.substring(0, 8) : orderId;
-    await getMessaging().send({
-      token,
-      notification: {
-        title: 'Preparation Time Almost Over',
-        body: `Order #${shortId} will be ready in ${minutesLeft} minutes. Please mark as ready.`,
-      },
-      data: {
-        type: 'prep_time_reminder',
-        orderId: String(orderId),
-        minutesLeft: String(minutesLeft),
-      },
-    });
+    const payload = { id: orderId, orderId, minutesLeft, ...orderData };
+    const message = NotificationBuilder.buildOrderNotification(
+      payload,
+      'prep_time_reminder',
+      { token, includeActions: true }
+    );
+    await getMessaging().send(message);
     console.log(`[AUTO_READY] Reminder sent to restaurant for order ${orderId}`);
   } catch (e) {
     console.error('[AUTO_READY] Error sending prep time reminder:', e);
@@ -1850,6 +1922,14 @@ exports.riderFirstDispatchOnUpdate = functions.firestore
         afterData,
         'Restaurant unavailable',
         'The restaurant could not confirm your order.'
+      );
+      const rejectionReason = String(
+        afterData.rejectionReason || 'restaurant_rejected'
+      );
+      await OrderRecoveryService.handleOrderFailure(
+        { id: orderId, ...afterData },
+        rejectionReason,
+        { reason: rejectionReason, rejectedBy: 'restaurant' }
       );
     }
     return null;
@@ -3750,6 +3830,8 @@ exports.autoCollectScheduled = functions.pubsub
  * POST body: { title: string, body: string }
  * Returns: { success: boolean, sentCount: number, errorCount: number, errors: array }
  */
+exports.handlePaymentFailure = handlePaymentFailure;
+
 exports.sendHappyHourNotifications = functions.region('us-central1').https.onRequest(async (req, res) => {
   try {
     if (handleCors(req, res)) {
@@ -4167,8 +4249,9 @@ exports.processNotificationJob = functions
     );
 
     try {
+      const db = getDb();
       // Fetch all active customers with FCM tokens
-      const usersSnapshot = await getDb()
+      const usersSnapshot = await db
         .collection('users')
         .where('role', '==', 'customer')
         .where('active', '==', true)
@@ -4176,11 +4259,8 @@ exports.processNotificationJob = functions
 
       const fcmTokens = [];
       for (const userDoc of usersSnapshot.docs) {
-        const userData = userDoc.data();
-        const fcmToken = userData.fcmToken;
-        if (fcmToken && typeof fcmToken === 'string' && fcmToken.trim().length > 0) {
-          fcmTokens.push(fcmToken.trim());
-        }
+        const tokens = await _getUserFcmTokens(db, userDoc.id);
+        fcmTokens.push(...tokens);
       }
 
       const totalUsers = fcmTokens.length;
@@ -4305,6 +4385,1751 @@ exports.processNotificationJob = functions
   });
 
 /**
+ * Scheduled: Process Ash scheduled notifications every minute.
+ * Reads pending ash_scheduled_notifications, sends FCM, logs to history, marks sent.
+ */
+exports.processAshScheduledNotifications = functions.pubsub
+  .schedule('* * * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async (context) => {
+    const now = admin.firestore.Timestamp.now();
+    const db = getDb();
+
+    const snapshot = await db.collection('ash_scheduled_notifications')
+      .where('status', '==', 'pending')
+      .where('scheduledFor', '<=', now)
+      .limit(500)
+      .get();
+
+    if (snapshot.empty) {
+      return null;
+    }
+
+    console.log(`[processAshScheduledNotifications] Processing ${snapshot.size} notifications`);
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      const userId = String(data.userId || '');
+      const title = String(data.title || '').trim();
+      const body = String(data.body || '').trim();
+      const type = String(data.type || '');
+      const payloadData = data.data && typeof data.data === 'object' ? data.data : {};
+
+      if (!userId || !title || !body) {
+        await doc.ref.update({
+          status: 'cancelled',
+          error: 'Missing userId, title, or body',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        continue;
+      }
+
+      try {
+        const tokens = await _getUserFcmTokens(db, userId);
+        if (tokens.length === 0) {
+          await doc.ref.update({
+            status: 'cancelled',
+            error: 'No FCM tokens for user',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          continue;
+        }
+
+        const notificationId = db.collection('ash_notification_history').doc().id;
+        const fcmData = {
+          type: type || 'ash_notification',
+          notificationId,
+          ...payloadData,
+          scheduled: 'true',
+        };
+        Object.keys(fcmData).forEach(k => { fcmData[k] = String(fcmData[k]); });
+
+        const messagePayload = {
+          notification: { title, body },
+          data: fcmData,
+          android: { priority: 'high', notification: { sound: 'default' } },
+          apns: { payload: { aps: { sound: 'default' } } },
+        };
+        const multicastMessage = { ...messagePayload, tokens };
+        const resp = await getMessaging().sendEachForMulticast(multicastMessage);
+
+        await db.collection('ash_notification_history').doc(notificationId).set({
+          userId,
+          type,
+          title,
+          body,
+          data: payloadData,
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+          openedAt: null,
+          actionTaken: null,
+        });
+
+        await doc.ref.update({
+          status: 'sent',
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        console.log(
+          `[processAshScheduledNotifications] Sent ${doc.id} to ${resp.successCount}/${tokens.length} devices`
+        );
+      } catch (e) {
+        console.error(`[processAshScheduledNotifications] Error for ${doc.id}:`, e);
+        await doc.ref.update({
+          status: 'failed',
+          error: String(e.message || e),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    return null;
+  });
+
+/**
+ * Scheduled: Send Ash reorder reminders hourly (timezone-aware).
+ * Runs every hour, sends at 10 AM user local time.
+ * Filters by settings.ashReorderReminders, respects quiet hours.
+ */
+exports.sendReorderReminders = functions
+  .region('us-central1')
+  .pubsub.schedule('0 * * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = admin.firestore.Timestamp.now();
+    const oneDayAgo = new Date();
+    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+    const oneDayAgoTs = admin.firestore.Timestamp.fromDate(oneDayAgo);
+
+    console.log('[sendReorderReminders] Checking for eligible users (timezone-aware)...');
+
+    const usersSnapshot = await db
+      .collection('users')
+      .where('reorderEligible', '==', true)
+      .where('lastOrderCompletedAt', '<=', oneDayAgoTs)
+      .limit(1000)
+      .get();
+
+    let sentCount = 0;
+
+    for (const userDoc of usersSnapshot.docs) {
+      const userData = userDoc.data();
+      const userId = userDoc.id;
+
+      if (userData.settings?.ashReorderReminders === false) continue;
+
+      const userTimezone = userData.timezone || 'Asia/Manila';
+      const userHour = TimezoneUtils.getCurrentHourInUserTimezone(userTimezone);
+      if (userHour !== 10) continue;
+
+      const settings = userData.settings || {};
+      if (settings.quietHoursEnabled) {
+        const quietStart = settings.quietHoursStart;
+        const quietEnd = settings.quietHoursEnd;
+        if (
+          quietStart !== undefined &&
+          quietEnd !== undefined &&
+          TimezoneUtils.isWithinQuietHours(userTimezone, quietStart, quietEnd, 10)
+        ) {
+          continue;
+        }
+      }
+
+      const canSend = await FrequencyManager.canSendNotification(userId, 'ash_reorder', db);
+      if (!canSend) continue;
+
+      const pref = userData.preferenceProfile || {};
+      const lastOrderVendorId = pref.lastOrderVendorId;
+      const lastOrderVendorName = pref.lastOrderVendorName || 'your favorite restaurant';
+      const lastOrderProducts = pref.lastOrderProducts || [];
+      const lastOrderedAt = pref.lastOrderedAt;
+
+      if (!lastOrderVendorId) continue;
+
+      const daysSinceLastOrder = lastOrderedAt
+        ? Math.round((now.toDate() - lastOrderedAt.toDate()) / (1000 * 60 * 60 * 24))
+        : 0;
+
+      const milestoneDays = [7, 14, 21, 28, 30];
+      if (!milestoneDays.includes(daysSinceLastOrder)) continue;
+
+      const productName = lastOrderProducts[0]?.name || null;
+      const notification = AshNotificationBuilder.buildAshNotification(
+        'reorder',
+        { ...userData, id: userId },
+        {
+          userId,
+          restaurantName: lastOrderVendorName,
+          vendorId: lastOrderVendorId,
+          daysSinceLastOrder,
+          productName,
+          lastOrderProducts,
+        }
+      );
+      const { title, body } = notification;
+
+      const tokens = await _getUserFcmTokens(db, userId);
+      if (tokens.length === 0) continue;
+
+      const fcmData = { ...notification.data };
+      Object.keys(fcmData).forEach((k) => { fcmData[k] = String(fcmData[k]); });
+
+      try {
+        const multicastMessage = {
+          notification: { title, body },
+          data: fcmData,
+          tokens,
+          android: { priority: 'high', notification: { sound: 'default' } },
+          apns: { payload: { aps: { sound: 'default' } } },
+        };
+        await getMessaging().sendEachForMulticast(multicastMessage);
+
+        await db.collection('ash_notification_history').doc(fcmData.notificationId).set({
+          userId,
+          type: 'ash_reorder',
+          title,
+          body,
+          data: {
+            vendorId: lastOrderVendorId,
+            vendorName: lastOrderVendorName,
+            daysSinceLastOrder,
+          },
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+          openedAt: null,
+          actionTaken: null,
+        });
+
+        sentCount++;
+        console.log(`[sendReorderReminders] Sent to user ${userId}`);
+      } catch (e) {
+        console.error(`[sendReorderReminders] Failed for user ${userId}:`, e);
+      }
+    }
+
+    console.log(`[sendReorderReminders] Complete. Sent: ${sentCount}`);
+    return null;
+  });
+
+/**
+ * Scheduled: Send Ash hunger break reminders at 8 AM, 12 PM, 6 PM.
+ * Uses HungerDetection to decide who gets reminders and generate content.
+ */
+exports.sendHungerReminders = functions
+  .region('us-central1')
+  .pubsub.schedule('0 8,12,18 * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentPeriod = HungerDetection.getMealPeriod(now);
+
+    console.log(`[sendHungerReminders] Checking at ${currentPeriod} (${currentHour}:00)...`);
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const thirtyDaysAgoTs = admin.firestore.Timestamp.fromDate(thirtyDaysAgo);
+
+    const usersSnapshot = await db
+      .collection('users')
+      .where('settings.ashHungerReminders', '==', true)
+      .where('reorderEligible', '==', true)
+      .where('lastOnlineTimestamp', '>=', thirtyDaysAgoTs)
+      .limit(500)
+      .get();
+
+    console.log(`[sendHungerReminders] Found ${usersSnapshot.size} eligible users`);
+
+    let sentCount = 0;
+
+    for (const userDoc of usersSnapshot.docs) {
+      const userData = userDoc.data();
+      const userId = userDoc.id;
+
+      const shouldSend = await HungerDetection.shouldSendHungerReminder(
+        db,
+        userId,
+        userData,
+        now
+      );
+
+      if (!shouldSend) continue;
+
+      const hungerContent = await HungerDetection.generateHungerContent(
+        db,
+        userId,
+        userData
+      );
+      const restaurantName =
+        hungerContent.suggestedRestaurant?.title || 'your favorite restaurant';
+      const productName = hungerContent.suggestedProduct?.name || null;
+      const notification = AshNotificationBuilder.buildAshNotification(
+        'hunger',
+        { ...userData, id: userId },
+        {
+          userId,
+          restaurantName,
+          productName,
+          suggestion: productName || 'something tasty',
+          mealPeriod: currentPeriod,
+        }
+      );
+
+      const tokens = await _getUserFcmTokens(db, userId);
+      if (tokens.length === 0) continue;
+
+      const fcmData = {
+        ...notification.data,
+        mealPeriod: String(currentPeriod),
+        hour: String(currentHour),
+      };
+      Object.keys(fcmData).forEach((k) => {
+        fcmData[k] = String(fcmData[k]);
+      });
+
+      try {
+        const multicastMessage = {
+          notification: {
+            title: notification.title,
+            body: notification.body,
+          },
+          data: fcmData,
+          tokens,
+          android: { priority: 'high', notification: { sound: 'default' } },
+          apns: { payload: { aps: { sound: 'default' } } },
+        };
+        await getMessaging().sendEachForMulticast(multicastMessage);
+
+        await db.collection('ash_notification_history').doc(fcmData.notificationId).set({
+          userId,
+          type: 'ash_hunger',
+          title: notification.title,
+          body: notification.body,
+          data: {
+            mealPeriod: currentPeriod,
+            hour: currentHour,
+            suggestedProduct: hungerContent.suggestedProduct || null,
+            suggestedRestaurant: hungerContent.suggestedRestaurant || null,
+          },
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+          openedAt: null,
+          actionTaken: null,
+        });
+
+        sentCount++;
+        console.log(`[sendHungerReminders] Sent to user ${userId}`);
+      } catch (e) {
+        console.error(`[sendHungerReminders] Failed for user ${userId}:`, e);
+      }
+    }
+
+    console.log(`[sendHungerReminders] Complete. Sent: ${sentCount}`);
+    return null;
+  });
+
+/**
+ * Scheduled: Process cart recovery - find abandoned carts, schedule reminders.
+ * Runs every 30 minutes. Carts abandoned 2+ hours get ash_cart reminder.
+ */
+exports.processCartRecovery = functions
+  .region('us-central1')
+  .pubsub.schedule('*/30 * * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = admin.firestore.Timestamp.now();
+    const twoHoursAgo = new Date();
+    twoHoursAgo.setHours(twoHoursAgo.getHours() - 2);
+    const twoHoursAgoTs = admin.firestore.Timestamp.fromDate(twoHoursAgo);
+
+    console.log('[processCartRecovery] Checking for abandoned carts...');
+
+    const cartsSnapshot = await db.collection('user_carts')
+      .where('itemCount', '>', 0)
+      .where('lastModified', '<=', twoHoursAgoTs)
+      .limit(500)
+      .get();
+
+    let reminderCount = 0;
+
+    for (const cartDoc of cartsSnapshot.docs) {
+      const cartData = cartDoc.data();
+      const userId = cartDoc.id;
+      const items = cartData.items || [];
+      const vendorGroups = cartData.vendorGroups || {};
+      const totalValue = cartData.totalValue || 0;
+
+      const userDoc = await db.collection('users').doc(userId).get();
+      if (!userDoc.exists) continue;
+
+      const userData = userDoc.data() || {};
+      const settings = userData.settings || {};
+      if (settings.ashCartReminders === false) continue;
+
+      const oneDayAgo = new Date();
+      oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+      const recentHistory = await db.collection('ash_notification_history')
+        .where('userId', '==', userId)
+        .where('type', '==', 'ash_cart')
+        .where('sentAt', '>=', admin.firestore.Timestamp.fromDate(oneDayAgo))
+        .limit(1)
+        .get();
+
+      if (!recentHistory.empty) continue;
+
+      const canSend = await FrequencyManager.canSendNotification(userId, 'ash_cart', db);
+      if (!canSend) continue;
+
+      const primaryVendorId = Object.keys(vendorGroups)[0] ||
+        (items[0]?.vendorId) || '';
+      let vendorName = 'your favorite restaurant';
+
+      if (primaryVendorId) {
+        const vendorDoc = await db.collection('vendors').doc(primaryVendorId).get();
+        if (vendorDoc.exists && vendorDoc.data()?.title) {
+          vendorName = vendorDoc.data().title;
+        }
+      }
+
+      const productNames = [...new Set(items.slice(0, 3).map(i => i.name).filter(Boolean))];
+      const itemCount = items.length;
+
+      const cartNotification = AshNotificationBuilder.buildAshNotification(
+        'cart',
+        { ...userData, id: userId },
+        {
+          userId,
+          restaurantName: vendorName,
+          itemCount,
+          productNames: productNames.join(', '),
+        }
+      );
+      let { title, body } = cartNotification;
+
+      const userTimezone = userData.timezone || 'Asia/Manila';
+      const userHour = TimezoneUtils.getCurrentHourInUserTimezone(userTimezone);
+      if (userHour >= 11 && userHour < 14) {
+        body += ' Perfect for lunch!';
+      } else if (userHour >= 18 && userHour < 21) {
+        body += ' Great for dinner!';
+      }
+
+      let quietStart;
+      let quietEnd;
+      if (settings.quietHoursEnabled) {
+        quietStart = settings.quietHoursStart;
+        quietEnd = settings.quietHoursEnd;
+      }
+      const scheduledFor = TimezoneUtils.getNextValidSendTime(
+        userTimezone, 10, quietStart, quietEnd
+      );
+
+      try {
+        await db.collection('ash_scheduled_notifications').add({
+          userId,
+          type: 'ash_cart',
+          title,
+          body,
+          data: {
+            vendorId: String(primaryVendorId),
+            vendorName: String(vendorName),
+            itemCount: String(itemCount),
+            totalValue: String(totalValue),
+            cartId: cartDoc.id,
+          },
+          scheduledFor: admin.firestore.Timestamp.fromDate(scheduledFor),
+          status: 'pending',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          timezone: userData.timezone || 'Asia/Manila',
+        });
+
+        await db.collection('cart_recovery_analytics').add({
+          userId,
+          cartValue: totalValue,
+          itemCount,
+          vendorCount: Object.keys(vendorGroups).length,
+          reminderType: 'ash_cart',
+          scheduledAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        reminderCount++;
+        console.log(`[processCartRecovery] Scheduled for user ${userId}`);
+      } catch (e) {
+        console.error(`[processCartRecovery] Error for ${userId}:`, e);
+      }
+    }
+
+    console.log(`[processCartRecovery] Complete. Scheduled: ${reminderCount}`);
+    return null;
+  });
+
+/**
+ * Scheduled: Clean up abandoned carts older than 7 days.
+ */
+exports.cleanupAbandonedCarts = functions
+  .region('us-central1')
+  .pubsub.schedule('0 0 * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const sevenDaysAgoTs = admin.firestore.Timestamp.fromDate(sevenDaysAgo);
+
+    console.log('[cleanupAbandonedCarts] Cleaning up old carts...');
+
+    const oldCarts = await db.collection('user_carts')
+      .where('lastModified', '<=', sevenDaysAgoTs)
+      .limit(500)
+      .get();
+
+    let deletedCount = 0;
+    const batch = db.batch();
+
+    for (const doc of oldCarts.docs) {
+      batch.delete(doc.ref);
+      deletedCount++;
+    }
+
+    if (deletedCount > 0) {
+      await batch.commit();
+    }
+
+    console.log(`[cleanupAbandonedCarts] Deleted: ${deletedCount}`);
+    return null;
+  });
+
+/**
+ * Scheduled: Update trending products every 6 hours.
+ * Aggregates order counts from last 24h, stores in trending_products collection.
+ */
+exports.updateTrendingProducts = functions
+  .region('us-central1')
+  .pubsub.schedule('0 */6 * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const oneDayAgo = new Date();
+    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+    const oneDayAgoTs = admin.firestore.Timestamp.fromDate(oneDayAgo);
+
+    const ordersSnapshot = await db
+      .collection('restaurant_orders')
+      .where('createdAt', '>=', oneDayAgoTs)
+      .where('status', 'in', ['Order Completed', 'order completed', 'completed', 'Completed'])
+      .get();
+
+    const productCounts = {};
+    for (const doc of ordersSnapshot.docs) {
+      const order = doc.data();
+      const vendorId = order.vendorID || order.vendor?.id || '';
+      const vendorName = order.vendor?.title || '';
+      const cuisine = (order.vendor?.categoryTitle || 'other').toString();
+      const products = order.products || [];
+      for (const product of products) {
+        const productId = (product.id || product['id'] || '').toString().split('~')[0];
+        if (!productId) continue;
+        if (!productCounts[productId]) {
+          productCounts[productId] = {
+            count: 0,
+            name: product.name || '',
+            vendorId,
+            vendorName,
+            cuisine,
+          };
+        }
+        productCounts[productId].count += product.quantity || 1;
+      }
+    }
+
+    const trending = Object.entries(productCounts)
+      .map(([productId, data]) => ({
+        productId,
+        name: data.name,
+        vendorId: data.vendorId,
+        vendorName: data.vendorName,
+        cuisine: data.cuisine,
+        orderCount: data.count,
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      }))
+      .sort((a, b) => b.orderCount - a.orderCount)
+      .slice(0, 100);
+
+    const batch = db.batch();
+    const oldSnap = await db.collection('trending_products').get();
+    oldSnap.docs.forEach((d) => batch.delete(d.ref));
+
+    trending.forEach((item) => {
+      const ref = db.collection('trending_products').doc(item.productId);
+      batch.set(ref, item);
+    });
+
+    await batch.commit();
+    console.log(`[updateTrendingProducts] Updated ${trending.length} trending products`);
+    return null;
+  });
+
+/**
+ * Scheduled: Update optimal send times from engagement analytics.
+ * Runs at 3 AM every Sunday.
+ */
+exports.updateOptimalSendTimes = functions
+  .region('us-central1')
+  .pubsub.schedule('0 3 * * 0')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    await EngagementAnalytics.batchUpdateOptimalTimes(db);
+    return null;
+  });
+
+/**
+ * Helper: Generate a personalized recommendation for a user.
+ */
+async function generateRecommendation(db, userId, mealPeriod, pref, favoriteProducts, favoriteRestaurants, cuisinePrefs) {
+  const types = [
+    'new_from_favorite_restaurant',
+    'item_similar_to_favorite',
+    'trending_in_favorite_cuisine',
+    'time_based_from_preferred_restaurant',
+    'popular_in_area',
+  ];
+
+  for (const type of types) {
+    try {
+      if (type === 'new_from_favorite_restaurant') {
+        for (const vendorId of (favoriteRestaurants || []).slice(0, 3)) {
+          const vendorDoc = await db.collection('vendors').doc(vendorId).get();
+          if (!vendorDoc.exists) continue;
+          const vendor = vendorDoc.data();
+          const fourteenDaysAgo = new Date();
+          fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+          try {
+            const newSnap = await db.collection('vendor_products')
+              .where('vendorID', '==', vendorId)
+              .where('publish', '==', true)
+              .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(fourteenDaysAgo))
+              .limit(5)
+              .get();
+            if (!newSnap.empty) {
+              const doc = newSnap.docs[0];
+              const product = doc.data();
+              return {
+                type: 'new_item',
+                title: `New at ${vendor.title}`,
+                body: `Try their new ${product.name || 'item'} – just added!`,
+                vendorId,
+                productId: doc.id,
+                reason: 'new_item',
+              };
+            }
+          } catch (_) { /* createdAt may not exist, skip */ }
+        }
+      } else if (type === 'item_similar_to_favorite' && favoriteProducts && favoriteProducts.length > 0) {
+        const fav = favoriteProducts[Math.floor(Math.random() * Math.min(3, favoriteProducts.length))];
+        const favId = fav.id || fav;
+        const candidates = [];
+        try {
+          const q1 = await db.collection('item_similarities')
+            .where('item1', '==', favId)
+            .orderBy('similarity', 'desc')
+            .limit(3)
+            .get();
+          q1.docs.forEach((d) => {
+            const d_ = d.data();
+            candidates.push({ similarity: d_.similarity, otherId: d_.item2 });
+          });
+        } catch (_) {}
+        try {
+          const q2 = await db.collection('item_similarities')
+            .where('item2', '==', favId)
+            .orderBy('similarity', 'desc')
+            .limit(3)
+            .get();
+          q2.docs.forEach((d) => {
+            const d_ = d.data();
+            candidates.push({ similarity: d_.similarity, otherId: d_.item1 });
+          });
+        } catch (_) {}
+        if (candidates.length > 0) {
+          candidates.sort((a, b) => b.similarity - a.similarity);
+          const similarProductId = candidates[0].otherId;
+          const productDoc = await db.collection('vendor_products').doc(similarProductId).get();
+          if (productDoc.exists) {
+            const product = productDoc.data();
+            const vendorDoc = await db.collection('vendors').doc(product.vendorID || '').get();
+            const vendorName = vendorDoc.exists ? vendorDoc.data().title : 'a restaurant';
+            const favName = (typeof fav === 'object' && fav.name) ? fav.name : 'your favorites';
+            return {
+              type: 'similar_item',
+              title: 'You might also like',
+              body: `Since you liked ${favName}, try ${product.name || 'this'} from ${vendorName}!`,
+              vendorId: product.vendorID || '',
+              productId: similarProductId,
+              reason: 'similar_item',
+            };
+          }
+        }
+      } else if (type === 'trending_in_favorite_cuisine' && cuisinePrefs && Object.keys(cuisinePrefs).length > 0) {
+        const topCuisines = Object.entries(cuisinePrefs)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 2)
+          .map(([c]) => c);
+        for (const cuisine of topCuisines) {
+          try {
+            const snap = await db.collection('trending_products')
+              .where('cuisine', '==', cuisine)
+              .orderBy('orderCount', 'desc')
+              .limit(1)
+              .get();
+            if (!snap.empty) {
+              const t = snap.docs[0].data();
+              return {
+                type: 'trending',
+                title: 'Trending now',
+                body: `${t.name || 'Something'} is trending in ${cuisine} cuisine!`,
+                vendorId: t.vendorId || '',
+                productId: t.productId || snap.docs[0].id,
+                reason: 'trending',
+              };
+            }
+          } catch (_) {}
+        }
+      } else if (type === 'time_based_from_preferred_restaurant' && favoriteRestaurants && favoriteRestaurants.length > 0) {
+        const vendorId = favoriteRestaurants[Math.floor(Math.random() * Math.min(2, favoriteRestaurants.length))];
+        const vendorDoc = await db.collection('vendors').doc(vendorId).get();
+        if (vendorDoc.exists) {
+          const vendor = vendorDoc.data();
+          const mealKeywords = {
+            breakfast: ['silog', 'pancake', 'waffle', 'coffee', 'pastry', 'egg'],
+            lunch: ['burger', 'sandwich', 'rice', 'meal', 'soup'],
+            dinner: ['dinner', 'steak', 'pasta', 'grill', 'family'],
+            late_night: ['snack', 'fries', 'drink', 'dessert'],
+          };
+          const keywords = mealKeywords[mealPeriod] || [];
+          const productsSnap = await db.collection('vendor_products')
+            .where('vendorID', '==', vendorId)
+            .where('publish', '==', true)
+            .limit(20)
+            .get();
+          const matching = productsSnap.docs.filter((doc) => {
+            const name = (doc.data().name || '').toLowerCase();
+            return keywords.some((k) => name.includes(k));
+          });
+          if (matching.length > 0) {
+            const doc = matching[0];
+            const product = doc.data();
+            const mealLabel = mealPeriod.replace('_', ' ');
+            return {
+              type: 'time_based',
+              title: `Perfect for ${mealLabel}`,
+              body: `How about ${product.name || 'something'} from ${vendor.title || 'your favorite'}?`,
+              vendorId,
+              productId: doc.id,
+              reason: 'time_based',
+            };
+          }
+        }
+      } else if (type === 'popular_in_area') {
+        try {
+          const snap = await db.collection('trending_products')
+            .orderBy('orderCount', 'desc')
+            .limit(1)
+            .get();
+          if (!snap.empty) {
+            const t = snap.docs[0].data();
+            return {
+              type: 'popular',
+              title: 'Popular near you',
+              body: `Try ${t.name || 'this'} – everyone's ordering it!`,
+              vendorId: t.vendorId || '',
+              productId: t.productId || snap.docs[0].id,
+              reason: 'popular',
+            };
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      console.error(`[generateRecommendation] Error for type ${type}:`, e);
+    }
+  }
+  return null;
+}
+
+/**
+ * Scheduled: Send personalized recommendations hourly (timezone-aware).
+ * Uses preferredTimes, optional optimalSendHour, A/B timing test.
+ */
+exports.sendPersonalizedRecommendations = functions
+  .region('us-central1')
+  .pubsub.schedule('0 * * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+    const threeDaysAgoTs = admin.firestore.Timestamp.fromDate(threeDaysAgo);
+
+    const usersSnapshot = await db.collection('users')
+      .where('settings.ashRecommendations', '==', true)
+      .where('reorderEligible', '==', true)
+      .where('lastOrderCompletedAt', '>=', threeDaysAgoTs)
+      .limit(500)
+      .get();
+
+    let sentCount = 0;
+
+    for (const userDoc of usersSnapshot.docs) {
+      const userData = userDoc.data();
+      const userId = userDoc.id;
+      const userTimezone = userData.timezone || 'Asia/Manila';
+      const userHour = TimezoneUtils.getCurrentHourInUserTimezone(userTimezone);
+
+      let mealPeriod = 'lunch';
+      if (userHour >= 5 && userHour < 11) mealPeriod = 'breakfast';
+      else if (userHour >= 11 && userHour < 16) mealPeriod = 'lunch';
+      else if (userHour >= 16 && userHour < 22) mealPeriod = 'dinner';
+      else mealPeriod = 'late_night';
+
+      const pref = userData.preferenceProfile || {};
+      const preferredTimes = pref.preferredTimes || [];
+      if (!preferredTimes.includes(mealPeriod)) continue;
+
+      const settings = userData.settings || {};
+      if (settings.quietHoursEnabled) {
+        const quietStart = settings.quietHoursStart;
+        const quietEnd = settings.quietHoursEnd;
+        if (
+          quietStart !== undefined &&
+          quietEnd !== undefined &&
+          TimezoneUtils.isWithinQuietHours(userTimezone, quietStart, quietEnd, userHour)
+        ) {
+          continue;
+        }
+      }
+
+      const canSend = await FrequencyManager.canSendNotification(
+        userId, 'ash_recommendation', db
+      );
+      if (!canSend) continue;
+
+      const recentRecSnap = await db.collection('ash_notification_history')
+        .where('userId', '==', userId)
+        .where('type', '==', 'ash_recommendation')
+        .where('sentAt', '>=', threeDaysAgoTs)
+        .limit(1)
+        .get();
+      if (!recentRecSnap.empty) continue;
+
+      const favoriteProducts = pref.favoriteProducts || [];
+      const favoriteRestaurants = pref.favoriteRestaurants || [];
+      const cuisinePrefs = pref.cuisinePreferences || {};
+
+      if (favoriteProducts.length === 0 && favoriteRestaurants.length === 0) continue;
+
+      const np = userData.notificationPreferences || {};
+      let baseHour = np.optimalSendHour;
+      if (baseHour === undefined || baseHour === null) {
+        const periodHours = { breakfast: 8, lunch: 12, dinner: 18, late_night: 21 };
+        baseHour = periodHours[mealPeriod] ?? 12;
+      }
+
+      const sendHour = await ABTestingService.getSendHourForVariant(
+        userId, 'recommendation_timing_test', baseHour, db
+      );
+      if (userHour !== sendHour) continue;
+
+      const variant = await ABTestingService.assignUserToVariant(
+        userId, 'recommendation_timing_test', db
+      );
+
+      const rec = await generateRecommendation(
+        db, userId, mealPeriod, pref, favoriteProducts, favoriteRestaurants, cuisinePrefs
+      );
+      if (!rec) continue;
+
+      let vendorName = 'a restaurant';
+      let productName = 'this';
+      if (rec.vendorId) {
+        const vDoc = await db.collection('vendors').doc(rec.vendorId).get();
+        if (vDoc.exists) vendorName = vDoc.data()?.title || vendorName;
+      }
+      if (rec.productId) {
+        const pDoc = await db.collection('vendor_products').doc(rec.productId).get();
+        if (pDoc.exists) productName = pDoc.data()?.name || productName;
+      }
+
+      const notification = AshNotificationBuilder.buildAshNotification(
+        'recommendation',
+        { ...userData, id: userId },
+        {
+          userId,
+          restaurantName: vendorName,
+          productName,
+          vendorId: rec.vendorId,
+          productId: rec.productId,
+        }
+      );
+      const recFcmData = {
+        type: 'ash_recommendation',
+        notificationId: notification.data.notificationId,
+        recommendationType: String(rec.type || ''),
+        vendorId: String(rec.vendorId || ''),
+        productId: String(rec.productId || ''),
+        reason: String(rec.reason || ''),
+        mealPeriod: String(mealPeriod),
+        abTest: 'recommendation_timing_test',
+        abVariant: String(variant),
+      };
+      Object.keys(recFcmData).forEach((k) => { recFcmData[k] = String(recFcmData[k]); });
+
+      const tokens = await _getUserFcmTokens(db, userId);
+      if (tokens.length === 0) continue;
+
+      try {
+        await getMessaging().sendEachForMulticast({
+          notification: { title: notification.title, body: notification.body },
+          data: recFcmData,
+          tokens,
+          android: { priority: 'high', notification: { sound: 'default' } },
+          apns: { payload: { aps: { sound: 'default' } } },
+        });
+
+        await db.collection('ash_notification_history').doc(recFcmData.notificationId).set({
+          userId,
+          type: 'ash_recommendation',
+          recommendationType: rec.type,
+          title: notification.title,
+          body: notification.body,
+          data: {
+            vendorId: rec.vendorId,
+            productId: rec.productId,
+            reason: rec.reason,
+            mealPeriod,
+            abTest: 'recommendation_timing_test',
+            abVariant: variant,
+          },
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+          openedAt: null,
+          actionTaken: null,
+        });
+
+        sentCount++;
+      } catch (e) {
+        console.error(`[sendPersonalizedRecommendations] Failed for ${userId}:`, e);
+      }
+    }
+
+    console.log(`[sendPersonalizedRecommendations] Sent: ${sentCount}`);
+    return null;
+  });
+
+/**
+ * Callable: Assign user to A/B test variant.
+ * Requires Firebase Auth. Client calls with { testName }.
+ */
+exports.assignUserToVariant = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const userId = context.auth?.uid;
+    if (!userId) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'User must be authenticated'
+      );
+    }
+    const testName = data?.testName;
+    if (!testName || typeof testName !== 'string') {
+      return { variant: 'control' };
+    }
+    const db = getDb();
+    const testDoc = await db.collection('ab_tests').doc(testName).get();
+    if (!testDoc.exists) {
+      return { variant: 'control' };
+    }
+    const test = testDoc.data() || {};
+    const variants = test.variants || [];
+    if (variants.length === 0) {
+      return { variant: 'control' };
+    }
+    const assignmentId = `${testName}_${userId}`;
+    const assignmentDoc = await db.collection('ab_assignments').doc(assignmentId).get();
+    if (assignmentDoc.exists) {
+      return { variant: assignmentDoc.data()?.variant || 'control' };
+    }
+    const rand = Math.random() * 100;
+    let cumulative = 0;
+    let assignedVariant = variants[0]?.name || 'control';
+    for (const v of variants) {
+      cumulative += Number(v.percentage) || 0;
+      if (rand < cumulative) {
+        assignedVariant = v.name || 'control';
+        break;
+      }
+    }
+    await db.collection('ab_assignments').doc(assignmentId).set({
+      userId,
+      testName,
+      variant: assignedVariant,
+      assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return { variant: assignedVariant };
+  });
+
+/**
+ * Callable: Get notification history for a user. Admin-only.
+ * Params: { userId: string, limit?: number }
+ * Returns: { notifications: [...] }
+ */
+exports.getNotificationHistory = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be authenticated',
+      );
+    }
+
+    const callerId = context.auth.uid;
+    const db = getDb();
+    const callerDoc = await db.collection('users').doc(callerId).get();
+    const callerData = callerDoc.data() || {};
+    const role = callerData.role || callerData.userRole || '';
+    const isAdmin = role === 'admin' || role === 'Admin';
+
+    if (!isAdmin) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Admin only',
+      );
+    }
+
+    const userId = data?.userId;
+    if (!userId || typeof userId !== 'string') {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'userId is required',
+      );
+    }
+
+    const limit = Math.min(Number(data?.limit) || 20, 100);
+    const snapshot = await db
+      .collection('ash_notification_history')
+      .where('userId', '==', userId)
+      .orderBy('sentAt', 'desc')
+      .limit(limit)
+      .get();
+
+    return {
+      notifications: snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })),
+    };
+  });
+
+/**
+ * Callable: Test Ash notification. Admin-only.
+ * Sends a test Ash notification to a specific user.
+ * Params: { userId, notificationType, contextData }
+ */
+exports.testAshNotification = functions
+  .region('us-central1')
+  .runWith({ memory: '512MB', timeoutSeconds: 120 })
+  .https.onCall(async (data, context) => {
+    console.log('🔥 testAshNotification CALLED ' + new Date().toISOString());
+    console.log('[testAshNotification] Auth UID:', context.auth?.uid);
+    console.log('[testAshNotification] Raw data (full):', JSON.stringify(data));
+    console.log('[testAshNotification] data.userId:', data?.userId);
+    console.log('[testAshNotification] data.notificationType:', data?.notificationType);
+    console.log('[testAshNotification] data.contextData:', JSON.stringify(data?.contextData || {}));
+    console.log('[testAshNotification] context.auth:', !!context.auth, 'uid:', context.auth?.uid);
+
+    if (!context.auth) {
+      console.error('[testAshNotification] No authentication');
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be authenticated',
+      );
+    }
+
+    const callerId = context.auth.uid;
+    console.log('[testAshNotification] Step 0: Getting DB and caller doc for', callerId);
+    const db = getDb();
+    let callerDoc;
+    try {
+      callerDoc = await db.collection('users').doc(callerId).get();
+      console.log('[testAshNotification] Step 0: Caller doc exists:', callerDoc.exists);
+    } catch (e) {
+      console.error('[testAshNotification] Step 0 FAILED - get caller doc:', e?.message || e);
+      console.error('[testAshNotification] Step 0 stack:', e?.stack);
+      throw new functions.https.HttpsError(
+        'internal',
+        'Failed to verify admin. Check Firebase Console logs.',
+        { cause: String(e), callerId },
+      );
+    }
+    const callerData = callerDoc.exists ? callerDoc.data() : {};
+    const role = callerData?.role || callerData?.userRole || '';
+    const isAdmin = role === 'admin' || role === 'Admin';
+    console.log('[testAshNotification] Caller role:', role, 'isAdmin:', isAdmin);
+
+    if (!isAdmin) {
+      console.error('[testAshNotification] Not admin');
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Admin only',
+      );
+    }
+
+    const userId = data?.userId;
+    const notificationType = data?.notificationType || 'reorder';
+    const contextData = data?.contextData || {};
+    console.log('[testAshNotification] userId:', userId, 'type:', notificationType);
+
+    if (!userId || typeof userId !== 'string') {
+      console.error('[testAshNotification] Missing or invalid userId');
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'userId is required',
+      );
+    }
+
+    const allowedTypes = [
+      'reorder',
+      'cart',
+      'hunger',
+      'recommendation',
+      'recovery',
+      'payment_failed',
+      'order_accepted',
+      'order_ready',
+    ];
+    if (!allowedTypes.includes(notificationType)) {
+      console.error('[testAshNotification] Invalid type:', notificationType);
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        `Invalid notificationType. Allowed: ${allowedTypes.join(', ')}`,
+      );
+    }
+
+    try {
+      console.log('[testAshNotification] Step 1: Getting FCM tokens for userId:', userId);
+      let tokens;
+      try {
+        tokens = await _getUserFcmTokens(db, userId);
+        console.log('[testAshNotification] Step 1 OK: tokens found:', tokens?.length ?? 0);
+      } catch (tokensErr) {
+        console.error('[testAshNotification] Step 1 FAILED - _getUserFcmTokens:', tokensErr?.message || tokensErr);
+        console.error('[testAshNotification] Step 1 stack:', tokensErr?.stack);
+        throw tokensErr;
+      }
+      if (tokens.length === 0) {
+        return {
+          success: false,
+          message: 'User has no valid FCM tokens',
+          preview: null,
+        };
+      }
+
+      console.log('[testAshNotification] Step 2: Getting user document for', userId);
+      let userDoc;
+      try {
+        userDoc = await db.collection('users').doc(userId).get();
+        console.log('[testAshNotification] Step 2 OK: userDoc.exists:', userDoc.exists);
+      } catch (userErr) {
+        console.error('[testAshNotification] Step 2 FAILED - get user doc:', userErr?.message || userErr);
+        console.error('[testAshNotification] Step 2 stack:', userErr?.stack);
+        throw userErr;
+      }
+      if (!userDoc.exists) {
+        console.error('[testAshNotification] User not found:', userId);
+        return {
+          success: false,
+          message: `User ${userId} not found`,
+          preview: null,
+        };
+      }
+      const userData = userDoc.data() || {};
+      console.log('[testAshNotification] User data keys:', Object.keys(userData));
+      console.log('[testAshNotification] User data (partial):', JSON.stringify({
+        firstName: userData.firstName,
+        displayName: userData.displayName,
+        timezone: userData.timezone,
+      }));
+
+      const userForBuilder = {
+        id: userId,
+        userID: userId,
+        firstName: userData.firstName || userData.displayName || '',
+        displayName: userData.displayName || userData.firstName || '',
+        settings: userData.settings || {},
+        timezone: userData.timezone || 'Asia/Manila',
+      };
+
+      let title;
+      let body;
+      let ashData = {};
+
+      console.log('[testAshNotification] Step 3: Building notification, type:', notificationType);
+      console.log('[testAshNotification] Step 3: contextData:', JSON.stringify(contextData));
+      if (contextData.overrideTitle || contextData.overrideBody) {
+        title = contextData.overrideTitle || 'Test notification';
+        body = contextData.overrideBody || 'Test body';
+        ashData = {
+          type: `ash_${notificationType}`,
+          notificationId: `test_${userId}_${Date.now()}`,
+          userId: String(userId),
+          timestamp: new Date().toISOString(),
+          ash: 'true',
+        };
+      } else {
+        try {
+          console.log('[testAshNotification] Step 3: Calling AshNotificationBuilder.buildAshNotification');
+          const built = AshNotificationBuilder.buildAshNotification(
+            notificationType,
+            userForBuilder,
+            contextData,
+          );
+          title = built.title;
+          body = built.body;
+          ashData = built.data || {};
+          console.log('[testAshNotification] Step 3 OK: built title/body');
+        } catch (buildErr) {
+          console.error('[testAshNotification] Step 3 FAILED - AshNotificationBuilder:', buildErr?.message || buildErr);
+          console.error('[testAshNotification] Step 3 stack:', buildErr?.stack);
+          return {
+            success: false,
+            message: `Build failed: ${buildErr.message}`,
+            preview: null,
+          };
+        }
+      }
+      console.log('[testAshNotification] Title:', title);
+      console.log('[testAshNotification] Body:', body?.substring?.(0, 80) || body);
+
+      console.log('[testAshNotification] Step 4: Sending FCM to token (length:', tokens[0]?.length || 0, ')');
+      let messageId;
+      try {
+        messageId = await _sendFcmToToken(
+          tokens[0],
+          title,
+          body,
+          ashData,
+        );
+        console.log('[testAshNotification] Step 4 OK: messageId=', messageId);
+      } catch (fcmErr) {
+        console.error('[testAshNotification] Step 4 FAILED - FCM send:', fcmErr?.message || fcmErr);
+        console.error('[testAshNotification] Step 4 stack:', fcmErr?.stack);
+        return {
+          success: false,
+          message: `FCM failed: ${fcmErr.message || String(fcmErr)}`,
+          preview: { title, body },
+        };
+      }
+
+      console.log('[testAshNotification] Step 5: Writing analytics to ash_notification_history');
+
+      try {
+        await db.collection('ash_notification_history').add({
+          userId,
+          type: notificationType,
+          title,
+          body,
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+          result: { messageId },
+          source: 'test',
+        });
+        console.log('[testAshNotification] Step 5 OK: Analytics logged');
+      } catch (historyErr) {
+        console.warn('[testAshNotification] Step 5 FAILED (non-fatal):', historyErr?.message || historyErr);
+        console.warn('[testAshNotification] Step 5 stack:', historyErr?.stack);
+      }
+
+      console.log('[testAshNotification] ========== DONE success ==========');
+      return {
+        success: true,
+        message: `Notification sent (messageId: ${messageId})`,
+        preview: { title, body },
+      };
+    } catch (e) {
+      console.error('[testAshNotification] ========== TOP-LEVEL CATCH ==========');
+      console.error('[testAshNotification] Error:', e?.message || e);
+      console.error('[testAshNotification] Error name:', e?.name);
+      console.error('[testAshNotification] Stack:', e?.stack);
+      return {
+        success: false,
+        message: e.message || String(e),
+        preview: null,
+      };
+    }
+  });
+
+/**
+ * Minimal test function to verify Firestore access and role query.
+ */
+exports.testSearchBasic = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    console.log('🧪 TEST FUNCTION STARTED');
+    console.log('Auth UID:', context.auth?.uid);
+
+    const db = getDb();
+
+    console.log('Test 1: Simple collection access');
+    const test1 = await db.collection('users').limit(1).get();
+    console.log('Test 1 passed, size:', test1.size);
+
+    console.log('Test 2: Query with role filter');
+    const test2 = await db
+      .collection('users')
+      .where('role', '==', 'customer')
+      .limit(1)
+      .get();
+    console.log('Test 2 passed, size:', test2.size);
+
+    return {
+      success: true,
+      test1: test1.size,
+      test2: test2.size,
+      auth: context.auth?.uid,
+    };
+  });
+
+/**
+ * Super simple test - no Firestore, no dependencies. Verifies callable works.
+ */
+exports.testSearchSimple = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    console.log('✅✅✅ SIMPLE TEST FUNCTION CALLED ✅✅✅');
+    console.log('Time:', new Date().toISOString());
+    console.log('Auth UID:', context.auth?.uid);
+
+    return {
+      success: true,
+      message: 'Function is working!',
+      timestamp: Date.now(),
+    };
+  });
+
+/**
+ * Step-by-step search - tests Firestore queries incrementally.
+ */
+exports.searchUsersStepByStep = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    console.log('🔵 STEP 1: Function started');
+
+    try {
+      const db = getDb();
+      console.log('🔵 STEP 2: Firestore obtained');
+
+      const q = (data?.query && data.query.trim) ? data.query.trim() : '';
+      console.log('🔵 STEP 3: Query:', q);
+
+      if (!q || q.length < 3) {
+        console.log('🔵 STEP 4: Query too short, returning empty');
+        return { users: [] };
+      }
+
+      console.log('🔵 STEP 5: Trying simple query');
+      const simpleQuery = await db.collection('users').limit(1).get();
+      console.log('✅ Simple query worked, found:', simpleQuery.size);
+
+      console.log('🔵 STEP 6: Trying role filter');
+      const roleQuery = await db
+        .collection('users')
+        .where('role', '==', 'customer')
+        .limit(1)
+        .get();
+      console.log('✅ Role filter worked, found:', roleQuery.size);
+
+      return {
+        success: true,
+        simple: simpleQuery.size,
+        role: roleQuery.size,
+        message: 'All basic queries work',
+      };
+    } catch (error) {
+      console.error('💥 CRASH:', error);
+      throw new functions.https.HttpsError('internal', error.message);
+    }
+  });
+
+/**
+ * Ping for Ash Notification Tester connectivity check.
+ * Returns success with timestamp. No auth required for basic reachability.
+ */
+exports.pingAshTester = functions
+  .region('us-central1')
+  .https.onCall(() => {
+    console.log('[pingAshTester] CALLED ' + new Date().toISOString());
+    return { success: true, timestamp: new Date().toISOString() };
+  });
+
+/**
+ * Minimal ping - zero dependencies. Use to verify callable connectivity.
+ */
+exports.pingTestMinimal = functions
+  .region('us-central1')
+  .https.onCall(() => {
+    console.log('[pingTestMinimal] CALLED ' + new Date().toISOString());
+    return { ok: true, t: Date.now() };
+  });
+
+/**
+ * Search users for Ash Notification Tester (admin-only).
+ * Returns minimal fields to avoid OOM on low-memory clients.
+ * Heavily logged for debugging.
+ *
+ * Params: { query: string } (min 3 chars)
+ * Returns: { results: [{ id, name, email, hasToken }] }
+ */
+exports.searchUsersForAshTester = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    console.log('🚀🚀🚀 SEARCH FUNCTION STARTED 🚀🚀🚀');
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Auth present:', !!context.auth);
+    console.log('Auth UID:', context.auth?.uid);
+    console.log('Raw data received:', JSON.stringify(data));
+
+    if (!context.auth) {
+      console.log('❌ Auth missing, throwing unauthenticated');
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be authenticated',
+      );
+    }
+
+    const db = getDb();
+    console.log('✅ Firestore instance obtained');
+
+    const callerId = context.auth.uid;
+    const callerDoc = await db.collection('users').doc(callerId).get();
+    const callerData = callerDoc.data() || {};
+    const role = callerData.role || callerData.userRole || '';
+    const isAdmin = role === 'admin' || role === 'Admin';
+    console.log('Caller role:', role, 'isAdmin:', isAdmin);
+
+    if (!isAdmin) {
+      console.log('❌ Not admin, throwing permission-denied');
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Admin only',
+      );
+    }
+
+    const q = (typeof data?.query === 'string' ? data.query.trim() : '') || '';
+    console.log('Search query after trim:', JSON.stringify(q));
+
+    if (!q || q.length < 3) {
+      console.log('Query too short, returning empty results');
+      return { results: [] };
+    }
+
+    function hasFcmToken(d) {
+      const arr = d.fcmTokens;
+      if (Array.isArray(arr) && arr.length > 0) {
+        return arr.some((t) => typeof t === 'string' && t.trim().length > 0);
+      }
+      const single = d.fcmToken;
+      return single && typeof single === 'string' && single.trim().length > 0;
+    }
+
+    function toResult(doc) {
+      const d = doc.data() || {};
+      const firstName = d.firstName || '';
+      const lastName = d.lastName || '';
+      const name = `${firstName} ${lastName}`.trim() || 'Unknown';
+      return {
+        id: doc.id,
+        name,
+        email: d.email || '',
+        hasToken: hasFcmToken(d),
+      };
+    }
+
+    const suffix = q + '\uf8ff';
+    const limit = 20;
+    const seenIds = new Set();
+    const results = [];
+
+    try {
+      console.log(`Executing queries for: "${q}" with suffix "${suffix}"`);
+
+      console.log('1. Testing email query...');
+      let emailSnap;
+      try {
+        emailSnap = await db
+          .collection('users')
+          .where('role', '==', 'customer')
+          .where('email', '>=', q)
+          .where('email', '<=', suffix)
+          .limit(limit)
+          .get();
+        console.log(`✅ Email query succeeded, found: ${emailSnap.size}`);
+      } catch (emailError) {
+        console.error('❌ Email query FAILED:', emailError);
+        console.error('Email error stack:', emailError.stack);
+        throw emailError;
+      }
+
+      console.log('2. Testing firstName query...');
+      let firstNameSnap;
+      try {
+        firstNameSnap = await db
+          .collection('users')
+          .where('role', '==', 'customer')
+          .where('firstName', '>=', q)
+          .where('firstName', '<=', suffix)
+          .limit(limit)
+          .get();
+        console.log(`✅ FirstName query succeeded, found: ${firstNameSnap.size}`);
+      } catch (firstNameError) {
+        console.error('❌ FirstName query FAILED:', firstNameError);
+        console.error('FirstName error stack:', firstNameError.stack);
+        throw firstNameError;
+      }
+
+      console.log('3. Testing lastName query...');
+      let lastNameSnap;
+      try {
+        lastNameSnap = await db
+          .collection('users')
+          .where('role', '==', 'customer')
+          .where('lastName', '>=', q)
+          .where('lastName', '<=', suffix)
+          .limit(limit)
+          .get();
+        console.log(`✅ LastName query succeeded, found: ${lastNameSnap.size}`);
+      } catch (lastNameError) {
+        console.error('❌ LastName query FAILED:', lastNameError);
+        console.error('LastName error stack:', lastNameError.stack);
+        throw lastNameError;
+      }
+
+      console.log('Combining results (users with FCM tokens only)...');
+      for (const doc of emailSnap.docs) {
+        if (!seenIds.has(doc.id)) {
+          const r = toResult(doc);
+          if (r.hasToken) {
+            seenIds.add(doc.id);
+            results.push(r);
+          }
+        }
+      }
+      for (const doc of firstNameSnap.docs) {
+        if (seenIds.has(doc.id)) continue;
+        const r = toResult(doc);
+        if (r.hasToken) {
+          seenIds.add(doc.id);
+          results.push(r);
+        }
+        if (results.length >= limit) break;
+      }
+      for (const doc of lastNameSnap.docs) {
+        if (seenIds.has(doc.id)) continue;
+        const r = toResult(doc);
+        if (r.hasToken) {
+          seenIds.add(doc.id);
+          results.push(r);
+        }
+        if (results.length >= limit) break;
+      }
+
+      if (
+        results.length < limit &&
+        q.length >= 20 &&
+        /^[a-zA-Z0-9_-]+$/.test(q)
+      ) {
+        const docSnap = await db.collection('users').doc(q).get();
+        if (docSnap.exists) {
+          const d = docSnap.data() || {};
+          if (
+            d.role === 'customer' &&
+            hasFcmToken(d) &&
+            !seenIds.has(docSnap.id)
+          ) {
+            results.push(toResult(docSnap));
+          }
+        }
+      }
+
+      console.log(`✅ Total users with tokens: ${results.length}`);
+      console.log('🚀 SEARCH FUNCTION COMPLETED SUCCESSFULLY 🚀');
+      return { results };
+    } catch (error) {
+      console.error('💥💥💥 SEARCH FUNCTION CRASHED 💥💥💥');
+      console.error('Error name:', error.name);
+      console.error('Error message:', error.message);
+      console.error('Error code:', error.code);
+      console.error('Error details:', error.details);
+      console.error('Stack trace:', error.stack);
+
+      try {
+        await getDb().collection('function_errors').add({
+          function: 'searchUsersForAshTester',
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+          query: data?.query,
+          auth: context.auth?.uid,
+          error: {
+            name: error.name,
+            message: error.message,
+            code: error.code,
+            stack: error.stack,
+          },
+        });
+        console.log('✅ Error logged to Firestore');
+      } catch (logError) {
+        console.error('❌ Could not log error to Firestore:', logError);
+      }
+
+      const isIndexError =
+        error.code === 9 ||
+        (error.message && /index|FAILED_PRECONDITION/i.test(error.message));
+
+      if (isIndexError) {
+        throw new functions.https.HttpsError(
+          'failed-precondition',
+          'Missing Firestore indexes. Please add the required indexes.',
+          {
+            requiredIndexes: [
+              { fields: ['role', 'email'] },
+              { fields: ['role', 'firstName'] },
+              { fields: ['role', 'lastName'] },
+            ],
+            firestoreError: error.message,
+          }
+        );
+      }
+
+      throw new functions.https.HttpsError(
+        'internal',
+        `Search failed: ${error.message}`,
+        { originalError: error.message, errorCode: error.code }
+      );
+    }
+  });
+
+/**
+ * Diagnose Ash Tester search queries (admin-only).
+ * Runs simplified Firestore queries to isolate which combination fails.
+ *
+ * Returns: { results: [{ name, passed, error? }] }
+ */
+exports.diagnoseAshTesterSearch = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be authenticated',
+      );
+    }
+
+    const callerId = context.auth.uid;
+    const db = getDb();
+    const callerDoc = await db.collection('users').doc(callerId).get();
+    const callerData = callerDoc.data() || {};
+    const role = callerData.role || callerData.userRole || '';
+    const isAdmin = role === 'admin' || role === 'Admin';
+
+    if (!isAdmin) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Admin only',
+      );
+    }
+
+    const results = [];
+    const q = 'aaa';
+
+    try {
+      const snap1 = await db
+        .collection('users')
+        .where('role', '==', 'customer')
+        .limit(1)
+        .get();
+      results.push({ name: 'Simple (role only)', passed: true, count: snap1.size });
+    } catch (e) {
+      results.push({
+        name: 'Simple (role only)',
+        passed: false,
+        error: e.message || String(e),
+      });
+    }
+
+    try {
+      const snap2 = await db
+        .collection('users')
+        .where('role', '==', 'customer')
+        .where('email', '>=', q)
+        .where('email', '<=', q + '\uf8ff')
+        .limit(1)
+        .get();
+      results.push({
+        name: 'Role + email prefix',
+        passed: true,
+        count: snap2.size,
+      });
+    } catch (e) {
+      results.push({
+        name: 'Role + email prefix',
+        passed: false,
+        error: e.message || String(e),
+      });
+    }
+
+    try {
+      const snap3 = await db
+        .collection('users')
+        .where('role', '==', 'customer')
+        .where('firstName', '>=', q)
+        .where('firstName', '<=', q + '\uf8ff')
+        .limit(1)
+        .get();
+      results.push({
+        name: 'Role + firstName prefix',
+        passed: true,
+        count: snap3.size,
+      });
+    } catch (e) {
+      results.push({
+        name: 'Role + firstName prefix',
+        passed: false,
+        error: e.message || String(e),
+      });
+    }
+
+    try {
+      const snap4 = await db
+        .collection('users')
+        .where('role', '==', 'customer')
+        .where('lastName', '>=', q)
+        .where('lastName', '<=', q + '\uf8ff')
+        .limit(1)
+        .get();
+      results.push({
+        name: 'Role + lastName prefix',
+        passed: true,
+        count: snap4.size,
+      });
+    } catch (e) {
+      results.push({
+        name: 'Role + lastName prefix',
+        passed: false,
+        error: e.message || String(e),
+      });
+    }
+
+    return { results };
+  });
+
+/**
  * Send Individual FCM Notification
  * 
  * HTTP function to send push notification to a single user
@@ -4342,51 +6167,10 @@ exports.sendIndividualNotification = functions.region('us-central1').https.onReq
     console.log('[IndividualNotification] Title:', title);
     console.log('[IndividualNotification] Body:', body);
 
-    // Create message object
-    const message = {
-      token: token,
-      notification: {
-        title: title,
-        body: body,
-      },
-      data: {
-        timestamp: Date.now().toString(),
-      },
-      android: {
-        priority: 'high',
-        notification: {
-          sound: 'default',
-        },
-      },
-      apns: {
-        payload: {
-          aps: {
-            sound: 'default',
-          },
-        },
-      },
-    };
-
-    // Add custom data if provided
-    if (data && typeof data === 'object') {
-      Object.keys(data).forEach(key => {
-        // FCM data must be strings
-        message.data[key] = String(data[key]);
-      });
-    }
-
-    // Add image URL if provided
-    if (imageUrl && typeof imageUrl === 'string' && imageUrl.trim().length > 0) {
-      message.notification.imageUrl = imageUrl.trim();
-    }
-
-    // Add deep link if provided
-    if (deepLink && typeof deepLink === 'string' && deepLink.trim().length > 0) {
-      message.data.deepLink = deepLink.trim();
-    }
-
-    // Send notification
-    const response = await getMessaging().send(message);
+    const response = await _sendFcmToToken(token, title, body, data || {}, {
+      imageUrl,
+      deepLink,
+    });
 
     console.log('[IndividualNotification] Successfully sent:', response);
 
@@ -4437,74 +6221,44 @@ exports.sendOrderStatusNotification = functions
       return null;
     }
 
+    const db = getDb();
+    const customerDoc = await db.collection('users').doc(customerId).get();
+    const userData = customerDoc.exists ? customerDoc.data() || {} : {};
+    const restaurantName =
+      afterData.vendor?.title || 'the restaurant';
+
+    const statusToType = {
+      'Order Placed': 'order_placed',
+      'Order Accepted': 'order_accepted',
+      'Driver Assigned': 'rider_assigned',
+      'Driver Accepted': 'preparing',
+      'Order Shipped': 'order_ready',
+      'In Transit': 'on_the_way',
+      'Order Completed': 'order_delivered',
+      'Driver Rejected': 'finding_rider',
+      'Order Cancelled': 'order_cancelled',
+      'Order Rejected': 'order_rejected',
+      'Payment Failed': 'payment_failed_status',
+    };
+    const ashType = statusToType[afterStatus];
     let title = 'Order Update';
     let body = 'Your order status has been updated.';
 
-    switch (afterStatus) {
-      case 'Order Placed':
-        title = 'Order Received';
-        body = 'Your order has been placed successfully!';
-        break;
-      case 'Order Accepted':
-        title = 'Order Confirmed';
-        body = 'Restaurant has confirmed your order';
-        break;
-      case 'Driver Assigned':
-        title = 'Rider Assigned';
-        body = 'A rider has been assigned to your order';
-        break;
-      case 'Driver Accepted':
-        title = 'Preparing Your Order';
-        body = 'Restaurant is now preparing your food';
-        break;
-      case 'Order Shipped':
-        title = 'Food Ready for Pickup';
-        body = 'Your order is ready! Rider is picking it up';
-        break;
-      case 'In Transit':
-        title = 'On the Way';
-        body = 'Your order is on the way! Track your rider';
-        break;
-      case 'Order Completed':
-        title = 'Order Delivered';
-        body = 'Your order has been delivered. Enjoy!';
-        break;
-      case 'Driver Rejected':
-        title = 'Finding Another Rider';
-        body = 'Your order is being reassigned';
-        break;
-      case 'Order Cancelled':
-        title = 'Order Cancelled';
-        body = 'Your order has been cancelled.';
-        break;
-      case 'Order Rejected':
-        title = 'Order Unsuccessful';
-        body = 'Your order could not be completed.';
-        break;
-      default:
-        break;
+    if (ashType) {
+      const notification = AshNotificationBuilder.buildAshNotification(
+        ashType,
+        { ...userData, id: customerId },
+        { restaurantName, userId: customerId }
+      );
+      title = notification.title;
+      body = notification.body;
+    } else {
+      title = 'Order Update';
+      body = 'Your order status has been updated.';
     }
+    const customerTokens = await _getUserFcmTokens(db, customerId);
 
-    const db = getDb();
-    let customerFcmToken = null;
-    const author = afterData.author || {};
-    customerFcmToken = author.fcmToken || null;
-
-    if (!customerFcmToken && customerId) {
-      try {
-        const userDoc = await db.collection('users').doc(customerId).get();
-        if (userDoc.exists) {
-          customerFcmToken = userDoc.data()?.fcmToken || null;
-        }
-      } catch (e) {
-        console.error(
-          `[sendOrderStatusNotification] Error reading user:`,
-          e
-        );
-      }
-    }
-
-    if (!customerFcmToken) {
+    if (customerTokens.length === 0) {
       console.log(
         `[sendOrderStatusNotification] Skip: no FCM token. orderId=${orderId} customerId=${customerId}`
       );
@@ -4512,9 +6266,8 @@ exports.sendOrderStatusNotification = functions
     }
 
     try {
-      const message = {
+      const messagePayload = {
         notification: { title, body },
-        token: customerFcmToken,
         data: {
           type: 'order_update',
           orderId: String(orderId),
@@ -4530,9 +6283,10 @@ exports.sendOrderStatusNotification = functions
         },
       };
 
-      await getMessaging().send(message);
+      const multicastMessage = { ...messagePayload, tokens: customerTokens };
+      const resp = await getMessaging().sendEachForMulticast(multicastMessage);
       console.log(
-        `[sendOrderStatusNotification] Sent. orderId=${orderId} status=${afterStatus}`
+        `[sendOrderStatusNotification] Sent. orderId=${orderId} status=${afterStatus} ${resp.successCount}/${customerTokens.length}`
       );
     } catch (e) {
       console.error(
@@ -6037,17 +7791,13 @@ exports.onOrderCreatedSetExpiresAt = functions
     const fcmToken = vendorData.fcmToken || (data.vendor && data.vendor.fcmToken);
     if (fcmToken) {
       try {
-        await getMessaging().send({
-          token: fcmToken,
-          notification: {
-            title: 'New Order',
-            body: `You have a new order #${orderId.slice(-6)}`,
-          },
-          data: {
-            type: 'new_order',
-            orderId: orderId,
-          },
-        });
+        const payload = { id: orderId, orderId, vendor: data.vendor || vendorData, ...data };
+        const message = NotificationBuilder.buildOrderNotification(
+          payload,
+          'new_order',
+          { token: fcmToken, includeActions: true }
+        );
+        await getMessaging().send(message);
         console.log(`[onOrderCreatedSetExpiresAt] FCM sent to vendor for order ${orderId}`);
       } catch (e) {
         console.error(`[onOrderCreatedSetExpiresAt] FCM failed:`, e);
@@ -6294,6 +8044,12 @@ exports.acceptanceTimeoutChecker = functions
           rejectedAt: admin.firestore.FieldValue.serverTimestamp(),
           rejectionReason: 'timeout',
         });
+
+        await OrderRecoveryService.handleOrderFailure(
+          { id: doc.id, ...data },
+          'timeout',
+          { reason: 'order_timeout' }
+        );
 
         if (vendorId) {
           const vendorRef = db.collection('vendors').doc(vendorId);
@@ -6975,6 +8731,7 @@ exports.deactivateExpiredAddonPromos = functions
 // Personalized discovery (GrabFood-style)
 const { computeItemSimilarities } = require('./computeItemSimilarities');
 const { computeUserPreferences } = require('./computeUserPreferences');
+const HungerDetection = require('./hungerDetection');
 exports.computeItemSimilarities = computeItemSimilarities;
 exports.computeUserPreferences = computeUserPreferences;
 
@@ -6985,4 +8742,66 @@ const {
 } = require('./vectorSearch');
 exports.onProductWrite = onProductWrite;
 exports.vectorSearchProducts = vectorSearchProducts;
+
+// Ash voice analytics
+const {
+  trackAshNotificationMetrics,
+  analyzeAshVoice,
+} = require('./ashVoiceAnalytics');
+exports.trackAshNotificationMetrics = trackAshNotificationMetrics;
+exports.analyzeAshVoice = analyzeAshVoice;
+
+// Daily analytics aggregations
+const {
+  aggregateDailyNotifications,
+  aggregateDailyUserMetrics,
+  aggregateDailyRevenue,
+} = require('./dailyAggregations');
+exports.aggregateDailyNotifications = aggregateDailyNotifications;
+exports.aggregateDailyUserMetrics = aggregateDailyUserMetrics;
+exports.aggregateDailyRevenue = aggregateDailyRevenue;
+
+// Conversion attribution and LTV
+const {
+  trackOrderAttribution,
+  calculateLTV,
+} = require('./conversionAttribution');
+exports.trackOrderAttribution = trackOrderAttribution;
+exports.calculateLTV = calculateLTV;
+
+// A/B test optimizer
+const { evaluateABTests } = require('./abTestOptimizer');
+exports.evaluateABTests = evaluateABTests;
+
+// Export and reporting
+const {
+  generateCSVExport,
+  scheduleWeeklyReport,
+} = require('./exportService');
+exports.generateCSVExport = generateCSVExport;
+exports.scheduleWeeklyReport = scheduleWeeklyReport;
+
+// Data retention and privacy
+const {
+  cleanupOldData,
+  anonymizeUserData,
+} = require('./dataRetention');
+exports.cleanupOldData = cleanupOldData;
+exports.anonymizeUserData = anonymizeUserData;
+
+// User role management (super admin only)
+const {
+  updateUserRole,
+  batchUpdateUserRoles,
+} = require('./userRoleManagement');
+exports.updateUserRole = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) =>
+    updateUserRole(data, context, getDb),
+  );
+exports.batchUpdateUserRoles = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) =>
+    batchUpdateUserRoles(data, context, getDb),
+  );
 

@@ -500,6 +500,44 @@ class FireStoreUtils {
     });
   }
 
+  /// Adds token to user's fcmTokens array. Call on login. Also updates vendor.
+  static Future<void> addFcmTokenToArray(
+      String userId, String token, {String? vendorId}) async {
+    try {
+      if (userId.isEmpty || token.isEmpty) return;
+      await firestore.collection(USERS).doc(userId).update({
+        'fcmTokens': FieldValue.arrayUnion([token]),
+        'lastTokenUpdate': FieldValue.serverTimestamp(),
+      });
+      if (vendorId != null && vendorId.isNotEmpty) {
+        await firestore.collection(VENDORS).doc(vendorId).update({
+          'fcmTokens': FieldValue.arrayUnion([token]),
+          'lastTokenUpdate': FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (e) {
+      print('[FCM] addFcmTokenToArray failed: $e');
+    }
+  }
+
+  /// Removes token from user's fcmTokens array. Call on logout.
+  static Future<void> removeFcmToken(
+      String userId, String token, {String? vendorId}) async {
+    try {
+      if (userId.isEmpty || token.isEmpty) return;
+      await firestore.collection(USERS).doc(userId).update({
+        'fcmTokens': FieldValue.arrayRemove([token]),
+      });
+      if (vendorId != null && vendorId.isNotEmpty) {
+        await firestore.collection(VENDORS).doc(vendorId).update({
+          'fcmTokens': FieldValue.arrayRemove([token]),
+        });
+      }
+    } catch (e) {
+      print('[FCM] removeFcmToken failed: $e');
+    }
+  }
+
   Future<Map<String, dynamic>?> getAdminCommission() async {
     DocumentSnapshot<Map<String, dynamic>> codQuery =
         await firestore.collection(Setting).doc('AdminCommission').get();
@@ -1089,7 +1127,9 @@ class FireStoreUtils {
     } else {
       DocumentReference docRef = firestore.collection(PRODUCTS).doc();
       productModel.id = docRef.id;
-      docRef.set(productModel.toJson());
+      final json = productModel.toJson();
+      json['createdAt'] = FieldValue.serverTimestamp();
+      docRef.set(json);
     }
   }
 

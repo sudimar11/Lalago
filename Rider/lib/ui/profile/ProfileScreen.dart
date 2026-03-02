@@ -1013,9 +1013,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 onPressed: () async {
                   //user.isActive = false;
-                  MyAppState.currentUser!.lastOnlineTimestamp = Timestamp.now();
-                  await FireStoreUtils.updateCurrentUser(
-                      MyAppState.currentUser!);
+                  final u = MyAppState.currentUser!;
+                  u.lastOnlineTimestamp = Timestamp.now();
+                  await FireStoreUtils.updateCurrentUser(u);
+                  if (u.fcmToken.isNotEmpty) {
+                    unawaited(FireStoreUtils.removeFcmToken(u.userID, u.fcmToken));
+                  }
                   await auth.FirebaseAuth.instance.signOut();
                   MyAppState.currentUser = null;
                   pushAndRemoveUntil(context, AuthScreen(), false);

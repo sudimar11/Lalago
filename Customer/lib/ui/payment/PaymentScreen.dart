@@ -8,6 +8,7 @@ import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/CodModel.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/network_safe_api.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
@@ -480,8 +481,19 @@ class PaymentScreenState extends State<PaymentScreen> {
         orderModel.id = oid;
       }
 
-      OrderModel placedOrder =
-          await fireStoreUtils.placeOrderWithTakeAWay(orderModel);
+      final placedOrder = await NetworkSafeAPI.runWithNetworkCheck(
+        () => fireStoreUtils.placeOrderWithTakeAWay(orderModel),
+        onOffline: () {
+          ScaffoldMessenger.of(buildContext).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'No network. Please check your connection and try again.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        },
+      );
 
       for (int i = 0; i < tempProduc.length; i++) {
         await FireStoreUtils()
@@ -524,6 +536,12 @@ class PaymentScreenState extends State<PaymentScreen> {
         backgroundColor: Colors.transparent,
         builder: (context) => PlaceOrderScreen(orderModel: placedOrder),
       );
+    } on NetworkUnavailableException catch (e) {
+      ScaffoldMessenger.of(buildContext).showSnackBar(SnackBar(
+        content: Text(e.message ?? 'No network. Please try again.'),
+        backgroundColor: Colors.red,
+      ));
+      print("Order placement failed (offline): $e");
     } catch (e) {
       ScaffoldMessenger.of(buildContext).showSnackBar(SnackBar(
         content: Text("Order placement failed: ${e.toString()}"),

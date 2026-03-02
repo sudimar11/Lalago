@@ -125,6 +125,7 @@ class _AddIconButtonState extends State<AddIconButton>
         vendorID: '',
         quantity: 0,
         category_id: '',
+        addedAt: DateTime.now(),
       ),
     );
 
@@ -314,6 +315,7 @@ class _AddIconButtonState extends State<AddIconButton>
         extras_price: cartItem.extras_price,
         extras: cartItem.extras,
         discountPrice: cartItem.discountPrice,
+        addedAt: cartItem.addedAt,
       ));
     }
 

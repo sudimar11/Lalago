@@ -212,6 +212,8 @@ class _TopRestaurantCard extends StatelessWidget {
                             imageUrl: getImageVAlidUrl(cardImage),
                             width: double.infinity,
                             height: double.infinity,
+                            memCacheWidth: 280,
+                            memCacheHeight: 280,
                             fit: BoxFit.cover,
                             placeholder: (context, url) => Container(
                               decoration: BoxDecoration(

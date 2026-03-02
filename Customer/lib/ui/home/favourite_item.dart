@@ -101,6 +101,8 @@ class _FavouriteItemScreenState extends State<FavouriteItemScreen> {
                   imageUrl: productModel.photo,
                   height: 100,
                   width: 100,
+                  memCacheWidth: 200,
+                  memCacheHeight: 200,
                   imageBuilder: (context, imageProvider) => Container(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(20),

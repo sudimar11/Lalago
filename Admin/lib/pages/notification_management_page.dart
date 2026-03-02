@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:brgy/pages/notification_actions_dashboard.dart';
 import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:convert';
@@ -533,6 +534,20 @@ class _NotificationManagementPageState
         title: const Text('Notification Management'),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.analytics),
+            tooltip: 'Action Performance',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const NotificationActionsDashboard(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Form(
         key: _formKey,

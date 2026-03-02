@@ -4,22 +4,44 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
+import 'package:foodie_customer/services/time_based_recommendations.dart';
 import 'package:foodie_customer/services/trending_service.dart';
 
 /// Discovery recommendations: mix of preferred cuisines, collaborative, and random.
 class DiscoveryService {
+  static List<String> getPreferredMealPeriods(Map<String, dynamic>? pref) {
+    if (pref == null) return [];
+    final times = pref['preferredTimes'];
+    if (times is! List) return [];
+    return times.map((e) => e.toString()).toList();
+  }
+
   static Future<List<VendorModel>> getDiscoveryRecommendations(
     String userId,
   ) async {
-    final preferredCuisines =
-        await _getUserPreferredCuisines(userId);
+    final doc = await FirebaseFirestore.instance
+        .collection(USERS)
+        .doc(userId)
+        .get();
+    final pref = doc.data()?['preferenceProfile'] as Map<String, dynamic>?;
+    final preferredCuisines = await _getUserPreferredCuisines(userId);
+    final preferredTimes = getPreferredMealPeriods(pref);
+    final currentPeriod = TimeBasedRecommendations.getMealPeriod();
+    final shouldBoostCurrentPeriod =
+        preferredTimes.contains(currentPeriod);
+
+    List<VendorModel> timeBased = [];
+    if (shouldBoostCurrentPeriod) {
+      timeBased = await TimeBasedRecommendations.getRecommendations().first;
+    }
+
     final newInPreferred =
         await _getNewRestaurantsInCuisines(preferredCuisines, 6);
     final collaborative =
         await _getCollaborativeRecommendations(userId, 3);
     final random = await _getRandomRestaurants(1);
 
-    final all = [...newInPreferred, ...collaborative, ...random];
+    final all = [...timeBased, ...newInPreferred, ...collaborative, ...random];
     final filtered = all.where((v) {
       final isOpen = v.reststatus == true;
       final hasRating = (v.reviewsCount ?? 0) > 0;

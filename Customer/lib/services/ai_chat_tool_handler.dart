@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -12,6 +14,8 @@ import 'package:foodie_customer/services/ai_product_search_service.dart';
 import 'package:foodie_customer/services/vector_search_service.dart';
 import 'package:foodie_customer/services/coupon_service.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
+import 'package:foodie_customer/services/popularity_service.dart';
+import 'package:foodie_customer/services/restaurant_status_service.dart';
 
 /// Executes AI chat tools (order status, cart, booking, etc.).
 class AiChatToolHandler {
@@ -59,6 +63,8 @@ class AiChatToolHandler {
         return _getActiveOrders();
       case 'add_products_to_cart':
         return _addProductsToCart(args);
+      case 'check_restaurant_status':
+        return _checkRestaurantStatus(args);
       case 'apply_best_coupon':
         return _applyBestCoupon();
       case 'get_cart_summary':
@@ -75,6 +81,8 @@ class AiChatToolHandler {
         return _searchRestaurants(args);
       case 'get_popular_items':
         return _getPopularItems();
+      case 'get_popular_items_at_restaurant':
+        return _getPopularItemsAtRestaurant(args);
       case 'check_delivery_deadline':
         return _checkDeliveryDeadline(args);
       default:
@@ -254,12 +262,93 @@ class AiChatToolHandler {
       return {'error': 'items must be a list of {productId, quantity}'};
     }
 
+    // Resolve productId -> vendorID for each item
+    final productToVendor = <String, String>{};
+    try {
+      for (final item in itemsRaw) {
+        if (item is! Map) continue;
+        final productId =
+            (item['productId'] ?? item['product_id'] ?? '').toString();
+        if (productId.isEmpty) continue;
+        if (productToVendor.containsKey(productId)) continue;
+
+        final productSnap = await FirebaseFirestore.instance
+            .collection(PRODUCTS)
+            .where('id', isEqualTo: productId)
+            .limit(1)
+            .get();
+
+        if (productSnap.docs.isNotEmpty) {
+          final vendorId = (productSnap.docs.first.data()['vendorID'] ?? '')
+              .toString();
+          if (vendorId.isNotEmpty) {
+            productToVendor[productId] = vendorId;
+          }
+        }
+      }
+
+      final uniqueVendorIds =
+          productToVendor.values.toSet().toList();
+      if (uniqueVendorIds.isEmpty && itemsRaw.isNotEmpty) {
+        return {
+          'error': 'status_check_failed',
+          'message': 'Could not resolve vendor for products.',
+        };
+      }
+
+      if (uniqueVendorIds.isNotEmpty) {
+        final statusMap = await RestaurantStatusService
+            .checkMultipleVendorsStatus(uniqueVendorIds);
+        final closedVendorIds = uniqueVendorIds
+            .where((vid) => (statusMap[vid]?['isOpen'] as bool?) != true)
+            .toList();
+
+        log('[AI_CART] Status check: vendorIds=$uniqueVendorIds, '
+            'closed=$closedVendorIds');
+
+        if (closedVendorIds.isNotEmpty) {
+          final closedRestaurants = closedVendorIds.map((vid) {
+            final s = statusMap[vid];
+            return {
+              'vendorId': vid,
+              'vendorName': (s?['vendorName'] ?? 'Restaurant').toString(),
+              'todayHours': (s?['todayHours'] ?? 'Closed').toString(),
+            };
+          }).toList();
+          final affectedProductIds = productToVendor.entries
+              .where((e) => closedVendorIds.contains(e.value))
+              .map((e) => e.key)
+              .toList();
+          final names = closedRestaurants
+              .map((r) => (r['vendorName'] ?? 'Restaurant').toString())
+              .join(', ');
+
+          return {
+            'error': 'cannot_add_closed',
+            'message':
+                'The following restaurant(s) are currently closed: $names. '
+                'Please try again during operating hours.',
+            'closedRestaurants': closedRestaurants,
+            'affectedProductIds': affectedProductIds,
+            'currentTime': RestaurantStatusService.getCurrentTimeFormatted(),
+          };
+        }
+      }
+    } catch (e, st) {
+      log('[AI_CART] Status check failed: $e', stackTrace: st);
+      return {
+        'error': 'status_check_failed',
+        'message': _sanitizeError(e),
+      };
+    }
+
     final successes = <String>[];
     final failures = <String>[];
 
     for (final item in itemsRaw) {
       if (item is! Map) continue;
-      final productId = (item['productId'] ?? item['product_id'] ?? '').toString();
+      final productId =
+          (item['productId'] ?? item['product_id'] ?? '').toString();
       final qty = item['quantity'] is int
           ? item['quantity'] as int
           : int.tryParse((item['quantity'] ?? '1').toString()) ?? 1;
@@ -273,11 +362,38 @@ class AiChatToolHandler {
       }
     }
 
+    log('[AI_CART] Add result: added=${successes.length}, failed=${failures.length}');
     return {
       'success': failures.isEmpty,
       'added': successes,
       'failed': failures,
     };
+  }
+
+  Future<Map<String, dynamic>> _checkRestaurantStatus(
+    Map<String, dynamic> args,
+  ) async {
+    final vendorId = (args['vendorId'] ?? '').toString().trim();
+    if (vendorId.isEmpty) {
+      return {'error': 'vendorId is required'};
+    }
+
+    try {
+      final status =
+          await RestaurantStatusService.checkRestaurantStatus(vendorId);
+
+      if (status['exists'] != true) {
+        return {'error': status['error'] ?? 'Restaurant not found'};
+      }
+
+      final result = Map<String, dynamic>.from(status);
+      result['currentTime'] =
+          RestaurantStatusService.getCurrentTimeFormatted();
+      result['currentDay'] = RestaurantStatusService.getCurrentDay();
+      return result;
+    } catch (e) {
+      return {'error': 'Failed to check restaurant status'};
+    }
   }
 
   Future<Map<String, dynamic>> _applyBestCoupon() async {
@@ -586,6 +702,53 @@ class AiChatToolHandler {
         'message': popular.isEmpty
             ? 'No popular items today.'
             : 'Popular today:',
+        'popular': popular,
+      };
+    } catch (e) {
+      return {
+        'message': 'Could not load popular items.',
+        'popular': [],
+        'error': _sanitizeError(e),
+      };
+    }
+  }
+
+  Future<Map<String, dynamic>> _getPopularItemsAtRestaurant(
+    Map<String, dynamic> args,
+  ) async {
+    final vendorId = (args['vendorId'] ?? '').toString().trim();
+    final restaurantName = (args['restaurantName'] ?? '').toString().trim();
+    final timeRange = (args['timeRange'] ?? 'week').toString();
+    final limitRaw = args['limit'];
+    final limit = limitRaw is int
+        ? limitRaw
+        : (int.tryParse(limitRaw?.toString() ?? '10') ?? 10);
+
+    String? resolvedVendorId = vendorId.isNotEmpty ? vendorId : null;
+    if (resolvedVendorId == null && restaurantName.isNotEmpty) {
+      resolvedVendorId =
+          await PopularityService.findVendorIdByName(restaurantName);
+    }
+
+    if (resolvedVendorId == null || resolvedVendorId.isEmpty) {
+      return {
+        'message': vendorId.isEmpty && restaurantName.isEmpty
+            ? 'Please provide vendorId or restaurantName.'
+            : 'Restaurant not found.',
+        'popular': [],
+      };
+    }
+
+    try {
+      final popular = await PopularityService.getPopularItemsAtRestaurant(
+        vendorId: resolvedVendorId,
+        timeRange: timeRange,
+        limit: limit,
+      );
+      return {
+        'message': popular.isEmpty
+            ? 'No popular items found for this restaurant.'
+            : 'Popular at this restaurant:',
         'popular': popular,
       };
     } catch (e) {

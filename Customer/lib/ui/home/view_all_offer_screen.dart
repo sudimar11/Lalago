@@ -263,6 +263,8 @@ class _OffersScreenState extends State<OffersScreen> {
                       imageUrl: getImageVAlidUrl(offerModel.imageOffer!),
                       height: 100,
                       width: 100,
+                      memCacheWidth: 200,
+                      memCacheHeight: 200,
                       fit: BoxFit.cover,
                       errorWidget: (context, url, error) => Container(
                         width: 100,

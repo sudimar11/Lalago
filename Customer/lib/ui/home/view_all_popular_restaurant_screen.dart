@@ -74,6 +74,7 @@ class _ViewAllPopularRestaurantScreenState extends State<ViewAllPopularRestauran
 
   @override
   void dispose() {
+    // Cancel stream subscription to prevent memory leaks
     _popularSubscription?.cancel();
     super.dispose();
   }
@@ -141,6 +142,8 @@ class _ViewAllPopularRestaurantScreenState extends State<ViewAllPopularRestauran
             Expanded(
                 child: CachedNetworkImage(
               imageUrl: getImageVAlidUrl(vendorModel.photo),
+              memCacheWidth: 280,
+              memCacheHeight: 280,
               imageBuilder: (context, imageProvider) => Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(20),

@@ -42,6 +42,15 @@ class OrderModel {
   String? referralAuditNote; // Audit note explaining referral vs promo decision
   String? rejectionReason; // Reason provided by restaurant for order rejection
 
+  // Enhanced failure tracking
+  String? failureType;
+  String? failureReason;
+  Map<String, dynamic>? failureDetails;
+  bool? recoveryAttempted;
+  bool? recoverySuccessful;
+  String? recoveredOrderId;
+  List<Map<String, dynamic>>? alternativeSuggestions;
+
   // First-order coupon tracking
   String? appliedCouponId; // Coupon ID if first-order coupon was applied
   double? couponDiscountAmount; // Discount amount from first-order coupon
@@ -119,6 +128,13 @@ class OrderModel {
       this.isReferralPath = false,
       this.referralAuditNote,
       this.rejectionReason,
+      this.failureType,
+      this.failureReason,
+      this.failureDetails,
+      this.recoveryAttempted,
+      this.recoverySuccessful,
+      this.recoveredOrderId,
+      this.alternativeSuggestions,
       this.appliedCouponId,
       this.couponDiscountAmount,
       this.appliedDiscountType,
@@ -242,6 +258,19 @@ class OrderModel {
           : false,
       referralAuditNote: parsedJson['referralAuditNote'],
       rejectionReason: parsedJson['rejectionReason'],
+      failureType: parsedJson['failureType'],
+      failureReason: parsedJson['failureReason'],
+      failureDetails: parsedJson['failureDetails'] != null
+          ? Map<String, dynamic>.from(parsedJson['failureDetails'] as Map)
+          : null,
+      recoveryAttempted: parsedJson['recoveryAttempted'] as bool?,
+      recoverySuccessful: parsedJson['recoverySuccessful'] as bool?,
+      recoveredOrderId: parsedJson['recoveredOrderId'],
+      alternativeSuggestions: parsedJson['alternativeSuggestions'] != null
+          ? (parsedJson['alternativeSuggestions'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList()
+          : null,
 
       // First-order coupon tracking
       appliedCouponId: parsedJson['appliedCouponId'],
@@ -316,6 +345,13 @@ class OrderModel {
       "isReferralPath": this.isReferralPath,
       "referralAuditNote": this.referralAuditNote,
       "rejectionReason": this.rejectionReason,
+      "failureType": this.failureType,
+      "failureReason": this.failureReason,
+      "failureDetails": this.failureDetails,
+      "recoveryAttempted": this.recoveryAttempted,
+      "recoverySuccessful": this.recoverySuccessful,
+      "recoveredOrderId": this.recoveredOrderId,
+      "alternativeSuggestions": this.alternativeSuggestions,
 
       // First-order coupon tracking
       "appliedCouponId": this.appliedCouponId,

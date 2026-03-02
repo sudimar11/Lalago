@@ -128,6 +128,8 @@ class _ViewAllNewArrivalRestaurantScreenState extends State<ViewAllNewArrivalRes
             Expanded(
                 child: CachedNetworkImage(
               imageUrl: getImageVAlidUrl(vendorModel.photo),
+              memCacheWidth: 280,
+              memCacheHeight: 280,
               imageBuilder: (context, imageProvider) => Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(20),

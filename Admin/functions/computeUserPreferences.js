@@ -18,6 +18,23 @@ const COMPLETED_STATUSES = [
   'Completed',
 ];
 
+function calculateAverageOrderFrequency(orders) {
+  if (!orders || orders.length < 2) return null;
+  const sorted = [...orders].sort((a, b) => {
+    const dateA = a.createdAt?.toDate?.() || new Date(0);
+    const dateB = b.createdAt?.toDate?.() || new Date(0);
+    return dateA - dateB;
+  });
+  let totalDays = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    const dateA = sorted[i - 1].createdAt?.toDate?.() || new Date(0);
+    const dateB = sorted[i].createdAt?.toDate?.() || new Date(0);
+    const days = (dateB - dateA) / (1000 * 60 * 60 * 24);
+    totalDays += days;
+  }
+  return Math.round(totalDays / (sorted.length - 1));
+}
+
 exports.computeUserPreferences = functions
   .region('us-central1')
   .pubsub.schedule('0 4 * * *')
@@ -89,38 +106,102 @@ exports.computeUserPreferences = functions
 
       const preferredTimes = Object.entries(timeCounts)
         .filter(([, v]) => v / totalOrders > 0.2)
-        .map(([k]) => k);
+        .map(([k]) => (k === 'lateNight' ? 'late_night' : k));
 
       const topRestaurants = Object.entries(favoriteRestaurants)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
         .map(([id]) => id);
 
+      const completedOrders = orders.sort((a, b) => {
+        const dateA = a.createdAt?.toDate?.() || new Date(0);
+        const dateB = b.createdAt?.toDate?.() || new Date(0);
+        return dateB - dateA;
+      });
+      const lastCompletedOrder = completedOrders[0] || null;
+
+      const lastOrderProducts = lastCompletedOrder?.products?.slice(0, 3)
+        ?.map((p) => ({ id: p.id || '', name: p.name || '' }))
+        .filter((p) => p.id || p.name) || [];
+
+      const productPreferences = {};
+      const categoryPreferences = {};
+
+      for (const order of orders) {
+        const products = order.products || [];
+        const vendorId = order.vendorID;
+        const vendorName = order.vendor?.title || '';
+        for (const product of products) {
+          const productId = (product.id || product['id'] || '')
+            .toString()
+            .split('~')[0];
+          if (productId) {
+            if (!productPreferences[productId]) {
+              productPreferences[productId] = {
+                count: 0,
+                name: product.name || '',
+                vendorId: vendorId || '',
+                vendorName,
+                categoryId: product.category_id || product.categoryID || '',
+              };
+            }
+            productPreferences[productId].count +=
+              product.quantity || 1;
+          }
+          const catId = product.category_id || product.categoryID;
+          if (catId) {
+            categoryPreferences[catId] =
+              (categoryPreferences[catId] || 0) + 1;
+          }
+        }
+      }
+
+      const favoriteProducts = Object.entries(productPreferences)
+        .map(([id, data]) => ({
+          id,
+          name: data.name,
+          vendorId: data.vendorId,
+          vendorName: data.vendorName,
+          count: data.count,
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+
+      const topCategories = Object.entries(categoryPreferences)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([categoryId, count]) => ({ categoryId, count }));
+
+      const preferenceProfile = {
+        cuisinePreferences: cuisinePrefs,
+        avgSpend: totalOrders > 0 ? totalSpend / totalOrders : 0,
+        preferredTimes,
+        favoriteRestaurants: topRestaurants,
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        lastOrderedAt: lastCompletedOrder?.createdAt || null,
+        lastOrderVendorId: lastCompletedOrder?.vendorID || null,
+        lastOrderVendorName: lastCompletedOrder?.vendor?.title || null,
+        lastOrderProducts,
+        orderFrequencyDays: calculateAverageOrderFrequency(orders),
+        totalCompletedOrders: totalOrders,
+        favoriteProducts,
+        topCategories,
+      };
+
+      const updateData = {
+        preferenceProfile,
+        lastOrderCompletedAt: lastCompletedOrder?.createdAt || null,
+        reorderEligible: totalOrders >= 2,
+      };
+
       try {
-        await db.collection(USERS).doc(userId).update({
-          preferenceProfile: {
-            cuisinePreferences: cuisinePrefs,
-            avgSpend: totalOrders > 0 ? totalSpend / totalOrders : 0,
-            preferredTimes,
-            favoriteRestaurants: topRestaurants,
-            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-          },
-        });
+        await db.collection(USERS).doc(userId).update(updateData);
       } catch (e) {
         if (e.code === 5) {
           try {
-            await db.collection(USERS).doc(userId).set(
-              {
-                preferenceProfile: {
-                  cuisinePreferences: cuisinePrefs,
-                  avgSpend: totalOrders > 0 ? totalSpend / totalOrders : 0,
-                  preferredTimes,
-                  favoriteRestaurants: topRestaurants,
-                  lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-                },
-              },
-              { merge: true }
-            );
+            await db.collection(USERS).doc(userId).set(updateData, {
+              merge: true,
+            });
           } catch (_) {}
         }
       }

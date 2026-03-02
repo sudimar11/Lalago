@@ -278,6 +278,9 @@ class _LoginScreen extends State<LoginScreen> {
 
       try {
         await FireStoreUtils.updateCurrentUser(result);
+        if (result.fcmToken.isNotEmpty) {
+          await FireStoreUtils.addFcmTokenToArray(result.userID, result.fcmToken);
+        }
         MyAppState.currentUser = result;
 
         if (MyAppState.currentUser!.isReallyActive) {

@@ -15,9 +15,11 @@ import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/CurrencyModel.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/timezone_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/services/version_service.dart';
+import 'package:foodie_customer/services/cart_sync_service.dart';
 
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/signUp/SignUpScreen.dart';
@@ -28,9 +30,11 @@ import 'package:foodie_customer/ui/onBoarding/OnBoardingScreen.dart';
 import 'package:foodie_customer/ui/profile/ProfileScreen.dart';
 import 'package:foodie_customer/ui/searchScreen/SearchScreen.dart';
 import 'package:foodie_customer/screens/ai_chat_screen.dart';
+import 'package:foodie_customer/widgets/ash_avatar.dart';
 
 import 'package:foodie_customer/utils/DarkThemeProvider.dart';
 import 'package:foodie_customer/utils/notification_service.dart';
+import 'package:foodie_customer/services/analytics_service.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -54,7 +58,8 @@ class ContainerScreen extends StatefulWidget {
   }
 }
 
-class _ContainerScreen extends State<ContainerScreen> {
+class _ContainerScreen extends State<ContainerScreen>
+    with WidgetsBindingObserver {
   late CartDatabase cartDatabase;
 
   User? user;
@@ -120,6 +125,7 @@ class _ContainerScreen extends State<ContainerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     if (widget.user != null) {
       user = widget.user!;
@@ -136,8 +142,21 @@ class _ContainerScreen extends State<ContainerScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cancelLoadingTimers();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final userId = user?.userID ?? MyAppState.currentUser?.userID;
+    if (userId == null || userId.isEmpty) return;
+    if (state == AppLifecycleState.resumed) {
+      AnalyticsService.trackUserEngagement(userId, 'app_open');
+    } else if (state == AppLifecycleState.paused) {
+      AnalyticsService.trackUserEngagement(userId, 'app_background');
+    }
   }
 
   Future<void> _performInitialization() async {
@@ -188,6 +207,7 @@ if (fbUser == null) {
       // 3) Fetch Firestore user record
       final fetchedUser = await FireStoreUtils.getCurrentUser(fbUser.uid);
       if (fetchedUser == null || fetchedUser.role != USER_ROLE_CUSTOMER) {
+        await CartSyncService.onLogout();
         await auth.FirebaseAuth.instance.signOut();
         MyAppState.currentUser = null;
         user = null;
@@ -207,6 +227,8 @@ if (fbUser == null) {
       await FireStoreUtils.updateCurrentUser(fetchedUser);
       MyAppState.currentUser = fetchedUser;
       user = fetchedUser;
+
+      unawaited(TimezoneService.updateUserTimezone());
 
       // 5) Check for app updates
       if (mounted) {
@@ -273,6 +295,14 @@ if (fbUser == null) {
     FireStoreUtils.getplaceholderimage().then((value) {
       AppGlobal.placeHolderImage = value;
     });
+
+    // Start cart sync for logged-in users
+    if (MyAppState.currentUser != null && mounted) {
+      try {
+        final cartDb = Provider.of<CartDatabase>(context, listen: false);
+        CartSyncService.startCartSync(cartDb);
+      } catch (_) {}
+    }
 
     // Initialize currency and settings
     await setCurrency();
@@ -807,7 +837,9 @@ if (fbUser == null) {
                       ? FloatingActionButton(
                           key: const ValueKey('ai_fab'),
                           onPressed: () => push(context, AiChatScreen()),
-                          child: const Icon(Icons.smart_toy),
+                          backgroundColor: Colors.transparent,
+                          elevation: 0,
+                          child: AshAvatar(radius: 24, showGlow: true),
                         )
                       : const SizedBox(key: ValueKey('ai_fab_empty')),
                 ),
