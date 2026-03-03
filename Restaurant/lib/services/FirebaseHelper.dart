@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -564,17 +565,20 @@ class FireStoreUtils {
   }
 
   Future<CurrencyModel?> getCurrency() async {
-    CurrencyModel? currencyModel;
-    await firestore
-        .collection(Currency)
-        .where("isActive", isEqualTo: true)
-        .get()
-        .then((value) {
+    try {
+      final value = await firestore
+          .collection(Currency)
+          .where("isActive", isEqualTo: true)
+          .get()
+          .timeout(const Duration(seconds: 15));
       if (value.docs.isNotEmpty) {
-        currencyModel = CurrencyModel.fromJson(value.docs.first.data());
+        return CurrencyModel.fromJson(value.docs.first.data());
       }
-    });
-    return currencyModel;
+      return null;
+    } catch (e) {
+      log('getCurrency error: $e');
+      return null;
+    }
   }
 
   // static Future<VendorCategoryModel> getVendorCategoryById() async {
@@ -819,10 +823,10 @@ class FireStoreUtils {
   }
 
   Stream<List<OrderModel>> watchOrdersPlaced(String vendorID) async* {
-    // broadcast so multiple listeners can share it
     final controller = StreamController<List<OrderModel>>.broadcast();
+    StreamSubscription? sub;
 
-    firestore
+    sub = firestore
         .collection(ORDERS)
         .where('vendorID', isEqualTo: vendorID)
         .where('status', whereIn: [
@@ -832,29 +836,35 @@ class FireStoreUtils {
           'Driver Accepted',
           'Driver Rejected',
         ])
-        // ← only Order Placed
         .orderBy('createdAt', descending: true)
         .snapshots()
-        .listen((snapshot) {
-          final orders = <OrderModel>[];
-          for (final doc in snapshot.docs) {
-            try {
-              orders.add(OrderModel.fromJson(doc.data()));
-            } catch (e, s) {
-              print('parse error on ${doc.id}: $e\n$s');
+        .listen(
+          (snapshot) {
+            final orders = <OrderModel>[];
+            for (final doc in snapshot.docs) {
+              try {
+                orders.add(OrderModel.fromJson(doc.data()));
+              } catch (e, s) {
+                print('parse error on ${doc.id}: $e\n$s');
+              }
             }
-          }
-          controller.add(orders);
-        });
+            if (!controller.isClosed) controller.add(orders);
+          },
+          onError: (e) {
+            if (!controller.isClosed) controller.addError(e);
+          },
+        );
+
+    controller.onCancel = () => sub?.cancel();
 
     yield* controller.stream;
   }
 
   Stream<List<OrderModel>> watchCompletedOrders(String vendorID) async* {
-    // broadcast so multiple listeners can share it
     final controller = StreamController<List<OrderModel>>.broadcast();
+    StreamSubscription? sub;
 
-    firestore
+    sub = firestore
         .collection(ORDERS)
         .where('vendorID', isEqualTo: vendorID)
         .where('status', whereNotIn: [
@@ -865,25 +875,32 @@ class FireStoreUtils {
         ])
         .orderBy('createdAt', descending: true)
         .snapshots()
-        .listen((snapshot) {
-          print(
-              '=== DEBUG: watchCompletedOrders - Firestore query returned ${snapshot.docs.length} documents ===');
-          final orders = <OrderModel>[];
-          for (final doc in snapshot.docs) {
-            try {
-              final orderData = doc.data();
-              final status = orderData['status'] as String?;
-              print(
-                  '=== DEBUG: watchCompletedOrders - Order ${doc.id} with status: "$status" ===');
-              orders.add(OrderModel.fromJson(orderData));
-            } catch (e, s) {
-              print('parse error on ${doc.id}: $e\n$s');
+        .listen(
+          (snapshot) {
+            print(
+                '=== DEBUG: watchCompletedOrders - Firestore query returned ${snapshot.docs.length} documents ===');
+            final orders = <OrderModel>[];
+            for (final doc in snapshot.docs) {
+              try {
+                final orderData = doc.data();
+                final status = orderData['status'] as String?;
+                print(
+                    '=== DEBUG: watchCompletedOrders - Order ${doc.id} with status: "$status" ===');
+                orders.add(OrderModel.fromJson(orderData));
+              } catch (e, s) {
+                print('parse error on ${doc.id}: $e\n$s');
+              }
             }
-          }
-          print(
-              '=== DEBUG: watchCompletedOrders - Adding ${orders.length} orders to stream ===');
-          controller.add(orders);
-        });
+            print(
+                '=== DEBUG: watchCompletedOrders - Adding ${orders.length} orders to stream ===');
+            if (!controller.isClosed) controller.add(orders);
+          },
+          onError: (e) {
+            if (!controller.isClosed) controller.addError(e);
+          },
+        );
+
+    controller.onCancel = () => sub?.cancel();
 
     yield* controller.stream;
   }
@@ -903,8 +920,9 @@ class FireStoreUtils {
     print(
         '=== DEBUG: Excluding statuses: Order Placed, Driver Assigned, Order Accepted, Driver Accepted ===');
 
-    // Show all completed orders regardless of date
-    firestore
+    StreamSubscription? sub;
+
+    sub = firestore
         .collection(ORDERS)
         .where('vendorID', isEqualTo: vendorID)
         .where('status', whereNotIn: [
@@ -915,50 +933,57 @@ class FireStoreUtils {
         ])
         .orderBy('createdAt', descending: true)
         .snapshots()
-        .listen((snapshot) {
-          print(
-              '=== DEBUG: Firestore query returned ${snapshot.docs.length} documents ===');
-          final orders = <OrderModel>[];
-          for (final doc in snapshot.docs) {
-            try {
-              final orderData = doc.data();
-              final status = orderData['status'] as String?;
-              final createdAt = orderData['createdAt'] as Timestamp?;
-              final orderVendorID = orderData['vendorID'] as String?;
+        .listen(
+          (snapshot) {
+            print(
+                '=== DEBUG: Firestore query returned ${snapshot.docs.length} documents ===');
+            final orders = <OrderModel>[];
+            for (final doc in snapshot.docs) {
+              try {
+                final orderData = doc.data();
+                final status = orderData['status'] as String?;
+                final createdAt = orderData['createdAt'] as Timestamp?;
+                final orderVendorID = orderData['vendorID'] as String?;
 
-              print('=== DEBUG: Order ${doc.id} ===');
-              print('  Status: "$status"');
-              print('  CreatedAt: $createdAt');
-              print('  VendorID: $orderVendorID');
-              print('  Expected VendorID: $vendorID');
+                print('=== DEBUG: Order ${doc.id} ===');
+                print('  Status: "$status"');
+                print('  CreatedAt: $createdAt');
+                print('  VendorID: $orderVendorID');
+                print('  Expected VendorID: $vendorID');
 
-              // Check if status is in the exclusion list
-              final excludedStatuses = [
-                'Order Placed',
-                'Driver Assigned',
-                'Order Accepted',
-                'Driver Accepted',
-              ];
-              if (status != null && excludedStatuses.contains(status)) {
-                print('  ❌ EXCLUDED: Status "$status" is in exclusion list');
-                continue;
+                final excludedStatuses = [
+                  'Order Placed',
+                  'Driver Assigned',
+                  'Order Accepted',
+                  'Driver Accepted',
+                ];
+                if (status != null && excludedStatuses.contains(status)) {
+                  print(
+                      '  ❌ EXCLUDED: Status "$status" is in exclusion list');
+                  continue;
+                }
+
+                if (status != null && createdAt != null) {
+                  final orderDate = createdAt.toDate();
+                  print('  ✅ INCLUDED - Status: $status, Date: $orderDate');
+                  orders.add(OrderModel.fromJson(orderData));
+                } else {
+                  print('  ❌ FILTERED OUT - Missing status or createdAt');
+                  print('    Status: $status');
+                  print('    CreatedAt: $createdAt');
+                }
+              } catch (e, s) {
+                print('parse error on ${doc.id}: $e\n$s');
               }
-
-              if (status != null && createdAt != null) {
-                final orderDate = createdAt.toDate();
-                print('  ✅ INCLUDED - Status: $status, Date: $orderDate');
-                orders.add(OrderModel.fromJson(orderData));
-              } else {
-                print('  ❌ FILTERED OUT - Missing status or createdAt');
-                print('    Status: $status');
-                print('    CreatedAt: $createdAt');
-              }
-            } catch (e, s) {
-              print('parse error on ${doc.id}: $e\n$s');
             }
-          }
-          controller.add(orders);
-        });
+            if (!controller.isClosed) controller.add(orders);
+          },
+          onError: (e) {
+            if (!controller.isClosed) controller.addError(e);
+          },
+        );
+
+    controller.onCancel = () => sub?.cancel();
 
     yield* controller.stream;
   }
@@ -1495,12 +1520,42 @@ class FireStoreUtils {
 
   /// save a new user document in the USERS table in firebase firestore
   /// returns an error message on failure or null on success
-  static Future<String?> firebaseCreateNewUser(User user) async =>
-      await firestore
-          .collection(USERS)
-          .doc(user.userID)
-          .set(user.toJson())
-          .then((value) => null, onError: (e) => e);
+  /// Retries up to 2 times for transient 'unavailable' errors
+  static Future<String?> firebaseCreateNewUser(User user) async {
+    const maxRetries = 3;
+    var lastError = '';
+    for (var attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await firestore.collection(USERS).doc(user.userID).set(user.toJson());
+        return null;
+      } on FirebaseException catch (e) {
+        lastError = _firestoreErrorToMessage(e);
+        if (e.code == 'unavailable' && attempt < maxRetries) {
+          await Future.delayed(const Duration(seconds: 2));
+          continue;
+        }
+        return lastError;
+      } catch (e) {
+        return 'Unexpected error: $e';
+      }
+    }
+    return lastError;
+  }
+
+  static String _firestoreErrorToMessage(FirebaseException e) {
+    switch (e.code) {
+      case 'permission-denied':
+        return 'Permission error. Please contact support.';
+      case 'unavailable':
+        return 'Firebase service temporarily unavailable. Try again.';
+      case 'resource-exhausted':
+        return 'Too many requests. Please try again later.';
+      case 'deadline-exceeded':
+        return 'Request timed out. Check your connection and try again.';
+      default:
+        return 'Firestore error: ${e.message ?? e.code}';
+    }
+  }
 
   /// login with email and password with firebase
   /// @param email user email
@@ -1644,41 +1699,71 @@ class FireStoreUtils {
       auth.UserCredential result = await auth.FirebaseAuth.instance
           .createUserWithEmailAndPassword(
               email: emailAddress, password: password);
-      String profilePicUrl = '';
-      if (image != null) {
-        updateProgress('Uploading image, Please wait...'.tr());
-        profilePicUrl =
-            await uploadUserImageToFireStorage(image, result.user?.uid ?? '');
-      }
-      User user = User(
-          email: emailAddress,
-          settings: UserSettings(),
-          photos: [],
-          lastOnlineTimestamp: Timestamp.now(),
-          active: auto_approve_restaurant == true ? true : false,
-          phoneNumber: mobile,
-          firstName: firstName,
-          userID: result.user?.uid ?? '',
-          // vendorID: result.user?.uid ?? '',
-          lastName: lastName,
-          role: USER_ROLE_VENDOR,
-          fcmToken: await firebaseMessaging.getToken() ?? '',
-          createdAt: Timestamp.now(),
-          profilePictureURL: profilePicUrl);
-      String? errorMessage = await firebaseCreateNewUser(user);
-      await FireStoreUtils.sendNewVendorMail(user);
-      if (errorMessage == null) {
+      print('Auth user created: ${result.user?.uid}');
+      updateProgress('Creating account...'.tr());
+
+      try {
+        String profilePicUrl = '';
+        if (image != null) {
+          updateProgress('Uploading image...'.tr());
+          profilePicUrl = await uploadUserImageToFireStorage(
+              image, result.user?.uid ?? '');
+          print('Image upload completed');
+        }
+        updateProgress('Saving your information...'.tr());
+        User user = User(
+            email: emailAddress,
+            settings: UserSettings(),
+            photos: [],
+            lastOnlineTimestamp: Timestamp.now(),
+            active: auto_approve_restaurant == true ? true : false,
+            phoneNumber: mobile,
+            firstName: firstName,
+            userID: result.user?.uid ?? '',
+            lastName: lastName,
+            role: USER_ROLE_VENDOR,
+            fcmToken: await firebaseMessaging.getToken() ?? '',
+            createdAt: Timestamp.now(),
+            profilePictureURL: profilePicUrl);
+        String? errorMessage = await firebaseCreateNewUser(user);
+        if (errorMessage != null) {
+          print('Firestore write failed, deleting Auth user ${result.user?.uid}');
+          try {
+            await result.user?.delete();
+          } catch (delErr) {
+            print('Failed to delete Auth user: $delErr');
+          }
+          return errorMessage;
+        }
+        print('Firestore write completed for ${user.userID}');
+        updateProgress('Almost done...'.tr());
+        await FireStoreUtils.sendNewVendorMail(user);
         return user;
-      } else {
-        return 'Couldn\'t sign up for firebase, Please try again.';
+      } catch (e) {
+        print('Firestore/post-Auth step failed, deleting Auth user '
+            '${result.user?.uid}');
+        try {
+          await result.user?.delete();
+        } catch (delErr) {
+          print('Failed to delete Auth user: $delErr');
+        }
+        return e.toString();
       }
     } on auth.FirebaseAuthException catch (error) {
       print(error.toString() + '${error.stackTrace}');
+      if (error.code == 'email-already-in-use') {
+        return await _tryOrphanRecovery(
+          emailAddress,
+          password,
+          image,
+          firstName,
+          lastName,
+          mobile,
+          auto_approve_restaurant,
+        );
+      }
       String message = "notSignUp".tr();
       switch (error.code) {
-        case 'email-already-in-use':
-          message = 'Email already in use, Please pick another email!';
-          break;
         case 'invalid-email':
           message = 'Enter valid e-mail';
           break;
@@ -1695,6 +1780,57 @@ class FireStoreUtils {
       return message;
     } catch (e) {
       return "notSignUp".tr();
+    }
+  }
+
+  static Future<dynamic> _tryOrphanRecovery(
+    String emailAddress,
+    String password,
+    File? image,
+    String firstName,
+    String lastName,
+    String mobile,
+    bool? auto_approve_restaurant,
+  ) async {
+    try {
+      await auth.FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: emailAddress, password: password);
+      final uid = auth.FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return 'Email already in use. Try logging in instead.';
+      User? existingUser = await getCurrentUser(uid);
+      if (existingUser != null) {
+        await auth.FirebaseAuth.instance.signOut();
+        return 'Email already in use, Please pick another email!';
+      }
+      print('Orphan detected for uid $uid, completing registration');
+      String profilePicUrl = '';
+      if (image != null) {
+        profilePicUrl =
+            await uploadUserImageToFireStorage(image, uid);
+      }
+      User user = User(
+          email: emailAddress,
+          settings: UserSettings(),
+          photos: [],
+          lastOnlineTimestamp: Timestamp.now(),
+          active: auto_approve_restaurant == true ? true : false,
+          phoneNumber: mobile,
+          firstName: firstName,
+          userID: uid,
+          lastName: lastName,
+          role: USER_ROLE_VENDOR,
+          fcmToken: await firebaseMessaging.getToken() ?? '',
+          createdAt: Timestamp.now(),
+          profilePictureURL: profilePicUrl);
+      String? errorMessage = await firebaseCreateNewUser(user);
+      if (errorMessage != null) return errorMessage;
+      await FireStoreUtils.sendNewVendorMail(user);
+      print('Orphan recovery completed, Firestore doc created');
+      return user;
+    } on auth.FirebaseAuthException catch (_) {
+      return 'Email already in use. Try logging in instead.';
+    } catch (e) {
+      return 'Email already in use, Please pick another email!';
     }
   }
 

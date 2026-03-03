@@ -10,6 +10,7 @@ import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/model/User.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:foodie_restaurant/ui/container/ContainerScreen.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl_phone_number_input/intl_phone_number_input.dart';
@@ -75,25 +76,22 @@ class _SignUpState extends State<SignUpScreen> {
 
 
   getData() async {
-
-    await FirebaseFirestore.instance
-
-        .collection(Setting)
-
-        .doc('restaurant')
-
-        .get()
-
-        .then((value) {
-
-      setState(() {
-
-        auto_approve_restaurant = value.data()!['auto_approve_restaurant'];
-
-      });
-
-    });
-
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection(Setting)
+          .doc('restaurant')
+          .get();
+      if (mounted) {
+        setState(() {
+          auto_approve_restaurant =
+              snapshot.data()?['auto_approve_restaurant'] as bool? ?? false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => auto_approve_restaurant = false);
+      }
+    }
   }
 
 
@@ -1176,12 +1174,38 @@ class _SignUpState extends State<SignUpScreen> {
           "Signup Inputs - Email: $email, Password: $password, FirstName: $firstName, LastName: $lastName, Mobile: $mobile");
 
 
+      // Connectivity check
+
+
+      final connectivityResult = await Connectivity().checkConnectivity();
+
+      if (connectivityResult.contains(ConnectivityResult.none) ||
+
+          connectivityResult.isEmpty) {
+
+        showAlertDialog(
+
+          context,
+
+          'No Internet'.tr(),
+
+          'Please check your connection and try again.'.tr(),
+
+          true,
+
+        );
+
+        return;
+
+      }
+
+
       // Show progress dialog
 
 
       await showProgress(
 
-          context, 'Creating new account, Please wait...'.tr(), false);
+          context, 'Creating your account...\nStep 1: Validating information'.tr(), false);
 
 
       try {
@@ -1204,7 +1228,13 @@ class _SignUpState extends State<SignUpScreen> {
         }
 
 
-        // Attempt Firebase signup
+        // Step 2: Contact Firebase
+
+
+        updateProgress('Step 2: Contacting Firebase...'.tr());
+
+
+        // Attempt Firebase signup with timeout
 
 
         dynamic result =
@@ -1225,19 +1255,32 @@ class _SignUpState extends State<SignUpScreen> {
 
           auto_approve_restaurant ?? false,
 
+        ).timeout(
+
+          const Duration(seconds: 30),
+
+          onTimeout: () {
+
+            throw Exception(
+
+              'Connection timeout. Please check your internet and try again.',
+
+            );
+
+          },
+
         );
-
-
-        // Hide progress dialog
-
-
-        await hideProgress();
 
 
         // Handle result
 
 
         if (result is User) {
+
+          updateProgress('Account created! Redirecting...'.tr());
+
+          await hideProgress();
+
 
           if (auto_approve_restaurant == true) {
 
@@ -1285,13 +1328,25 @@ class _SignUpState extends State<SignUpScreen> {
 
         } else if (result is String) {
 
-          showAlertDialog(context, 'Signup Failed'.tr(), result, true);
+          await hideProgress();
+
+          showSignUpErrorDialog(
+            context,
+            'Signup Failed'.tr(),
+            result,
+            onRetry: () => _signUpWithEmailAndPassword(),
+          );
 
         } else {
 
-          showAlertDialog(context, 'Signup Failed'.tr(),
+          await hideProgress();
 
-              "An unexpected error occurred during signup.".tr(), true);
+          showSignUpErrorDialog(
+            context,
+            'Signup Failed'.tr(),
+            "An unexpected error occurred during signup.".tr(),
+            onRetry: () => _signUpWithEmailAndPassword(),
+          );
 
         }
 
@@ -1303,7 +1358,12 @@ class _SignUpState extends State<SignUpScreen> {
         print("Signup Error: $e"); // Log error
 
 
-        showAlertDialog(context, 'Signup Error'.tr(), e.toString().tr(), true);
+        showSignUpErrorDialog(
+          context,
+          'Signup Error'.tr(),
+          e.toString().tr(),
+          onRetry: () => _signUpWithEmailAndPassword(),
+        );
 
       }
 

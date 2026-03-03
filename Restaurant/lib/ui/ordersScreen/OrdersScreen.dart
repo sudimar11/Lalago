@@ -84,7 +84,21 @@ class _OrdersScreenState extends State<OrdersScreen> {
   }
 
   Future<void> initializeData() async {
-    await setCurrency();
+    if (mounted) setState(() => isLoading = true);
+
+    try {
+      await setCurrency();
+    } catch (_) {
+      currencyModel = CurrencyModel(
+        id: "",
+        code: "USD",
+        decimal: 2,
+        isactive: true,
+        name: "US Dollar",
+        symbol: "\$",
+        symbolatright: false,
+      );
+    }
 
     final vendorID = MyAppState.currentUser?.vendorID;
     if (vendorID == null) {
@@ -190,7 +204,31 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
                 if (snapshot.hasError) {
                   return Center(
-                      child: Text('Error loading orders. Please try again.'));
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SelectableText.rich(
+                            TextSpan(
+                              text: 'Error loading orders. Please try again.'
+                                  .tr(),
+                              style: TextStyle(
+                                color: Colors.red,
+                                fontSize: 16,
+                              ),
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 24),
+                          ElevatedButton(
+                            onPressed: () => initializeData(),
+                            child: Text('Retry'.tr()),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
                 }
 
                 return Column(

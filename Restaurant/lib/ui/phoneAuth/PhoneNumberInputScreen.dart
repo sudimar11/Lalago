@@ -87,25 +87,22 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
 
   getData() async {
-
-    await FirebaseFirestore.instance
-
-        .collection(Setting)
-
-        .doc('restaurant')
-
-        .get()
-
-        .then((value) {
-
-      setState(() {
-
-        auto_approve_restaurant = value.data()!['auto_approve_restaurant'];
-
-      });
-
-    });
-
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection(Setting)
+          .doc('restaurant')
+          .get();
+      if (mounted) {
+        setState(() {
+          auto_approve_restaurant =
+              snapshot.data()?['auto_approve_restaurant'] as bool? ?? false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => auto_approve_restaurant = false);
+      }
+    }
   }
 
 

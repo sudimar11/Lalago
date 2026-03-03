@@ -191,6 +191,62 @@ showAlertDialog(
   }
 }
 
+void showSignUpErrorDialog(
+  BuildContext context,
+  String title,
+  String content, {
+  VoidCallback? onRetry,
+  bool login = false,
+}) {
+  final actions = <Widget>[];
+  if (onRetry != null) {
+    actions.add(
+      TextButton(
+        child: Text('Retry').tr(),
+        onPressed: () {
+          Navigator.pop(context);
+          onRetry();
+        },
+      ),
+    );
+  }
+  actions.add(
+    TextButton(
+      child: Text('OK').tr(),
+      onPressed: () {
+        if (login) {
+          Navigator.pop(context);
+          pushAndRemoveUntil(context, AuthScreen(), false);
+        } else {
+          Navigator.pop(context);
+        }
+      },
+    ),
+  );
+
+  if (Platform.isIOS) {
+    final alert = CupertinoAlertDialog(
+      title: Text(title),
+      content: Text(content),
+      actions: actions,
+    );
+    showCupertinoDialog(
+      context: context,
+      builder: (context) => alert,
+    );
+  } else {
+    final alert = AlertDialog(
+      title: Text(title),
+      content: Text(content),
+      actions: actions,
+    );
+    showDialog(
+      context: context,
+      builder: (context) => alert,
+    );
+  }
+}
+
 pushReplacement(BuildContext context, Widget destination) {
   Navigator.of(context).pushReplacement(
       new MaterialPageRoute(builder: (context) => destination));
