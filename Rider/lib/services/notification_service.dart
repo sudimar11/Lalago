@@ -215,54 +215,6 @@ class NotificationService {
   static const int idChat = 5000;
   static const int idReassign = 6000;
 
-  static bool _notificationPermissionDialogShown = false;
-
-  /// Returns true if notification permission is granted (enables pop-up display).
-  static Future<bool> isNotificationPermissionGranted() async {
-    if (Platform.isAndroid) {
-      final status = await Permission.notification.status;
-      return status.isGranted;
-    }
-    final settings =
-        await FirebaseMessaging.instance.getNotificationSettings();
-    return settings.authorizationStatus == AuthorizationStatus.authorized ||
-        settings.authorizationStatus == AuthorizationStatus.provisional;
-  }
-
-  /// Shows a dialog to enable notifications when permission is denied.
-  /// Call when the app has context (e.g. from ContainerScreen).
-  static Future<void> showEnableNotificationsDialogIfNeeded(
-      BuildContext context) async {
-    if (_notificationPermissionDialogShown) return;
-    if (!await isNotificationPermissionGranted()) {
-      _notificationPermissionDialogShown = true;
-      if (!context.mounted) return;
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Enable Notifications'),
-          content: const Text(
-            'To receive pop-up notifications when customers send you chat '
-            'messages, please enable notifications for this app.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Later'),
-            ),
-            TextButton(
-              onPressed: () async {
-                Navigator.of(ctx).pop();
-                await openAppSettings();
-              },
-              child: const Text('Open Settings'),
-            ),
-          ],
-        ),
-      );
-    }
-  }
-
   /// Request notification permission if not yet granted. Call early so
   /// getToken() can succeed on iOS. Safe to call multiple times.
   Future<void> requestPermissionIfNeeded() async {

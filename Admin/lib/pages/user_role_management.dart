@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:brgy/constants.dart';
 import 'package:brgy/main.dart';
@@ -6,7 +7,9 @@ import 'package:brgy/utils/admin_permission_helpers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
+import 'package:firebase_core/firebase_core.dart' show Firebase, FirebaseException;
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// User role management with pagination, filters, search, and inline editor.
 class UserRoleManagementPage extends StatefulWidget {
@@ -19,6 +22,7 @@ class UserRoleManagementPage extends StatefulWidget {
 class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
   final TextEditingController _searchController = TextEditingController();
   Timer? _debounce;
+  Timer? _filterDebounceTimer;
   String _searchQuery = '';
   String? _roleFilter;
   bool? _activeFilter;
@@ -27,8 +31,14 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
   bool _isLoading = false;
   bool _hasMore = true;
   String? _error;
-  final int _pageSize = 50;
+  bool _usedFallbackQuery = false;
+  String? _indexCreateUrl;
+  int _effectivePageSize = 10;
   final Set<String> _selectedIds = {};
+  final Map<String, Map<String, dynamic>> _userCache = {};
+  static const int _maxCacheSize = 500;
+  Timer? _cacheCleanupTimer;
+  static const bool _debugDisableFilters = false;
 
   bool get _canEdit => canEditRoles(MyAppState.currentUser);
 
@@ -36,14 +46,58 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchChanged);
+    _startCacheCleanup();
     _loadFirstPage();
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _filterDebounceTimer?.cancel();
+    _cacheCleanupTimer?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _startCacheCleanup() {
+    _cacheCleanupTimer?.cancel();
+    _cacheCleanupTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => _clearCacheForCleanup(),
+    );
+  }
+
+  void _clearCacheForCleanup() {
+    _userCache.clear();
+    developer.log('Cache cleared', name: 'UserRoleManagement');
+  }
+
+  void _onFilterChanged() {
+    _filterDebounceTimer?.cancel();
+    _filterDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      _loadFirstPage();
+    });
+  }
+
+  void _cacheUser(String userId, Map<String, dynamic> data) {
+    if (_userCache.length >= _maxCacheSize) _clearOldCache();
+    _userCache[userId] = data;
+  }
+
+  bool _isUserCached(String userId) => _userCache.containsKey(userId);
+
+  void _clearOldCache() {
+    if (_userCache.length <= 100) return;
+    final toRemove = _userCache.keys.take(_userCache.length - 100).toList();
+    for (final k in toRemove) _userCache.remove(k);
+    developer.log('Cleared ${toRemove.length} entries from user cache');
+  }
+
+  void _checkMemoryUsage() {
+    if (_userCache.length > 400) {
+      developer.log('High cache usage, clearing old entries');
+      _clearOldCache();
+    }
   }
 
   void _onSearchChanged() {
@@ -58,15 +112,52 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
     });
   }
 
+  /// Load full user details on demand (lazy). Used when View is clicked.
+  Future<Map<String, dynamic>> _loadUserDetails(String userId) async {
+    final doc = await FirebaseFirestore.instance
+        .collection(USERS)
+        .doc(userId)
+        .get();
+    return doc.data() ?? {};
+  }
+
+  Future<int> _getFilteredUserCount() async {
+    Query<Map<String, dynamic>> q =
+        FirebaseFirestore.instance.collection(USERS);
+    if (!_debugDisableFilters) {
+      if (_roleFilter != null) q = q.where('role', isEqualTo: _roleFilter);
+      if (_activeFilter != null) {
+        q = q.where('active', isEqualTo: _activeFilter);
+      }
+    }
+    final snapshot = await q.count().get();
+    return snapshot.count ?? 0;
+  }
+
   Future<void> _loadFirstPage() async {
     setState(() {
       _users = [];
       _lastDoc = null;
       _hasMore = true;
-      _isLoading = true;
       _error = null;
+      _usedFallbackQuery = false;
+      _indexCreateUrl = null;
     });
+    _effectivePageSize = 20;
     await _loadMore();
+  }
+
+  bool _isIndexError(dynamic e) {
+    if (e is FirebaseException && e.code == 'failed-precondition') {
+      return true;
+    }
+    return e.toString().toLowerCase().contains('index');
+  }
+
+  String? _extractIndexUrl(String err) {
+    final regex = RegExp(r'https://console\.firebase\.google\.com[^\s\)]+');
+    final m = regex.firstMatch(err);
+    return m != null ? m.group(0) : null;
   }
 
   Future<void> _loadMore() async {
@@ -74,90 +165,157 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
     setState(() => _isLoading = true);
     try {
       final snapshot = await _fetchUsersPage();
-      final rows = snapshot.docs.map((d) => _UserRow.fromDoc(d)).toList();
-
-      List<_UserRow> filtered = rows;
-      if (_searchQuery.isNotEmpty) {
-        final lower = _searchQuery.toLowerCase();
-        filtered = rows.where((r) {
-          return r.email.toLowerCase().contains(lower) ||
-              r.displayName.toLowerCase().contains(lower) ||
-              r.phone.toLowerCase().contains(lower) ||
-              r.userId.toLowerCase().contains(lower);
-        }).toList();
+      for (final doc in snapshot.docs) {
+        _cacheUser(doc.id, doc.data());
       }
-
+      _checkMemoryUsage();
+      final rows = snapshot.docs.map((d) => _UserRow.fromDoc(d)).toList();
+      final filtered = _applySearchFilter(rows);
       if (mounted) {
         setState(() {
           _users.addAll(filtered);
-          if (snapshot.docs.isNotEmpty) {
-            _lastDoc = snapshot.docs.last;
-          }
-          _hasMore = snapshot.docs.length == _pageSize;
+          if (snapshot.docs.isNotEmpty) _lastDoc = snapshot.docs.last;
+          _hasMore = snapshot.docs.length == _effectivePageSize;
           _isLoading = false;
           _error = null;
+          _usedFallbackQuery = false;
+          _indexCreateUrl = null;
         });
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      developer.log(
+        'ERROR LOADING USERS: $e',
+        name: 'UserRoleManagement',
+      );
+      developer.log('STACK TRACE: $stackTrace', name: 'UserRoleManagement');
       if (mounted) {
-        setState(() => _error = e.toString());
-        try {
-          final snapshot = await _fetchUsersPageSimple();
-          final rows = snapshot.docs.map((d) => _UserRow.fromDoc(d)).toList();
-          List<_UserRow> filtered = rows;
-          if (_searchQuery.isNotEmpty) {
-            final lower = _searchQuery.toLowerCase();
-            filtered = rows.where((r) {
-              return r.email.toLowerCase().contains(lower) ||
-                  r.displayName.toLowerCase().contains(lower) ||
-                  r.phone.toLowerCase().contains(lower) ||
-                  r.userId.toLowerCase().contains(lower);
-            }).toList();
-          }
-          if (mounted) {
-            setState(() {
-              _users.addAll(filtered);
-              _lastDoc = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
-              _hasMore = snapshot.docs.length == _pageSize;
-              _isLoading = false;
-              _error = null;
-            });
-          }
-        } catch (e2) {
-          if (mounted) {
-            setState(() {
-              _error = e.toString();
-              _isLoading = false;
-            });
-          }
-        }
+        _indexCreateUrl = _extractIndexUrl(e.toString());
+        final errMsg = _indexCreateUrl != null
+            ? 'Index required. Create it: $_indexCreateUrl'
+            : e.toString();
+        setState(() {
+          _error = errMsg;
+          _isLoading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error loading users: $errMsg'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
       }
     }
   }
 
-  Future<QuerySnapshot<Map<String, dynamic>>> _fetchUsersPage() async {
-    Query<Map<String, dynamic>> q = FirebaseFirestore.instance
-        .collection(USERS)
-        .orderBy('createdAt', descending: true)
-        .limit(_pageSize);
-
-    if (_roleFilter != null) q = q.where('role', isEqualTo: _roleFilter);
-    if (_activeFilter != null) q = q.where('active', isEqualTo: _activeFilter);
-
-    if (_lastDoc != null) q = q.startAfterDocument(_lastDoc!);
-
-    return q.get();
+  List<_UserRow> _applySearchFilter(List<_UserRow> rows) {
+    if (_searchQuery.isEmpty) return rows;
+    final lower = _searchQuery.toLowerCase();
+    return rows.where((r) {
+      return r.email.toLowerCase().contains(lower) ||
+          r.displayName.toLowerCase().contains(lower) ||
+          r.phone.toLowerCase().contains(lower) ||
+          r.userId.toLowerCase().contains(lower);
+    }).toList();
   }
 
-  /// Fallback: simple query without orderBy/filters (no index required).
-  Future<QuerySnapshot<Map<String, dynamic>>> _fetchUsersPageSimple() async {
-    Query<Map<String, dynamic>> q = FirebaseFirestore.instance
-        .collection(USERS)
-        .limit(_pageSize);
+  Future<void> _runDiagnostic() async {
+    try {
+      final projectId = Firebase.app().options.projectId;
+      developer.log(
+        'Firebase projectId: $projectId',
+        name: 'UserRoleManagement',
+      );
+
+      final countSnapshot = await FirebaseFirestore.instance
+          .collection(USERS)
+          .count()
+          .get();
+      final total = countSnapshot.count ?? 0;
+      developer.log(
+        'Total users in collection: $total',
+        name: 'UserRoleManagement',
+      );
+
+      if (total == 0) {
+        developer.log(
+          'WALANG USERS SA DATABASE! Kailangan gumawa ng users.',
+          name: 'UserRoleManagement',
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'No users found in database. Create some users first.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      final sampleSnapshot = await FirebaseFirestore.instance
+          .collection(USERS)
+          .limit(3)
+          .get();
+      developer.log('Sample users:', name: 'UserRoleManagement');
+      for (final doc in sampleSnapshot.docs) {
+        developer.log(
+          '  - ${doc.id}: ${doc.data()}',
+          name: 'UserRoleManagement',
+        );
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              total == 0
+                  ? 'No users in Firestore. Add users via Customer/Rider app.'
+                  : 'Found $total users. Press Retry to load.',
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      developer.log('Diagnostic failed: $e', name: 'UserRoleManagement');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Diagnostic failed: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  /// Primary: minimal query; applies role/active filters when set.
+  Future<QuerySnapshot<Map<String, dynamic>>> _fetchUsersPage() async {
+    developer.log(
+      'Fetching users (limit $_effectivePageSize)...',
+      name: 'UserRoleManagement',
+    );
+    Query<Map<String, dynamic>> q =
+        FirebaseFirestore.instance.collection(USERS);
+
+    if (!_debugDisableFilters) {
+      if (_roleFilter != null) q = q.where('role', isEqualTo: _roleFilter!);
+      if (_activeFilter != null) {
+        q = q.where('active', isEqualTo: _activeFilter!);
+      }
+    }
+    q = q.limit(_effectivePageSize);
 
     if (_lastDoc != null) q = q.startAfterDocument(_lastDoc!);
 
-    return q.get();
+    final result = await q.get();
+    developer.log(
+      'Fetched ${result.docs.length} users',
+      name: 'UserRoleManagement',
+    );
+    return result;
   }
 
   String _roleDisplay(String role) {
@@ -188,6 +346,18 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
               ),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ElevatedButton.icon(
+              onPressed: _runDiagnostic,
+              icon: const Icon(Icons.bug_report, size: 18),
+              label: const Text('Diagnostic'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ),
         ],
       ),
       body: Stack(
@@ -195,6 +365,7 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
           Column(
             children: [
               _buildFilters(),
+          if (_usedFallbackQuery) _buildFallbackBanner(),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(8),
@@ -209,7 +380,7 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
                 bottom: _selectedIds.isNotEmpty && _canEdit ? 70 : 0,
               ),
               child: _users.isEmpty && !_isLoading
-                  ? const Center(child: Text('No users found'))
+                  ? _buildEmptyState()
                   : isWide
                       ? _buildTable()
                       : _buildList(),
@@ -233,6 +404,56 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
       ),
           if (_selectedIds.isNotEmpty && _canEdit) _buildBatchBar(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _error != null ? 'Failed to load users' : 'No users found',
+              style: Theme.of(context).textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: SelectableText(
+                  _error!,
+                  style: const TextStyle(color: Colors.red, fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FilledButton.icon(
+                  onPressed: _isLoading ? null : _loadFirstPage,
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text('Retry'),
+                ),
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  onPressed: _runDiagnostic,
+                  icon: const Icon(Icons.bug_report, size: 18),
+                  label: const Text('Diagnostic'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Check Firebase Console > Firestore > users collection',
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -269,7 +490,7 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
             ],
             onChanged: (v) => setState(() {
               _roleFilter = v;
-              _loadFirstPage();
+              _onFilterChanged();
             }),
           ),
           FilterChip(
@@ -277,7 +498,7 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
             selected: _activeFilter == true,
             onSelected: (_) => setState(() {
               _activeFilter = _activeFilter == true ? null : true;
-              _loadFirstPage();
+              _onFilterChanged();
             }),
           ),
           if (_canEdit) ...[
@@ -297,10 +518,45 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
             selected: _activeFilter == false,
             onSelected: (_) => setState(() {
               _activeFilter = _activeFilter == false ? null : false;
-              _loadFirstPage();
+              _onFilterChanged();
             }),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildFallbackBanner() {
+    return Material(
+      color: Theme.of(context)
+          .colorScheme
+          .primaryContainer
+          .withOpacity(0.8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          children: [
+            const Icon(Icons.info_outline, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Users loaded without sorting. An index may be building. '
+                'Refresh in a few minutes for sorted list.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            if (_indexCreateUrl != null)
+              TextButton(
+                onPressed: () async {
+                  await launchUrl(
+                    Uri.parse(_indexCreateUrl!),
+                    mode: LaunchMode.externalApplication,
+                  );
+                },
+                child: const Text('Create index'),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -404,8 +660,9 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
 
   Widget _buildTable() {
     return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: DataTable(
         columns: [
           if (_canEdit)
             DataColumn(
@@ -474,6 +731,7 @@ class _UserRoleManagementPageState extends State<UserRoleManagementPage> {
           );
         }).toList(),
       ),
+    ),
     );
   }
 
@@ -599,10 +857,14 @@ class _UserRow {
     final fn = d['firstName'] ?? '';
     final ln = d['lastName'] ?? '';
     final name = '${fn} ${ln}'.trim();
+    final email = d['email'] ?? '';
+    final displayName = name.isNotEmpty
+        ? name
+        : (email.isNotEmpty ? email : 'Unknown');
     return _UserRow(
       userId: doc.id,
-      email: d['email'] ?? '',
-      displayName: name.isEmpty ? 'Unknown' : name,
+      email: email,
+      displayName: displayName,
       phone: d['phoneNumber'] ?? '',
       role: d['role'] ?? d['userLevel'] ?? '',
       active: d['active'] ?? true,
@@ -846,7 +1108,7 @@ class _AuditLogViewerPageState extends State<AuditLogViewerPage> {
   bool _isLoading = false;
   bool _hasMore = true;
   String? _error;
-  static const int _pageSize = 50;
+  static const int _effectivePageSize = 50;
 
   @override
   void initState() {
@@ -885,7 +1147,7 @@ class _AuditLogViewerPageState extends State<AuditLogViewerPage> {
       Query<Map<String, dynamic>> q = FirebaseFirestore.instance
           .collection('audit_logs')
           .orderBy('timestamp', descending: true)
-          .limit(_pageSize);
+          .limit(_effectivePageSize);
 
       final adminId = _adminIdController.text.trim();
       final targetUserId = _targetUserIdController.text.trim();
@@ -908,7 +1170,7 @@ class _AuditLogViewerPageState extends State<AuditLogViewerPage> {
         setState(() {
           _logs.addAll(rows);
           if (snapshot.docs.isNotEmpty) _lastDoc = snapshot.docs.last;
-          _hasMore = snapshot.docs.length == _pageSize;
+          _hasMore = snapshot.docs.length == _effectivePageSize;
           _isLoading = false;
           _error = null;
         });
