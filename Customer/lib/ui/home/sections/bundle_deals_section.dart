@@ -3,7 +3,6 @@ import 'package:foodie_customer/model/bundle_model.dart';
 import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/ui/bundle/bundle_card.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
-import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
 class BundleDealsSection extends StatelessWidget {
   final Future<void> Function(BuildContext context, BundleModel bundle)?
@@ -20,13 +19,7 @@ class BundleDealsSection extends StatelessWidget {
       stream: BundleService.getActiveBundlesStream(limit: 20),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return SizedBox(
-            height: 320,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: ShimmerWidgets.productListShimmer(),
-            ),
-          );
+          return const SizedBox.shrink();
         }
         if (snapshot.hasError) {
           return HomeSectionUtils.sectionError(

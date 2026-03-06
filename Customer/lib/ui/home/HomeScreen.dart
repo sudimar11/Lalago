@@ -201,9 +201,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _didRunNearbyFallback = false;
   bool _didRunPopularTodayFallback = false;
-  bool _isLoadingPopularToday = false;
+  bool _isLoadingPopularToday = true;
   bool _popularTodayError = false;
   bool _nearbyFoodsError = false;
+  bool _isLoadingNearbyFoods = true;
 
   // Completion dialog tracking
   StreamSubscription<List<OrderModel>>? _completionDialogStreamSubscription;
@@ -382,21 +383,14 @@ class _HomeScreenState extends State<HomeScreen> {
   final ScrollController _homeScrollController = ScrollController();
   static const double _scrollToTopThreshold = 500.0;
   final ValueNotifier<bool> _showScrollToTopNotifier = ValueNotifier(false);
-  final ValueNotifier<bool> _hasLoadedDeferredSectionsNotifier =
-      ValueNotifier(false);
 
   void _onHomeScroll() {
     if (!_homeScrollController.hasClients) return;
     final double offset = _homeScrollController.offset;
     final bool show = offset > _scrollToTopThreshold;
-    final bool shouldLoadDeferred =
-        offset > 500 && !_hasLoadedDeferredSectionsNotifier.value;
     if (!mounted || _isLeavingHome) return;
     if (show != _showScrollToTopNotifier.value) {
       _showScrollToTopNotifier.value = show;
-    }
-    if (shouldLoadDeferred) {
-      _hasLoadedDeferredSectionsNotifier.value = true;
     }
   }
 
@@ -926,9 +920,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _retryNearbyFoodsSection() async {
     if (!mounted || _isLeavingHome || allProducts.isEmpty) return;
-    _updateState(callback: () => _nearbyFoodsError = false);
+    _updateState(callback: () {
+      _nearbyFoodsError = false;
+      _isLoadingNearbyFoods = true;
+    });
     _didRunNearbyFallback = false;
     await _runNearbyFoodsFallback(allProducts, trigger: 'retry');
+    if (mounted && !_isLeavingHome) {
+      _updateState(callback: () => _isLoadingNearbyFoods = false);
+    }
   }
 
   void _startBannerTimeout() {
@@ -1351,38 +1351,9 @@ class _HomeScreenState extends State<HomeScreen> {
       List<ProductModel> mealForOneList = [];
 
       for (ProductModel product in allProducts) {
-        // Check if product price is within sulit cap
         double productPrice = double.tryParse(product.price) ?? 0.0;
         if (productPrice <= sulitCap && productPrice > 0) {
-          // Check for solo indicators in name, description, or tags
-          String productName = product.name.toLowerCase();
-          String productDesc = product.description.toLowerCase();
-
-          // Keywords that indicate solo/individual meals
-          List<String> soloKeywords = [
-            'solo',
-            'single',
-            'individual',
-            'one',
-            '1',
-            'personal',
-            'meal',
-            'combo',
-            'set',
-            'plate',
-            'serving',
-            'portion'
-          ];
-
-          bool isSoloMeal = soloKeywords.any((keyword) =>
-              productName.contains(keyword) || productDesc.contains(keyword));
-
-          // Also check if the product name suggests it's for one person
-          if (isSoloMeal ||
-              productName.contains('meal') ||
-              productName.contains('combo')) {
-            mealForOneList.add(product);
-          }
+          mealForOneList.add(product);
         }
       }
 
@@ -2123,9 +2094,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
 
                             // Promos Section
-                            if (isLoadingPromos ||
-                                activePromos.isNotEmpty ||
-                                isPromosError)
+                            if (activePromos.isNotEmpty || isPromosError)
                               Column(
                                 mainAxisAlignment: MainAxisAlignment.start,
                                 children: [
@@ -2134,9 +2103,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           message: 'Failed to load promos',
                                           onRetry: _loadActivePromos,
                                         )
-                                      : isLoadingPromos
-                                          ? ShimmerWidgets.promoSkeleton()
-                                          : RepaintBoundary(
+                                      : RepaintBoundary(
                                           child: SizedBox(
                                             height: 200,
                                             child: ListView.builder(
@@ -2208,8 +2175,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: HomeNearbyFoodsSection(
                                 lstNearByFood: lstNearByFood,
                                 vendors: nearbyFoodVendors,
-                                isLoading: lstNearByFood.isEmpty &&
-                                    !_hasReceivedVendorData,
+                                isLoading: _isLoadingNearbyFoods,
                                 hasError: _nearbyFoodsError,
                                 onRetry: _retryNearbyFoodsSection,
                               ),
@@ -2267,51 +2233,45 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ],
                               ),
 
-                            ValueListenableBuilder<bool>(
-                              valueListenable: _hasLoadedDeferredSectionsNotifier,
-                              builder: (context, hasLoaded, child) {
-                                if (!hasLoaded) return const SizedBox.shrink();
-                                return Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    RepaintBoundary(
-                                      child: TrendingNowSection(
-                                        allProducts: allProducts,
-                                        lstFav: lstFav,
-                                        onFavoriteChanged: _onFavoriteChanged,
-                                      ),
-                                    ),
-                                    RepaintBoundary(
-                                      child: TimeBasedSection(
-                                        allProducts: allProducts,
-                                        lstFav: lstFav,
-                                        onFavoriteChanged: _onFavoriteChanged,
-                                        highlightMealPeriod:
-                                            widget.highlightMealPeriod,
-                                      ),
-                                    ),
-                                    RepaintBoundary(
-                                      child: PersonalizedRecommendationsSection(
-                                        allProducts: allProducts,
-                                        offerList: offerList,
-                                        currencyModel: currencyModel,
-                                      ),
-                                    ),
-                                    RepaintBoundary(
-                                      child: MealForOneSection(
-                                        mealForOneProducts: mealForOneProducts,
-                                        vendors: mealForOneVendors.isNotEmpty
-                                            ? mealForOneVendors
-                                            : vendors,
-                                        allProducts: allProducts,
-                                        isLoadingMealForOne: isLoadingMealForOne,
-                                        hasError: mealForOneError,
-                                        onRetry: fetchMealForOneProducts,
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              },
+                            Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                RepaintBoundary(
+                                  child: TrendingNowSection(
+                                    allProducts: allProducts,
+                                    lstFav: lstFav,
+                                    onFavoriteChanged: _onFavoriteChanged,
+                                  ),
+                                ),
+                                RepaintBoundary(
+                                  child: TimeBasedSection(
+                                    allProducts: allProducts,
+                                    lstFav: lstFav,
+                                    onFavoriteChanged: _onFavoriteChanged,
+                                    highlightMealPeriod:
+                                        widget.highlightMealPeriod,
+                                  ),
+                                ),
+                                RepaintBoundary(
+                                  child: PersonalizedRecommendationsSection(
+                                    allProducts: allProducts,
+                                    offerList: offerList,
+                                    currencyModel: currencyModel,
+                                  ),
+                                ),
+                                RepaintBoundary(
+                                  child: MealForOneSection(
+                                    mealForOneProducts: mealForOneProducts,
+                                    vendors: mealForOneVendors.isNotEmpty
+                                        ? mealForOneVendors
+                                        : vendors,
+                                    allProducts: allProducts,
+                                    isLoadingMealForOne: isLoadingMealForOne,
+                                    hasError: mealForOneError,
+                                    onRetry: fetchMealForOneProducts,
+                                  ),
+                                ),
+                              ],
                             ),
 
                             RepaintBoundary(
@@ -3393,7 +3353,6 @@ class _HomeScreenState extends State<HomeScreen> {
     lstAllRestaurant = null;
 
     _showScrollToTopNotifier.dispose();
-    _hasLoadedDeferredSectionsNotifier.dispose();
 
     super.dispose();
   }
@@ -4289,7 +4248,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await getFoodType();
     productsFuture.then((value) async {
       if (!mounted || _isLeavingHome) return;
-      if (!_isLoadingPopularToday && popularTodayFoods.isEmpty) {
+      if (popularTodayFoods.isEmpty) {
         _isLoadingPopularToday = true;
         try {
           await _loadPopularToday(value);
@@ -4304,6 +4263,8 @@ class _HomeScreenState extends State<HomeScreen> {
     popularTodayFoods.clear();
     popularTodayVendors.clear();
     _didRunPopularTodayFallback = false;
+    _isLoadingPopularToday = true;
+    _isLoadingNearbyFoods = true;
 
     fireStoreUtils.getRestaurantNearBy().whenComplete(() {
       lstAllRestaurant = fireStoreUtils.getAllRestaurants().asBroadcastStream();
@@ -4375,7 +4336,7 @@ class _HomeScreenState extends State<HomeScreen> {
               // Safety check: don't process if widget is disposed
               if (!mounted || _isLeavingHome) return;
 
-              if (!_isLoadingPopularToday && popularTodayFoods.isEmpty) {
+              if (popularTodayFoods.isEmpty) {
                 _isLoadingPopularToday = true;
                 _popularTodayError = false;
                 try {
@@ -4419,8 +4380,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   value,
                   trigger: 'nearby_stream',
                 );
+                if (mounted && !_isLeavingHome) {
+                  _updateState(callback: () => _isLoadingNearbyFoods = false);
+                }
               } else {
-                _updateState();
+                _updateState(callback: () => _isLoadingNearbyFoods = false);
               }
             }).catchError((error) {
               if (!mounted || _isLeavingHome) return;
@@ -4428,6 +4392,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 _popularTodayError = true;
                 _nearbyFoodsError = true;
                 _isLoadingPopularToday = false;
+                _isLoadingNearbyFoods = false;
               });
             });
 
@@ -4515,6 +4480,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 value,
                 trigger: 'stream_done',
               );
+              if (mounted && !_isLeavingHome) {
+                _updateState(callback: () => _isLoadingNearbyFoods = false);
+              }
             }
           }).catchError((error) {});
         },

@@ -207,40 +207,6 @@ class RestaurantCard extends StatelessWidget {
                     )
                   ],
                 ),
-                if (recommendationReason != null)
-                  Container(
-                    margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.orange),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.info_outline,
-                          size: 12,
-                          color: Colors.orange[700],
-                        ),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
-                            recommendationReason!,
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.orange[800],
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 const SizedBox(height: 8),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -269,32 +235,34 @@ class RestaurantCard extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          ImageIcon(
-                            const AssetImage('assets/images/location3x.png'),
-                            size: 15,
-                            color: Color(COLOR_PRIMARY),
-                          ),
-                          const SizedBox(width: 5),
-                          Expanded(
-                            child: Text(
-                              vendorModel.location,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontFamily: "Poppinsm",
-                                letterSpacing: 0.5,
-                                color: isDarkMode(context)
-                                    ? Colors.white70
-                                    : const Color(0xff555353),
+                      if (source != 'personalized') ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            ImageIcon(
+                              const AssetImage('assets/images/location3x.png'),
+                              size: 15,
+                              color: Color(COLOR_PRIMARY),
+                            ),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(
+                                vendorModel.location,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontFamily: "Poppinsm",
+                                  letterSpacing: 0.5,
+                                  color: isDarkMode(context)
+                                      ? Colors.white70
+                                      : const Color(0xff555353),
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
+                          ],
+                        ),
+                      ],
                       RestaurantEtaFeeRow(
                         vendorModel: vendorModel,
                         currencyModel: currencyModel,
