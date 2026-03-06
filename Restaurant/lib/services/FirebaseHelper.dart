@@ -1,6 +1,7 @@
 // ignore_for_file: close_sinks
 
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:convert';
 import 'dart:io';
 
@@ -789,13 +790,31 @@ class FireStoreUtils {
 
   static Future<String> uploadUserImageToFireStorage(
       File image, String userID) async {
-    Reference upload = storage.child('images/$userID.png');
-    File compressedImage = await compressImage(image);
-    final metadata = SettableMetadata(contentType: 'image/png');
-    UploadTask uploadTask = upload.putFile(compressedImage, metadata);
-    var downloadUrl =
-        await (await uploadTask.whenComplete(() {})).ref.getDownloadURL();
-    return downloadUrl.toString();
+    const tag = '[REST_SIGNUP_UPLOAD]';
+    try {
+      developer.log('$tag Step 1/4: Starting - path=${image.path} '
+          'size=${await image.length()} bytes, userID=$userID');
+
+      Reference upload = storage.child('images/$userID.png');
+
+      developer.log('$tag Step 2/4: Compressing image...');
+      File compressedImage = await compressImage(image);
+      developer.log('$tag Step 2/4: Done - compressed size='
+          '${await compressedImage.length()} bytes');
+
+      final metadata = SettableMetadata(contentType: 'image/png');
+      developer.log('$tag Step 3/4: Uploading to Firebase Storage...');
+      UploadTask uploadTask = upload.putFile(compressedImage, metadata);
+      final snapshot = await uploadTask.whenComplete(() {});
+
+      developer.log('$tag Step 4/4: Getting download URL...');
+      var downloadUrl = await snapshot.ref.getDownloadURL();
+      developer.log('$tag All steps done - url=${downloadUrl.toString()}');
+      return downloadUrl.toString();
+    } catch (e, st) {
+      developer.log('$tag FAILED: $e', error: e, stackTrace: st);
+      rethrow;
+    }
   }
 
   Future<List<OrderModel>> getVendorOrders(String userID) async {
@@ -1646,9 +1665,19 @@ class FireStoreUtils {
               email: emailAddress, password: password);
       String profilePicUrl = '';
       if (image != null) {
+        final uid = result.user?.uid ?? '';
+        developer.log('[REST_SIGNUP] Image upload start - uid=$uid '
+            'path=${image.path}');
         updateProgress('Uploading image, Please wait...'.tr());
-        profilePicUrl =
-            await uploadUserImageToFireStorage(image, result.user?.uid ?? '');
+        try {
+          profilePicUrl =
+              await uploadUserImageToFireStorage(image, uid);
+          developer.log('[REST_SIGNUP] Image upload done - url=$profilePicUrl');
+        } catch (e, st) {
+          developer.log('[REST_SIGNUP] Image upload failed: $e', error: e,
+              stackTrace: st);
+          return 'Image upload failed: $e';
+        }
       }
       User user = User(
           email: emailAddress,
@@ -1693,7 +1722,8 @@ class FireStoreUtils {
           break;
       }
       return message;
-    } catch (e) {
+    } catch (e, st) {
+      developer.log('[REST_SIGNUP] Signup error: $e', error: e, stackTrace: st);
       return "notSignUp".tr();
     }
   }

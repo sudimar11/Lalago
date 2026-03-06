@@ -24,6 +24,86 @@ import 'package:foodie_customer/ui/home/view_all_category_product_screen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
+/// Precomputed data for a category restaurant card (avoids heavy work in build).
+class _CategoryCardCache {
+  final VendorModel vendor;
+  final double distanceKm;
+  final int etaHour;
+  final double etaMinute;
+  final bool isOpen;
+  final String productImageUrl;
+
+  const _CategoryCardCache({
+    required this.vendor,
+    required this.distanceKm,
+    required this.etaHour,
+    required this.etaMinute,
+    required this.isOpen,
+    required this.productImageUrl,
+  });
+}
+
+List<_CategoryCardCache> _computeCardCache(
+  List<VendorModel> vendors,
+  List<ProductModel> allProducts,
+) {
+  final loc = MyAppState.selectedPosition.location;
+  if (loc == null) return [];
+  return vendors.map((v) {
+    final distM = Geolocator.distanceBetween(
+      v.latitude, v.longitude, loc.latitude, loc.longitude,
+    );
+    final km = distM / 1000;
+    const minutes = 1.2;
+    final value = minutes * km;
+    final hour = value ~/ 60;
+    final minute = value % 60;
+    return _CategoryCardCache(
+      vendor: v,
+      distanceKm: km,
+      etaHour: hour.toInt(),
+      etaMinute: minute,
+      isOpen: _computeIsRestaurantOpen(v),
+      productImageUrl: _getStableRandomProductImage(v, allProducts),
+    );
+  }).toList();
+}
+
+bool _computeIsRestaurantOpen(VendorModel v) {
+  final now = DateTime.now();
+  final day = DateFormat('EEEE', 'en_US').format(now);
+  final date = DateFormat('dd-MM-yyyy').format(now);
+  for (var wh in v.workingHours) {
+    if (day != wh.day.toString()) continue;
+    if (wh.timeslot == null || wh.timeslot!.isEmpty) continue;
+    for (var slot in wh.timeslot!) {
+      final start = DateFormat("dd-MM-yyyy HH:mm")
+          .parse(date + " " + slot.from.toString());
+      final end = DateFormat("dd-MM-yyyy HH:mm")
+          .parse(date + " " + slot.to.toString());
+      if (now.isAfter(start) && now.isBefore(end)) {
+        return v.reststatus;
+      }
+    }
+  }
+  return false;
+}
+
+String _getStableRandomProductImage(VendorModel vendor, List<ProductModel> all) {
+  final vendorProducts = all.where((p) => p.vendorID == vendor.id).toList();
+  final valid = vendorProducts.where((p) {
+    final photo = p.photo.trim();
+    if (photo.isEmpty) return false;
+    if (AppGlobal.placeHolderImage != null && photo == AppGlobal.placeHolderImage) {
+      return false;
+    }
+    return true;
+  }).toList();
+  if (valid.isEmpty) return vendor.photo;
+  final r = Random(vendor.id.hashCode);
+  return valid[r.nextInt(valid.length)].photo;
+}
+
 class CategoryRestaurantsSection extends StatelessWidget {
   final List<VendorCategoryModel> categoryWiseProductList;
   final List<ProductModel> allProducts;
@@ -100,6 +180,7 @@ class _CategoryRestaurantRow extends StatefulWidget {
 class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
   final ScrollController _scrollController = ScrollController();
   List<VendorModel> _vendors = [];
+  List<_CategoryCardCache> _cachedCards = [];
   static const int _initialDisplayCount = 10;
   static const int _loadMoreCount = 10;
   int _displayedCount = _initialDisplayCount;
@@ -116,6 +197,7 @@ class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
             if (mounted) {
               setState(() {
                 _vendors = data;
+                _cachedCards = _computeCardCache(data, widget.allProducts);
                 _hasError = false;
               });
             }
@@ -191,9 +273,9 @@ class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
                 cacheExtent: 400.0,
                 itemCount: count,
                 itemBuilder: (context, index) {
-                  final vendorModel = _vendors[index];
+                  final cache = _cachedCards[index];
                   return _CategoryRestaurantCard(
-                    vendorModel: vendorModel,
+                    cache: cache,
                     allProducts: widget.allProducts,
                     currencyModel: widget.currencyModel,
                   );
@@ -208,30 +290,22 @@ class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
 }
 
 class _CategoryRestaurantCard extends StatelessWidget {
-  final VendorModel vendorModel;
+  final _CategoryCardCache cache;
   final List<ProductModel> allProducts;
   final CurrencyModel? currencyModel;
 
   const _CategoryRestaurantCard({
-    required this.vendorModel,
+    required this.cache,
     required this.allProducts,
     this.currencyModel,
   });
 
   @override
   Widget build(BuildContext context) {
-    double distanceInMeters = Geolocator.distanceBetween(
-      vendorModel.latitude,
-      vendorModel.longitude,
-      MyAppState.selectedPosition.location!.latitude,
-      MyAppState.selectedPosition.location!.longitude,
-    );
-
-    double kilometer = distanceInMeters / 1000;
-    double minutes = 1.2;
-    double value = minutes * kilometer;
-    final int hour = value ~/ 60;
-    final double minute = value % 60;
+    final vendorModel = cache.vendor;
+    final kilometer = cache.distanceKm;
+    final hour = cache.etaHour;
+    final minute = cache.etaMinute;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -255,9 +329,9 @@ class _CategoryRestaurantCard extends StatelessWidget {
                     child: Stack(
                       children: [
                         CachedNetworkImage(
-                          imageUrl: _getStableRandomProductImage(vendorModel),
-                          memCacheWidth: 200,
-                          memCacheHeight: 200,
+                          imageUrl: getImageVAlidUrl(cache.productImageUrl),
+                          memCacheWidth: 300,
+                          memCacheHeight: 300,
                           imageBuilder: (context, imageProvider) => Container(
                             decoration: BoxDecoration(
                               borderRadius: const BorderRadius.only(
@@ -333,8 +407,8 @@ class _CategoryRestaurantCard extends StatelessWidget {
                               borderRadius: BorderRadius.circular(20),
                               child: CachedNetworkImage(
                                 imageUrl: getImageVAlidUrl(vendorModel.photo),
-                                memCacheWidth: 200,
-                                memCacheHeight: 200,
+                                memCacheWidth: 80,
+                                memCacheHeight: 80,
                                 fit: BoxFit.cover,
                                 placeholder: (context, url) => const Center(
                                   child: Icon(
@@ -409,7 +483,7 @@ class _CategoryRestaurantCard extends StatelessWidget {
                           ),
                         ),
                         // Overlay for closed restaurants - only on image
-                        if (!_isRestaurantOpen(vendorModel))
+                        if (!cache.isOpen)
                           Positioned.fill(
                             child: Container(
                               decoration: BoxDecoration(
@@ -586,71 +660,5 @@ class _CategoryRestaurantCard extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  // Helper function to get stable random product image for vendor
-  String _getStableRandomProductImage(VendorModel vendor) {
-    // Filter products by vendor ID
-    List<ProductModel> vendorProducts =
-        allProducts.where((p) => p.vendorID == vendor.id).toList();
-
-    // Filter out products with empty or placeholder images
-    List<ProductModel> validVendorProducts = vendorProducts.where((p) {
-      final String photo = p.photo.trim();
-      if (photo.isEmpty) return false;
-      if (AppGlobal.placeHolderImage != null &&
-          photo == AppGlobal.placeHolderImage) return false;
-      return true;
-    }).toList();
-
-    // If no valid products, return vendor photo
-    if (validVendorProducts.isEmpty) {
-      return vendor.photo;
-    }
-
-    // Use vendor ID as seed for consistent random selection
-    final seededRandom = Random(vendor.id.hashCode);
-    final ProductModel randomProduct =
-        validVendorProducts[seededRandom.nextInt(validVendorProducts.length)];
-
-    return randomProduct.photo;
-  }
-
-  // Helper function to check if restaurant is open
-  bool _isRestaurantOpen(VendorModel vendorModel) {
-    final now = DateTime.now();
-    var day = DateFormat('EEEE', 'en_US').format(now);
-    var date = DateFormat('dd-MM-yyyy').format(now);
-
-    bool isOpen = false;
-
-    for (var workingHour in vendorModel.workingHours) {
-      if (day == workingHour.day.toString()) {
-        if (workingHour.timeslot != null && workingHour.timeslot!.isNotEmpty) {
-          for (var timeSlot in workingHour.timeslot!) {
-            var start = DateFormat("dd-MM-yyyy HH:mm")
-                .parse(date + " " + timeSlot.from.toString());
-            var end = DateFormat("dd-MM-yyyy HH:mm")
-                .parse(date + " " + timeSlot.to.toString());
-
-            if (_isCurrentDateInRange(start, end)) {
-              isOpen = true;
-              break;
-            }
-          }
-        }
-        if (isOpen) break;
-      }
-    }
-
-    return isOpen && vendorModel.reststatus;
-  }
-
-  bool _isCurrentDateInRange(DateTime startDate, DateTime endDate) {
-    final currentDate = DateTime.now();
-    if (currentDate.isAfter(startDate) && currentDate.isBefore(endDate)) {
-      return true;
-    }
-    return false;
   }
 }

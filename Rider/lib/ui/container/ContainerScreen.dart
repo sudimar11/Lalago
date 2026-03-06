@@ -28,6 +28,7 @@ import 'package:foodie_driver/ui/profile/ProfileScreen.dart';
 //import 'package:foodie_driver/ui/wallet/wallet.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
+import 'package:foodie_driver/ui/pautos/pautos_order_detail_screen.dart';
 import 'package:foodie_driver/ui/heat_map/DriverHeatMapScreen.dart';
 import 'package:foodie_driver/widgets/shared_bottom_navigation_bar.dart';
 import 'package:foodie_driver/services/helper.dart';
@@ -70,6 +71,7 @@ class _ContainerScreen extends State<ContainerScreen>
 
   Timer? _closingTimeCheckTimer;
   Timer? _inactivityWarningTimer;
+  Timer? _periodicLocationTimer;
   DateTime? _lastInactivityWarningAt;
   DateTime? _lastActivityWriteAt;
   StreamSubscription? _locationSubscription;
@@ -82,7 +84,9 @@ class _ContainerScreen extends State<ContainerScreen>
   void initState() {
     super.initState();
     setCurrency();
-    NotificationService.onOrderActionFromNotification = _handleOrderActionFromNotification;
+    NotificationService.onOrderActionFromNotification =
+        _handleOrderActionFromNotification;
+    NotificationService.onPautosAssignmentTap = _handlePautosAssignmentTap;
 
     /// On iOS, we request notification permissions, Does nothing and returns null on Android
     FireStoreUtils.firebaseMessaging.requestPermission(
@@ -109,6 +113,17 @@ class _ContainerScreen extends State<ContainerScreen>
         _detectMissingAbsences();
       });
       _checkAttendanceStatus();
+      // Start periodic location updates if already online
+      Future.delayed(Duration(seconds: 3), () {
+        final u = MyAppState.currentUser;
+        if (mounted &&
+            u != null &&
+            u.checkedInToday == true &&
+            u.isOnline == true &&
+            u.checkedOutToday != true) {
+          _startPeriodicLocationUpdates();
+        }
+      });
       _startInactivityWarningTimer();
       WidgetsBinding.instance.addObserver(this);
       // Start shared user document listener, health telemetry, then
@@ -421,11 +436,32 @@ class _ContainerScreen extends State<ContainerScreen>
     });
   }
 
+  void _handlePautosAssignmentTap(String orderId) {
+    if (!mounted) return;
+    setState(() {
+      _currentIndex = 0;
+      _bottomNavSelection = BottomNavSelection.MyOrders;
+      _appBarTitle = 'Orders';
+      _currentWidget = OrdersBlankScreen();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => PautosOrderDetailScreen(orderId: orderId),
+          ),
+        );
+      }
+    });
+  }
+
   @override
   void dispose() {
     NotificationService.onOrderActionFromNotification = null;
+    NotificationService.onPautosAssignmentTap = null;
     _closingTimeCheckTimer?.cancel();
     _inactivityWarningTimer?.cancel();
+    _periodicLocationTimer?.cancel();
     _locationSubscription?.cancel();
     OrderLocationService.stopMonitoring();
     // Stop remittance enforcement listener
@@ -1016,18 +1052,69 @@ class _ContainerScreen extends State<ContainerScreen>
       user.todayCheckInTime = timeString;
       user.checkedOutToday = false;
       user.todayCheckOutTime = '';
+
+      // Fix 2: Set location from preset on check-in
+      if (presetId != null && presetId.trim().isNotEmpty) {
+        try {
+          final preset =
+              await RiderPresetLocationService.getPresetById(presetId);
+          if (preset != null) {
+            user.location = UserLocation(
+              latitude: preset.latitude,
+              longitude: preset.longitude,
+            );
+            user.locationUpdatedAt = Timestamp.now();
+          }
+        } catch (e) {
+          log('Preset location load failed on check-in: $e');
+        }
+      }
     } else if (user.checkedOutToday != true) {
       user.checkedOutToday = true;
       user.isOnline = false;
       user.todayCheckOutTime = timeString;
+
+      // Remove rider from zone on checkout
+      final presetId = user.selectedPresetLocationId;
+      if (presetId != null && presetId.trim().isNotEmpty) {
+        try {
+          await FirebaseFirestore.instance
+              .collection('service_areas')
+              .doc(presetId)
+              .update({
+            'assignedDriverIds': FieldValue.arrayRemove([user.userID]),
+          });
+        } catch (e) {
+          log('Zone removal on checkout failed: $e');
+        }
+      }
+      _stopPeriodicLocationUpdates();
     } else {
       return;
     }
 
     await FireStoreUtils.updateCurrentUser(user);
+
+    // Fix 3: Add rider to zone assignedDriverIds on check-in
+    if (user.checkedInToday == true &&
+        user.selectedPresetLocationId != null &&
+        user.selectedPresetLocationId!.trim().isNotEmpty) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('service_areas')
+            .doc(user.selectedPresetLocationId!)
+            .update({
+          'assignedDriverIds': FieldValue.arrayUnion([user.userID]),
+        });
+      } catch (e) {
+        log('Zone add on check-in failed: $e');
+      }
+    }
+
     await OrderService.updateRiderStatus();
     if (user.checkedInToday == true && user.isOnline == true) {
       await FireStoreUtils.touchLastActivity(user.userID);
+      _startPeriodicLocationUpdates();
     }
     if (mounted) setState(() {});
   }
@@ -1044,6 +1131,37 @@ class _ContainerScreen extends State<ContainerScreen>
       );
     }
     if (mounted) setState(() {});
+  }
+
+  /// Fix 4: Periodic location refresh to keep locationUpdatedAt fresh
+  void _startPeriodicLocationUpdates() {
+    _stopPeriodicLocationUpdates();
+    _periodicLocationTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => _refreshLocationForPrecheck(),
+    );
+  }
+
+  void _stopPeriodicLocationUpdates() {
+    _periodicLocationTimer?.cancel();
+    _periodicLocationTimer = null;
+  }
+
+  Future<void> _refreshLocationForPrecheck() async {
+    final user = MyAppState.currentUser;
+    if (user == null || user.isOnline != true || !mounted) return;
+    try {
+      final loc = await location.getLocation();
+      if (loc.latitude == null || loc.longitude == null) return;
+      final freshUser = await FireStoreUtils.getCurrentUser(user.userID);
+      if (freshUser == null || freshUser.isOnline != true) return;
+      freshUser.location = UserLocation(
+        latitude: loc.latitude!,
+        longitude: loc.longitude!,
+      );
+      freshUser.locationUpdatedAt = Timestamp.now();
+      await FireStoreUtils.updateCurrentUser(freshUser);
+    } catch (_) {}
   }
 
   void _onBottomNavTap(int index) {

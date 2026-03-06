@@ -30,6 +30,9 @@ class NotificationService {
   /// Called when user taps an order action from notification (accept/decline/view).
   static void Function(String orderId, String action)? onOrderActionFromNotification;
 
+  /// Called when user taps a PAUTOS assignment notification.
+  static void Function(String orderId)? onPautosAssignmentTap;
+
   static Future<bool> isNotificationPermissionGranted() async {
     if (Platform.isAndroid) {
       final status = await Permission.notification.status;
@@ -283,6 +286,12 @@ class NotificationService {
                 FoodReadyHighlightService.instance.setHighlighted(orderId);
               }
             }
+            if (type == 'pautos_assignment') {
+              final orderId = data?['orderId']?.toString();
+              if (orderId != null && orderId.isNotEmpty) {
+                onPautosAssignmentTap?.call(orderId);
+              }
+            }
           } catch (_) {}
         }
       },
@@ -443,6 +452,12 @@ class NotificationService {
           AudioService.instance.playReassignSound(orderId: orderId);
         }
       }
+      if (type == 'pautos_assignment') {
+        final orderId = message.data['orderId']?.toString();
+        if (orderId != null && orderId.isNotEmpty) {
+          AudioService.instance.playNewOrderSound(orderId: orderId);
+        }
+      }
       if (type == 'order' || type == 'new_order' || type == 'order_update') {
         final orderId = message.data['orderId']?.toString();
         if (orderId != null && orderId.isNotEmpty) {
@@ -473,6 +488,11 @@ class NotificationService {
         orderId.isNotEmpty) {
       AudioService.instance.playNewOrderSound(orderId: orderId);
       onOrderActionFromNotification?.call(orderId, 'view');
+      return;
+    }
+    if (type == 'pautos_assignment' && orderId != null && orderId.isNotEmpty) {
+      AudioService.instance.playNewOrderSound(orderId: orderId);
+      onPautosAssignmentTap?.call(orderId);
       return;
     }
     display(message);
@@ -548,7 +568,8 @@ class NotificationService {
       final bool isChat = _isChatMessage(message.data);
       final bool isOrderType = type == 'order' ||
           type == 'new_order' ||
-          type == 'order_update';
+          type == 'order_update' ||
+          type == 'pautos_assignment';
       final String channelId =
           isChat ? channelChat : (isOrderType ? channelOrder : '0');
       final String channelName = isChat

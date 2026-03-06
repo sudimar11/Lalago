@@ -30,6 +30,7 @@ import 'package:http/http.dart' as http;
 import 'package:foodie_driver/services/audio_service.dart';
 import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/services/array_validation_service.dart';
+import 'package:foodie_driver/ui/pautos/my_pautos_orders_screen.dart';
 
 class OrdersBlankScreen extends StatefulWidget {
   const OrdersBlankScreen({Key? key}) : super(key: key);
@@ -1235,6 +1236,17 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
           ),
         ),
         actions: [
+          IconButton(
+            tooltip: 'My PAUTOS Orders',
+            icon: const Icon(Icons.shopping_bag_outlined),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const MyPautosOrdersScreen(),
+                ),
+              );
+            },
+          ),
           StreamBuilder<QuerySnapshot>(
             stream: firestore
                 .collection('chat_admin_driver')

@@ -282,6 +282,7 @@
   "Using GPS": "Using GPS",
   "Checking...": "Checking...",
   "Select location": "Select location",
+  "Select location to see map": "Select location to see map",
   "CONFIRM LOCATION": "CONFIRM LOCATION",
   "selectLocationMovePinToLocation": "Please select current address using GPS location. Move pin to exact location",
   "DONE": "DONE",

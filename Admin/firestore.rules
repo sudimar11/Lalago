@@ -93,6 +93,44 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // PAUTOS orders: customer creates/reads own; rider reads available or assigned
+    match /pautos_orders/{orderId} {
+      allow read: if request.auth != null
+        && (resource.data.authorID == request.auth.uid
+            || resource.data.driverID == request.auth.uid
+            || !('driverID' in resource.data)
+            || resource.data.driverID == null
+            || resource.data.driverID == '');
+      allow create: if request.auth != null
+        && request.resource.data.authorID == request.auth.uid;
+      allow update: if request.auth != null
+        && (resource.data.authorID == request.auth.uid
+            || resource.data.driverID == request.auth.uid
+            || (request.resource.data.driverID == request.auth.uid
+                && (!('driverID' in resource.data)
+                    || resource.data.driverID == null)));
+      allow delete: if false;
+
+      // Substitution requests subcollection
+      match /substitution_requests/{requestId} {
+        allow read: if request.auth != null
+          && (get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.authorID == request.auth.uid
+              || get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.driverID == request.auth.uid);
+        allow create: if request.auth != null
+          && get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.driverID == request.auth.uid;
+        allow update: if request.auth != null
+          && (get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.authorID == request.auth.uid
+              || get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.driverID == request.auth.uid);
+        allow delete: if false;
+      }
+    }
+
+    // PAUTOS dispute audit logs: read for authenticated (admin), write via Cloud Functions only
+    match /pautos_disputes/{docId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
     // Add-on Promos: read for all (Customer/Rider), write for authenticated (Admin)
     match /addon_promos/{promoId} {
       allow read: if true;

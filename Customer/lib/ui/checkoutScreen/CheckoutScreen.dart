@@ -94,6 +94,62 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   bool? isEnableAdminCommission = false;
   bool isLoading = false; // Manage loading state
 
+  void _showOrderProgressDialog({
+    required ValueNotifier<String> statusNotifier,
+  }) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 48,
+                height: 48,
+                child: CircularProgressIndicator(
+                  color: Color(COLOR_PRIMARY),
+                  strokeWidth: 2,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Please wait',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: isDarkMode(context)
+                      ? Colors.grey.shade200
+                      : Colors.grey.shade800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ValueListenableBuilder<String>(
+                valueListenable: statusNotifier,
+                builder: (_, status, __) => Text(
+                  status,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: isDarkMode(context)
+                        ? Colors.grey.shade400
+                        : Colors.grey.shade600,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _redirectGuestToAuth() async {
     if (!mounted || MyAppState.currentUser != null) return;
 
@@ -542,10 +598,21 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     }
 
     setState(() {
-      isLoading = true; // Show loading indicator
+      isLoading = true;
     });
+
+    final statusNotifier = ValueNotifier<String>(
+      'Preparing your order...',
+    );
+    _showOrderProgressDialog(statusNotifier: statusNotifier);
+
+    void closeProgress() {
+      if (mounted) Navigator.of(context).pop();
+    }
+
     try {
       log("Step 1: Validating products list");
+      statusNotifier.value = 'Checking your order details...';
       if (widget.products.isEmpty || widget.products.first.vendorID.isEmpty) {
         throw Exception("Invalid or missing vendorID");
       }
@@ -555,6 +622,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
 
       print('[CHECKOUT] ===== PLACE ORDER STARTED =====');
+      statusNotifier.value =
+          'Checking if we can deliver to your address...';
       print('[CHECKOUT] Calling DispatchPrecheckService...');
       print('[CHECKOUT] Address: '
           '${widget.address?.getFullAddress()}');
@@ -579,12 +648,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
       if (!precheck.canCheckout) {
         print('[CHECKOUT] BLOCKED by capacity precheck');
+        closeProgress();
         await _showCheckoutBlockedDialog(
           message: precheck.blockedMessage ??
             'We are unable to process checkout at the moment. Please try again shortly.',
         );
         return;
       }
+
+      statusNotifier.value = 'Confirming the restaurant is open...';
       print('[CHECKOUT] Proceeding with order...');
 
       // Validate restaurant open status for all unique vendors in cart
@@ -629,17 +701,22 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             'closed=$closedVendors, closingSoon=$closingSoonVendors');
 
         if (closedVendors.isNotEmpty) {
+          closeProgress();
           await _showRestaurantClosedDialog(closedVendors);
           return;
         }
 
         if (closingSoonVendors.isNotEmpty) {
+          closeProgress();
           final proceed =
               await _showRestaurantClosingSoonDialog(closingSoonVendors);
           if (proceed != true) return;
+          _showOrderProgressDialog(statusNotifier: statusNotifier);
+          statusNotifier.value = 'Confirming the restaurant is open...';
         }
       }
 
+      statusNotifier.value = 'Loading restaurant details...';
       log("Step 2: Fetching vendor details");
       final vendorModel = await fireStoreUtils
           .getVendorByVendorID(widget.products.first.vendorID)
@@ -649,6 +726,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
       log("Delivery address: ${widget.address?.getFullAddress()}");
 
+      statusNotifier.value = 'Checking your promotions and discounts...';
       // Re-validate Happy Hour before placing order
       Map<String, dynamic>? happyHourInfo;
       String? happyHourExpiredMessage;
@@ -770,6 +848,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         referralWalletAmountUsed: widget.referralWalletAmountUsed,
       );
 
+      statusNotifier.value = 'Placing your order...';
       log("Placing order with Firestore...");
       final placedOrder = await NetworkSafeAPI.runWithNetworkCheck(
         () => fireStoreUtils.placeOrder(orderModel),
@@ -866,6 +945,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         }
       }
 
+      closeProgress();
       showModalBottomSheet(
         isScrollControlled: true,
         isDismissible: false,
@@ -876,6 +956,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       );
     } on NetworkUnavailableException catch (e) {
       log("Place order failed: $e");
+      closeProgress();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -886,6 +967,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
     } catch (e) {
       log("Error in placeOrder: $e");
+      closeProgress();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

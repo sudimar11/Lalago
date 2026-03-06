@@ -7,6 +7,7 @@ import 'package:brgy/driver_collection_details_page.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:brgy/pages/order_history_page.dart';
+import 'package:brgy/pages/rider_debug_page.dart';
 
 class DriverInformationPage extends StatefulWidget {
   final String driverId;
@@ -66,6 +67,20 @@ class _DriverInformationPageState extends State<DriverInformationPage> {
         title: const Text('Driver Information'),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.bug_report),
+            tooltip: 'Dispatch debug',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (ctx) => RiderDebugPage(riderId: widget.driverId),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: FutureBuilder<DocumentSnapshot>(
         future: FirebaseFirestore.instance

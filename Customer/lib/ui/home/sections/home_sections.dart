@@ -8,6 +8,7 @@ import 'package:foodie_customer/ui/home/sections/home_nearby_foods_section.dart'
 import 'package:foodie_customer/ui/home/sections/home_popular_today_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_order_again_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_all_restaurants_section.dart';
+import 'package:foodie_customer/ui/home/sections/home_pautos_entry_section.dart';
 
 class HomeSections extends StatelessWidget {
   final String? selctedOrderTypeValue;
@@ -63,6 +64,9 @@ class HomeSections extends StatelessWidget {
                   ? const ['Search food or restaurants']
                   : rotatingHints,
             ),
+
+            // PAUTOS Entry Section
+            const HomePautosEntrySection(),
 
             // Divider above Categories section
             Container(

@@ -6,8 +6,9 @@ class CodModel {
   });
 
   factory CodModel.fromJson(Map<String, dynamic> parsedJson) {
+    final v = parsedJson['isEnabled'];
     return CodModel(
-      cod: parsedJson['isEnabled'] ?? '',
+      cod: v == true || v == 'true',
     );
   }
 

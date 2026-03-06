@@ -13,6 +13,41 @@ import 'package:foodie_customer/ui/home/view_all_category_product_screen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:geolocator/geolocator.dart';
 
+class _HomeRestaurantEtaCache {
+  final VendorModel vendor;
+  final double kilometer;
+  final int hour;
+  final double minute;
+
+  const _HomeRestaurantEtaCache({
+    required this.vendor,
+    required this.kilometer,
+    required this.hour,
+    required this.minute,
+  });
+}
+
+List<_HomeRestaurantEtaCache> _computeEtaCache(List<VendorModel> vendors) {
+  final loc = MyAppState.selectedPosition.location;
+  if (loc == null) return [];
+  return vendors.map((v) {
+    final distM = Geolocator.distanceBetween(
+      v.latitude, v.longitude, loc.latitude, loc.longitude,
+    );
+    final km = distM / 1000;
+    const minutes = 1.2;
+    final value = minutes * km;
+    final hour = value ~/ 60;
+    final minute = value % 60;
+    return _HomeRestaurantEtaCache(
+      vendor: v,
+      kilometer: km,
+      hour: hour.toInt(),
+      minute: minute,
+    );
+  }).toList();
+}
+
 class HomeRestaurantsSection extends StatelessWidget {
   final List<VendorCategoryModel> categoryWiseProductList;
   final FireStoreUtils fireStoreUtils;
@@ -46,52 +81,45 @@ class HomeRestaurantsSection extends StatelessWidget {
 
             if (snapshot.hasData &&
                 (snapshot.data?.isNotEmpty ?? false)) {
-              return snapshot.data!.isEmpty
-                  ? Container()
-                  : Column(
-                      children: [
-                        HomeSectionUtils.buildTitleRow(
-                          titleValue: categoryWiseProductList[index]
-                              .title
-                              .toString(),
-                          onClick: () {
-                            push(
-                              context,
-                              ViewAllCategoryProductScreen(
-                                vendorCategoryModel:
-                                    categoryWiseProductList[index],
-                              ),
-                            );
-                          },
-                          isViewAll: false,
+              final vendors = snapshot.data!;
+              if (vendors.isEmpty) return Container();
+              final cached = _computeEtaCache(vendors);
+              return Column(
+                children: [
+                  HomeSectionUtils.buildTitleRow(
+                    titleValue: categoryWiseProductList[index]
+                        .title
+                        .toString(),
+                    onClick: () {
+                      push(
+                        context,
+                        ViewAllCategoryProductScreen(
+                          vendorCategoryModel:
+                              categoryWiseProductList[index],
                         ),
-                        SizedBox(
-                          width: MediaQuery.of(context).size.width,
-                          height: MediaQuery.of(context).size.height * 0.28,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            child: ListView.builder(
-                              shrinkWrap: true,
-                              scrollDirection: Axis.horizontal,
-                              physics: const BouncingScrollPhysics(),
-                              padding: EdgeInsets.zero,
-                              itemCount: snapshot.data!.length,
-                              itemBuilder: (context, index) {
-                                VendorModel vendorModel = snapshot.data![index];
+                      );
+                    },
+                    isViewAll: false,
+                  ),
+                  SizedBox(
+                    width: MediaQuery.of(context).size.width,
+                    height: MediaQuery.of(context).size.height * 0.28,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        padding: EdgeInsets.zero,
+                        itemCount: cached.length,
+                        itemBuilder: (context, innerIndex) {
+                          final eta = cached[innerIndex];
+                          final vendorModel = eta.vendor;
+                          final kilometer = eta.kilometer;
+                          final hour = eta.hour;
+                          final minute = eta.minute;
 
-                                double distanceInMeters = Geolocator.distanceBetween(
-                                    vendorModel.latitude,
-                                    vendorModel.longitude,
-                                    MyAppState.selectedPosition.location!.latitude,
-                                    MyAppState.selectedPosition.location!.longitude);
-
-                                double kilometer = distanceInMeters / 1000;
-                                double minutes = 1.2;
-                                double value = minutes * kilometer;
-                                final int hour = value ~/ 60;
-                                final double minute = value % 60;
-
-                                return Container(
+                          return Container(
                                   margin: const EdgeInsets.symmetric(
                                       horizontal: 10, vertical: 8),
                                   child: GestureDetector(
@@ -147,8 +175,8 @@ class HomeRestaurantsSection extends StatelessWidget {
                                                         vendorModel.photo),
                                                     width: double.infinity,
                                                     height: double.infinity,
-                                                    memCacheWidth: 200,
-                                                    memCacheHeight: 200,
+                                                    memCacheWidth: 300,
+                                                    memCacheHeight: 300,
                                                     fit: BoxFit.cover,
                                                     placeholder: (context, url) =>
                                                         Center(
@@ -163,8 +191,8 @@ class HomeRestaurantsSection extends StatelessWidget {
                                                             CachedNetworkImage(
                                                       imageUrl: AppGlobal
                                                           .placeHolderImage!,
-                                                      memCacheWidth: 200,
-                                                      memCacheHeight: 200,
+                                                      memCacheWidth: 300,
+                                                      memCacheHeight: 300,
                                                       fit: BoxFit.cover,
                                                     ),
                                                   ),
@@ -272,7 +300,7 @@ class HomeRestaurantsSection extends StatelessWidget {
                                                       ),
                                                       SizedBox(width: 10),
                                                       Text(
-                                                        "${kilometer.toDouble().toStringAsFixed(currencyModel!.decimal)} km",
+                                                        "${kilometer.toStringAsFixed(1)} km",
                                                         style: TextStyle(
                                                             fontFamily: "Poppinsm",
                                                             letterSpacing: 0.5,

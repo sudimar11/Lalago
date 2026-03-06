@@ -66,6 +66,8 @@ class User with ChangeNotifier {
   String? selectedPresetLocationId;
   String? riderAvailability;
   String? riderDisplayStatus;
+  bool? pautosEligible;
+  List<dynamic>? pautosOrderRequestData;
 
   User(
       {this.email = '',
@@ -125,7 +127,9 @@ class User with ChangeNotifier {
       this.lastAdminOverrideAction,
       this.selectedPresetLocationId,
       this.riderAvailability,
-      this.riderDisplayStatus})
+      this.riderDisplayStatus,
+      this.pautosEligible,
+      this.pautosOrderRequestData})
       : this.lastOnlineTimestamp = lastOnlineTimestamp ?? Timestamp.now(),
         this.settings = settings ?? UserSettings(),
         this.appIdentifier =
@@ -317,6 +321,8 @@ class User with ChangeNotifier {
       selectedPresetLocationId: parsedJson['selectedPresetLocationId'],
       riderAvailability: parsedJson['riderAvailability'],
       riderDisplayStatus: parsedJson['riderDisplayStatus'],
+      pautosEligible: parsedJson['pautosEligible'] ?? true,
+      pautosOrderRequestData: parsedJson['pautosOrderRequestData'] ?? [],
     );
   }
 
@@ -385,6 +391,8 @@ class User with ChangeNotifier {
         'rotation': this.rotation,
         'orderRequestData': this.orderRequestData,
         'inProgressOrderID': this.inProgressOrderID,
+        'pautosEligible': this.pautosEligible,
+        'pautosOrderRequestData': this.pautosOrderRequestData,
       });
     }
     return json;

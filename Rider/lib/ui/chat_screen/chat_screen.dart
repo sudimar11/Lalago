@@ -31,6 +31,7 @@ class ChatScreens extends StatefulWidget {
   final String? restaurantProfileImage;
   final String? token;
   final String? chatType;
+  final bool isPautos;
 
   ChatScreens(
       {Key? key,
@@ -42,7 +43,8 @@ class ChatScreens extends StatefulWidget {
       this.customerProfileImage,
       this.restaurantProfileImage,
       this.token,
-      this.chatType})
+      this.chatType,
+      this.isPautos = false})
       : super(key: key);
 
   @override
@@ -68,6 +70,9 @@ class _ChatScreensState extends State<ChatScreens> {
   @override
   void initState() {
     super.initState();
+    if (widget.isPautos) {
+      _ensurePautosInboxExists();
+    }
     _loadOrderStatus();
     _markMessagesAsRead();
     if (_controller.hasClients) {
@@ -78,8 +83,10 @@ class _ChatScreensState extends State<ChatScreens> {
 
   void _loadOrderStatus() {
     if (widget.orderId == null) return;
+    final collection =
+        widget.isPautos ? PAUTOS_ORDERS : 'restaurant_orders';
     _orderStatusSubscription = FirebaseFirestore.instance
-        .collection('restaurant_orders')
+        .collection(collection)
         .doc(widget.orderId)
         .snapshots()
         .listen((snapshot) {
@@ -102,6 +109,30 @@ class _ChatScreensState extends State<ChatScreens> {
     }
   }
 
+  Future<void> _ensurePautosInboxExists() async {
+    try {
+      if (widget.orderId == null || widget.orderId!.isEmpty) return;
+      if (widget.customerId == null || widget.restaurantId == null) return;
+
+      final inboxRef = FirebaseFirestore.instance
+          .collection('chat_driver')
+          .doc(widget.orderId);
+
+      final snapshot = await inboxRef.get();
+      if (!snapshot.exists) {
+        await inboxRef.set({
+          'customerId': widget.customerId,
+          'restaurantId': widget.restaurantId,
+          'orderId': widget.orderId,
+          'chatType': 'Driver',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (e) {
+      debugPrint('Error ensuring PAUTOS inbox: $e');
+    }
+  }
+
   @override
   void dispose() {
     // Cancel all upload subscriptions
@@ -117,25 +148,38 @@ class _ChatScreensState extends State<ChatScreens> {
 
   Widget _buildOrderProgressIndicator() {
     final status = _orderStatus ?? '';
-    final steps = [
-      'Order Placed',
-      'Driver Assigned',
-      'Driver Accepted',
-      'Order Shipped',
-      'In Transit',
-      'Delivered',
-    ];
+    final List<String> steps = widget.isPautos
+        ? [
+            'Request Posted',
+            'Driver Assigned',
+            'Driver Accepted',
+            'Shopping',
+            'Delivering',
+            'Delivered',
+          ]
+        : [
+            'Order Placed',
+            'Driver Assigned',
+            'Driver Accepted',
+            'Order Shipped',
+            'In Transit',
+            'Delivered',
+          ];
 
     int currentStep = 0;
-    if (status == 'Driver Assigned')
-      currentStep = 1;
-    else if (status == 'Driver Accepted')
-      currentStep = 2;
-    else if (status == 'Order Shipped')
-      currentStep = 3;
-    else if (status == 'In Transit')
-      currentStep = 4;
-    else if (status == 'Order Completed') currentStep = 5;
+    if (widget.isPautos) {
+      if (status == 'Driver Assigned') currentStep = 1;
+      else if (status == 'Driver Accepted') currentStep = 2;
+      else if (status == 'Shopping') currentStep = 3;
+      else if (status == 'Delivering') currentStep = 4;
+      else if (status == 'Delivered') currentStep = 5;
+    } else {
+      if (status == 'Driver Assigned') currentStep = 1;
+      else if (status == 'Driver Accepted') currentStep = 2;
+      else if (status == 'Order Shipped') currentStep = 3;
+      else if (status == 'In Transit') currentStep = 4;
+      else if (status == 'Order Completed') currentStep = 5;
+    }
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -1161,17 +1205,24 @@ class _ChatScreensState extends State<ChatScreens> {
     String? resolvedCustomerId = widget.customerId;
     if (widget.chatType == "Driver" && widget.orderId != null) {
       try {
+        final collection =
+            widget.isPautos ? PAUTOS_ORDERS : 'restaurant_orders';
         final orderDoc = await FirebaseFirestore.instance
-            .collection('restaurant_orders')
+            .collection(collection)
             .doc(widget.orderId)
             .get();
 
         if (orderDoc.exists) {
           final orderData = orderDoc.data();
-          final author = orderData?['author'] as Map<String, dynamic>? ?? {};
-          resolvedCustomerId = author['id'] as String? ??
-              author['customerID'] as String? ??
-              widget.customerId;
+          if (widget.isPautos) {
+            resolvedCustomerId =
+                orderData?['authorID']?.toString() ?? widget.customerId;
+          } else {
+            final author = orderData?['author'] as Map<String, dynamic>? ?? {};
+            resolvedCustomerId = author['id'] as String? ??
+                author['customerID'] as String? ??
+                widget.customerId;
+          }
         }
       } catch (e) {
         debugPrint(
@@ -1239,67 +1290,77 @@ class _ChatScreensState extends State<ChatScreens> {
         String tokenSource = 'unknown';
 
         try {
-          final orderDoc = await FirebaseFirestore.instance
-              .collection('restaurant_orders')
-              .doc(widget.orderId)
-              .get();
-
-          if (orderDoc.exists) {
-            final orderData = orderDoc.data();
-            final author = orderData?['author'] as Map<String, dynamic>? ?? {};
-            fcmToken = author['fcmToken'] as String?;
-            // Use order document customerId if available, otherwise use already-resolved value
-            fcmResolvedCustomerId = author['id'] as String? ??
-                author['customerID'] as String? ??
-                resolvedCustomerId;
-            tokenSource = 'order.author';
-
-            // Always fetch fallback token from users collection in case order.author token is invalid
-            if (fcmResolvedCustomerId != null) {
-              try {
-                final userDoc = await FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(fcmResolvedCustomerId)
-                    .get();
-                if (userDoc.exists) {
-                  final userData = userDoc.data();
-                  fallbackToken = userData?['fcmToken'] as String?;
-                  if (fallbackToken != null &&
-                      fallbackToken.isNotEmpty &&
-                      fallbackToken != fcmToken) {
-                    debugPrint(
-                        '[DriverChat] Order ${widget.orderId}: Retrieved fallback FCM token from users collection for customer $fcmResolvedCustomerId');
-                  }
-                }
-              } catch (userError) {
-                debugPrint(
-                    '[DriverChat] Order ${widget.orderId}: Error reading user doc: $userError');
+          if (widget.isPautos) {
+            // PAUTOS: get token from users/{authorID}
+            if (resolvedCustomerId != null && resolvedCustomerId.isNotEmpty) {
+              final userDoc = await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(resolvedCustomerId)
+                  .get();
+              if (userDoc.exists) {
+                final userData = userDoc.data();
+                fcmToken = userData?['fcmToken'] as String?;
+                tokenSource = 'users.pautos';
               }
             }
-
-            // If order.author token is missing, use fallback token
-            if ((fcmToken == null || fcmToken.isEmpty) &&
-                fallbackToken != null) {
-              fcmToken = fallbackToken;
-              tokenSource = 'users.collection';
-              fallbackToken = null; // Clear fallback since we're using it
-            }
-            String _tokPrev(String? t) =>
-                t != null && t.length > 20
-                    ? '${t.substring(0, 12)}...${t.substring(t.length - 4)}'
-                    : t != null && t.isNotEmpty
-                        ? '***'
-                        : 'null';
-            final orderAuthorToken = author['fcmToken'] as String?;
-            debugPrint(
-                '[TOKEN_DEBUG] Rider: tokenSource=$tokenSource customerId=$fcmResolvedCustomerId tokenPreview=${_tokPrev(fcmToken)} orderAuthorEmpty=${orderAuthorToken == null || orderAuthorToken.isEmpty}');
           } else {
-            debugPrint(
-                '[DriverChat] Order ${widget.orderId}: Order document not found');
+            final orderDoc = await FirebaseFirestore.instance
+                .collection('restaurant_orders')
+                .doc(widget.orderId)
+                .get();
+
+            if (orderDoc.exists) {
+              final orderData = orderDoc.data();
+              final author = orderData?['author'] as Map<String, dynamic>? ?? {};
+              fcmToken = author['fcmToken'] as String?;
+              fcmResolvedCustomerId = author['id'] as String? ??
+                  author['customerID'] as String? ??
+                  resolvedCustomerId;
+              tokenSource = 'order.author';
+
+              if (fcmResolvedCustomerId != null) {
+                try {
+                  final userDoc = await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(fcmResolvedCustomerId)
+                      .get();
+                  if (userDoc.exists) {
+                    final userData = userDoc.data();
+                    fallbackToken = userData?['fcmToken'] as String?;
+                    if (fallbackToken != null &&
+                        fallbackToken.isNotEmpty &&
+                        fallbackToken != fcmToken) {
+                      debugPrint(
+                          '[DriverChat] Order ${widget.orderId}: Retrieved fallback FCM token from users collection for customer $fcmResolvedCustomerId');
+                    }
+                  }
+                } catch (userErr) {
+                  debugPrint(
+                      '[DriverChat] Order ${widget.orderId}: Error reading user doc: $userErr');
+                }
+              }
+
+              if ((fcmToken == null || fcmToken.isEmpty) &&
+                  fallbackToken != null) {
+                fcmToken = fallbackToken;
+                tokenSource = 'users.collection';
+                fallbackToken = null;
+              }
+              final orderAuthorToken = author['fcmToken'] as String?;
+              String tokPrev(String? t) =>
+                  t != null && t.length > 20
+                      ? '${t.substring(0, 12)}...${t.substring(t.length - 4)}'
+                      : t != null && t.isNotEmpty ? '***' : 'null';
+              debugPrint(
+                  '[TOKEN_DEBUG] Rider: tokenSource=$tokenSource customerId=$fcmResolvedCustomerId tokenPreview=${tokPrev(fcmToken)} orderAuthorEmpty=${orderAuthorToken == null || orderAuthorToken.isEmpty}');
+            } else {
+              debugPrint(
+                  '[DriverChat] Order ${widget.orderId}: Order document not found');
+            }
           }
-        } catch (orderError) {
+        } catch (e) {
           debugPrint(
-              '[DriverChat] Order ${widget.orderId}: Error reading order doc: $orderError');
+              '[DriverChat] Order ${widget.orderId}: Error resolving FCM: $e');
         }
 
         // Only send notification if token is available

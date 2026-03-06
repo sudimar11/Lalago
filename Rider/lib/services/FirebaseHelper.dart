@@ -599,6 +599,22 @@ class FireStoreUtils {
     }
   }
 
+  /// Upload PAUTOS receipt photo. Returns download URL.
+  static Future<String> uploadPautosReceipt(File image, String orderId) async {
+    try {
+      final compressed = await compressImage(image);
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final ref = storage.child('pautos_receipts/${orderId}_$ts.png');
+      final task = ref.putFile(compressed);
+      await task.whenComplete(() {});
+      final url = await (await task).ref.getDownloadURL();
+      return url.toString();
+    } catch (e) {
+      print('Error uploading PAUTOS receipt: $e');
+      throw Exception('Failed to upload receipt: $e');
+    }
+  }
+
   static Future<String> uploadCarImageToFireStorage(
       File image, String userID) async {
     try {

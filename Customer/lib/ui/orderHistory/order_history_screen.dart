@@ -158,6 +158,17 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
           extrasString = product.extras.toString();
         }
       }
+      // Treat empty/meaningless extras as null to avoid displaying "\\", "null", etc
+      if (extrasString != null) {
+        final s = extrasString.trim();
+        if (s.isEmpty ||
+            s == '[]' ||
+            s == 'null' ||
+            s == '\\' ||
+            s == r'\\') {
+          extrasString = null;
+        }
+      }
 
       return CartProduct(
         id: product.id,

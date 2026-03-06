@@ -314,32 +314,32 @@ class PaymentScreenState extends State<PaymentScreen> {
                 FutureBuilder<CodModel?>(
                     future: futurecod,
                     builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting)
+                      if (snapshot.connectionState == ConnectionState.waiting) {
                         return Center(
                           child: CircularProgressIndicator.adaptive(
                             valueColor:
                                 AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
                           ),
                         );
-                      if (snapshot.hasData) {
-                        return snapshot.data!.cod == true
-                            ? CheckboxListTile(
-                                onChanged: (bool? value) {
-                                  setState(() {
-                                    wallet = false;
-                                    codPay = true;
-                                    paymentOption = 'Cash on Delivery';
-                                  });
-                                },
-                                value: codPay,
-                                contentPadding: EdgeInsets.all(0),
-                                secondary:
-                                    FaIcon(FontAwesomeIcons.handHoldingDollar),
-                                title: Text('Cash on Delivery'),
-                              )
-                            : Center();
                       }
-                      return Center();
+                      final codEnabled = snapshot.hasData && snapshot.data != null
+                          ? snapshot.data!.cod
+                          : true;
+                      if (!codEnabled) return const Center();
+                      return CheckboxListTile(
+                        onChanged: (bool? value) {
+                          setState(() {
+                            wallet = false;
+                            codPay = true;
+                            paymentOption = 'Cash on Delivery';
+                          });
+                        },
+                        value: codPay,
+                        contentPadding: EdgeInsets.zero,
+                        secondary:
+                            FaIcon(FontAwesomeIcons.handHoldingDollar),
+                        title: const Text('Cash on Delivery'),
+                      );
                     }),
               ],
             ),

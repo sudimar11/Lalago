@@ -1029,6 +1029,820 @@ exports.autoDispatcher = functions.firestore
   });
 
 // =========================
+// PAUTOS Dispatcher
+// =========================
+
+const PAUTOS_ORDERS = 'pautos_orders';
+const PAUTOS_RIDER_TIMEOUT_SEC = 60;
+
+/**
+ * Get assignedDriverIds for the zone containing delivery location.
+ * Returns { driverIds, zoneId } or null if no zone matches.
+ */
+async function _getPautosZoneDriverIds(deliveryLat, deliveryLng) {
+  const db = getDb();
+  const zonesSnap = await db.collection('service_areas').get();
+  if (zonesSnap.empty) return null;
+  for (const doc of zonesSnap.docs) {
+    const z = doc.data();
+    const ids = z.assignedDriverIds || [];
+    if (!ids.length) continue;
+    if (z.boundaryType === 'radius') {
+      const cLat = _asNumber(z.centerLat);
+      const cLng = _asNumber(z.centerLng);
+      const rKm = _asNumber(z.radiusKm);
+      if (!cLat || !cLng || rKm <= 0) continue;
+      if (!deliveryLat || !deliveryLng) continue;
+      const dist = _distanceMeters(
+        { lat: cLat, lng: cLng },
+        { lat: deliveryLat, lng: deliveryLng },
+      );
+      if (dist <= rKm * 1000) {
+        return { driverIds: ids, zoneId: doc.id };
+      }
+    }
+  }
+  return null;
+}
+
+function _extractPautosDeliveryLocation(data) {
+  const addr = data?.address;
+  if (!addr || !addr.location) return { lat: 0, lng: 0 };
+  return {
+    lat: _asNumber(addr.location.latitude),
+    lng: _asNumber(addr.location.longitude),
+  };
+}
+
+/**
+ * PAUTOS Dispatcher: assigns rider when pautos_orders doc is created with status Request Posted.
+ */
+exports.pautosDispatcher = functions
+  .region('us-central1')
+  .firestore.document(`${PAUTOS_ORDERS}/{orderId}`)
+  .onCreate(async (snap, context) => {
+    const orderId = context.params.orderId;
+    const data = snap.data() || {};
+    const status = String(data.status || '');
+    if (status !== 'Request Posted') {
+      console.log(`[PAUTOS Dispatcher] Skipping ${orderId}: status=${status}`);
+      return null;
+    }
+    if (data.driverID) {
+      console.log(`[PAUTOS Dispatcher] Skipping ${orderId}: already has driver`);
+      return null;
+    }
+
+    try {
+      const db = getDb();
+      const deliveryLoc = _extractPautosDeliveryLocation(data);
+      if (!deliveryLoc.lat && !deliveryLoc.lng) {
+        console.log(`[PAUTOS Dispatcher] No delivery location for ${orderId}`);
+        return null;
+      }
+
+      const zoneMatch = await _getPautosZoneDriverIds(deliveryLoc.lat, deliveryLoc.lng);
+      const zoneDriverIds = zoneMatch ? zoneMatch.driverIds : null;
+
+      const driversSnap = await db.collection('users')
+        .where('role', '==', 'driver')
+        .get();
+
+      const excludedIds = new Set(data?.dispatch?.excludedDriverIds || []);
+      const driverScores = [];
+
+      for (const doc of driversSnap.docs) {
+        const driver = { id: doc.id, ...doc.data() };
+        if (excludedIds.has(driver.id)) continue;
+        if (driver.pautosEligible === false) continue;
+        const avail = driver.riderAvailability || '';
+        const online = driver.isOnline === true;
+        if (avail !== 'available' && !online) continue;
+        if (driver.checkedOutToday === true) continue;
+        if (driver.suspended === true) continue;
+
+        if (zoneDriverIds && zoneDriverIds.length > 0) {
+          if (!zoneDriverIds.includes(driver.id)) continue;
+        }
+
+        const activeOrders = _activeOrdersCount(driver);
+        if (activeOrders >= MAX_ACTIVE_ORDERS_PER_RIDER) continue;
+
+        const driverLoc = _extractDriverLocation(driver);
+        if (!driverLoc.lat && !driverLoc.lng) continue;
+
+        const distanceKm = _distanceMeters(driverLoc, deliveryLoc) / 1000;
+        const completedToday = _asNumber(driver.completedToday) || 0;
+        const fairnessScore = 100 - Math.min(completedToday * 5, 50);
+        const score = distanceKm * 2 + (100 - fairnessScore) * 0.1 + activeOrders * 3;
+
+        driverScores.push({
+          driverId: driver.id,
+          driverName: `${driver.firstName || ''} ${driver.lastName || ''}`.trim(),
+          fcmToken: driver.fcmToken || driver.fcmTokens?.[0],
+          phoneNumber: driver.phoneNumber || '',
+          distance: distanceKm,
+          score,
+        });
+      }
+
+      if (driverScores.length === 0) {
+        console.log(`[PAUTOS Dispatcher] No eligible riders for ${orderId}`);
+        await snap.ref.update({
+          dispatchStatus: 'no_drivers_available',
+          dispatchAttemptedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return null;
+      }
+
+      driverScores.sort((a, b) => a.score - b.score);
+      const best = driverScores[0];
+      const riderDeadline = _addSeconds(_nowTimestamp(), PAUTOS_RIDER_TIMEOUT_SEC);
+
+      await db.runTransaction(async (tx) => {
+        const orderSnap = await tx.get(snap.ref);
+        const current = orderSnap.data() || {};
+        if (current.driverID) throw new Error('Order already assigned');
+        tx.update(snap.ref, {
+          driverID: best.driverId,
+          driverName: best.driverName,
+          driverPhone: best.phoneNumber || '',
+          status: 'Driver Assigned',
+          assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+          assignmentMethod: 'dispatcher',
+          'dispatch.riderAcceptDeadline': riderDeadline,
+          'dispatch.excludedDriverIds': [],
+          dispatchStatus: 'success',
+        });
+        const driverRef = db.collection('users').doc(best.driverId);
+        tx.update(driverRef, {
+          pautosOrderRequestData: admin.firestore.FieldValue.arrayUnion(orderId),
+        });
+      });
+
+      const shoppingPreview = (data.shoppingList || '').toString().substring(0, 80);
+      if (best.fcmToken) {
+        try {
+          await getMessaging().send({
+            token: best.fcmToken,
+            notification: {
+              title: 'New PAUTOS Assignment',
+              body: shoppingPreview || `Shopping request. Budget: ${data.maxBudget || ''}`,
+            },
+            data: {
+              type: 'pautos_assignment',
+              orderId: String(orderId),
+            },
+          });
+          console.log(`[PAUTOS Dispatcher] FCM sent to rider ${best.driverId}`);
+        } catch (fcmErr) {
+          console.error(`[PAUTOS Dispatcher] FCM error:`, fcmErr);
+        }
+      }
+
+      await db.collection('pautos_assignments_log').add({
+        orderId,
+        driverId: best.driverId,
+        driverName: best.driverName,
+        assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+        assignmentMethod: 'dispatcher',
+        deliveryLat: deliveryLoc.lat,
+        deliveryLng: deliveryLoc.lng,
+      });
+
+      console.log(`[PAUTOS Dispatcher] Assigned ${orderId} to ${best.driverId}`);
+      return { success: true, driverId: best.driverId };
+    } catch (err) {
+      console.error(`[PAUTOS Dispatcher] Error:`, err);
+      return null;
+    }
+  });
+
+/**
+ * Callable: reject PAUTOS assignment and re-assign to next rider.
+ */
+exports.pautosRejectAndReassign = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
+    const { orderId, reason } = data || {};
+    if (!orderId || typeof orderId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'orderId required');
+    }
+    const riderId = context.auth.uid;
+    const db = getDb();
+    const orderRef = db.collection(PAUTOS_ORDERS).doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) throw new functions.https.HttpsError('not-found', 'Order not found');
+    const orderData = orderSnap.data() || {};
+    if (orderData.driverID !== riderId) {
+      throw new functions.https.HttpsError('permission-denied', 'Not your assignment');
+    }
+    if (orderData.status !== 'Driver Assigned') {
+      throw new functions.https.HttpsError('failed-precondition', 'Order not pending acceptance');
+    }
+
+    const excludedIds = [...(orderData.dispatch?.excludedDriverIds || []), riderId];
+    await db.runTransaction(async (tx) => {
+      tx.update(orderRef, {
+        driverID: admin.firestore.FieldValue.delete(),
+        driverName: admin.firestore.FieldValue.delete(),
+        driverPhone: admin.firestore.FieldValue.delete(),
+        status: 'Request Posted',
+        'dispatch.excludedDriverIds': excludedIds,
+      });
+      const riderRef = db.collection('users').doc(riderId);
+      tx.update(riderRef, {
+        pautosOrderRequestData: admin.firestore.FieldValue.arrayRemove(orderId),
+      });
+    });
+
+    const deliveryLoc = _extractPautosDeliveryLocation(orderData);
+    const zoneMatch = await _getPautosZoneDriverIds(deliveryLoc.lat, deliveryLoc.lng);
+    const zoneDriverIds = zoneMatch ? zoneMatch.driverIds : null;
+
+    const driversSnap = await db.collection('users').where('role', '==', 'driver').get();
+    const excludeSet = new Set(excludedIds);
+    const driverScores = [];
+
+    for (const doc of driversSnap.docs) {
+      const driver = { id: doc.id, ...doc.data() };
+      if (excludeSet.has(driver.id)) continue;
+      if (driver.pautosEligible === false) continue;
+      const avail = driver.riderAvailability || '';
+      const online = driver.isOnline === true;
+      if (avail !== 'available' && !online) continue;
+      if (driver.checkedOutToday === true) continue;
+
+      if (zoneDriverIds && zoneDriverIds.length > 0 && !zoneDriverIds.includes(driver.id)) continue;
+
+      const activeOrders = _activeOrdersCount(driver);
+      if (activeOrders >= MAX_ACTIVE_ORDERS_PER_RIDER) continue;
+
+      const driverLoc = _extractDriverLocation(driver);
+      if (!driverLoc.lat && !driverLoc.lng) continue;
+
+      const distanceKm = _distanceMeters(driverLoc, deliveryLoc) / 1000;
+      const completedToday = _asNumber(driver.completedToday) || 0;
+      const fairnessScore = 100 - Math.min(completedToday * 5, 50);
+      driverScores.push({
+        driverId: driver.id,
+        driverName: `${driver.firstName || ''} ${driver.lastName || ''}`.trim(),
+        fcmToken: driver.fcmToken || driver.fcmTokens?.[0],
+        phoneNumber: driver.phoneNumber || '',
+        distance: distanceKm,
+        score: distanceKm * 2 + (100 - fairnessScore) * 0.1 + activeOrders * 3,
+      });
+    }
+
+    if (driverScores.length > 0) {
+      driverScores.sort((a, b) => a.score - b.score);
+      const best = driverScores[0];
+      const riderDeadline = _addSeconds(_nowTimestamp(), PAUTOS_RIDER_TIMEOUT_SEC);
+      await orderRef.update({
+        driverID: best.driverId,
+        driverName: best.driverName,
+        driverPhone: best.phoneNumber || '',
+        status: 'Driver Assigned',
+        assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+        assignmentMethod: 'dispatcher',
+        'dispatch.riderAcceptDeadline': riderDeadline,
+        'dispatch.excludedDriverIds': excludedIds,
+      });
+      await db.collection('users').doc(best.driverId).update({
+        pautosOrderRequestData: admin.firestore.FieldValue.arrayUnion(orderId),
+      });
+      const shoppingPreview = (orderData.shoppingList || '').toString().substring(0, 80);
+      if (best.fcmToken) {
+        try {
+          await getMessaging().send({
+            token: best.fcmToken,
+            notification: {
+              title: 'New PAUTOS Assignment',
+              body: shoppingPreview || `Shopping request`,
+            },
+            data: { type: 'pautos_assignment', orderId: String(orderId) },
+          });
+        } catch (e) { console.error('[PAUTOS] FCM error:', e); }
+      }
+    }
+
+    return { success: true };
+  });
+
+/**
+ * Callable: Admin manual PAUTOS assignment. Assigns a specific rider to a
+ * PAUTOS order. Requires auth (admin only - caller should enforce).
+ */
+exports.pautosManualAssign = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
+    const { orderId, driverId } = data || {};
+    if (!orderId || typeof orderId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'orderId required');
+    }
+    if (!driverId || typeof driverId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'driverId required');
+    }
+    const db = getDb();
+    const orderRef = db.collection(PAUTOS_ORDERS).doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) throw new functions.https.HttpsError('not-found', 'Order not found');
+    const orderData = orderSnap.data() || {};
+    if (orderData.driverID) {
+      throw new functions.https.HttpsError('failed-precondition', 'Order already assigned');
+    }
+    if (orderData.status !== 'Request Posted') {
+      throw new functions.https.HttpsError('failed-precondition', 'Order not in Request Posted status');
+    }
+
+    const riderSnap = await db.collection('users').doc(driverId).get();
+    if (!riderSnap.exists) throw new functions.https.HttpsError('not-found', 'Driver not found');
+    const rider = riderSnap.data() || {};
+    const riderName = `${rider.firstName || ''} ${rider.lastName || ''}`.trim() || 'Rider';
+    const riderPhone = rider.phoneNumber || '';
+    const fcmToken = rider.fcmToken || rider.fcmTokens?.[0];
+
+    const riderDeadline = _addSeconds(_nowTimestamp(), PAUTOS_RIDER_TIMEOUT_SEC);
+    await orderRef.update({
+      driverID: driverId,
+      driverName: riderName,
+      driverPhone: riderPhone,
+      status: 'Driver Assigned',
+      assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+      assignmentMethod: 'manual',
+      'dispatch.riderAcceptDeadline': riderDeadline,
+    });
+    await db.collection('users').doc(driverId).update({
+      pautosOrderRequestData: admin.firestore.FieldValue.arrayUnion(orderId),
+    });
+
+    const shoppingPreview = (orderData.shoppingList || '').toString().substring(0, 80);
+    if (fcmToken) {
+      try {
+        await getMessaging().send({
+          token: fcmToken,
+          notification: { title: 'New PAUTOS Assignment', body: shoppingPreview || 'Shopping request' },
+          data: { type: 'pautos_assignment', orderId: String(orderId) },
+        });
+      } catch (e) { console.error('[PAUTOS] FCM error:', e); }
+    }
+
+    await db.collection('pautos_assignments_log').add({
+      orderId,
+      driverId,
+      status: 'manual_assigned',
+      assignmentMethod: 'manual',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { success: true };
+  });
+
+/**
+ * PAUTOS Compute Billing: Firestore trigger when actualItemCost is set and totalAmount is not.
+ * Computes deliveryFee, serviceFee, totalAmount from PAUTOS_SETTINGS and New_DeliveryCharge.
+ */
+exports.pautosComputeBilling = functions
+  .region('us-central1')
+  .firestore.document(`${PAUTOS_ORDERS}/{orderId}`)
+  .onUpdate(async (change, context) => {
+    const orderId = context.params.orderId;
+    const after = change.after.data() || {};
+    const actualItemCost = _asNumber(after.actualItemCost);
+    const totalAmount = after.totalAmount;
+    if (actualItemCost <= 0 || totalAmount != null) return null;
+
+    try {
+      const db = getDb();
+      const pautosSnap = await db.collection('settings').doc('PAUTOS_SETTINGS').get();
+      const pautosData = pautosSnap.exists ? pautosSnap.data() : {};
+      const serviceFeePercent = _asNumber(pautosData.serviceFeePercent) || 10;
+      const useDistanceDeliveryFee = pautosData.useDistanceDeliveryFee !== false;
+      const flatDeliveryFee = _asNumber(pautosData.flatDeliveryFee) || 0;
+
+      let deliveryFee = 0;
+      if (useDistanceDeliveryFee) {
+        const pautosBase = _asNumber(pautosData.deliveryBaseFee);
+        const pautosPerKm = _asNumber(pautosData.deliveryPerKm);
+        const pautosMinKm = _asNumber(pautosData.minimumDistanceKm);
+        let baseCharge, perKm, thresholdKm;
+        if (pautosBase > 0 || pautosPerKm > 0) {
+          baseCharge = pautosBase || 0;
+          perKm = pautosPerKm || 0;
+          thresholdKm = pautosMinKm > 0 ? pautosMinKm : 1;
+        } else {
+          const deliverySnap = await db.collection('settings').doc('New_DeliveryCharge').get();
+          const fallbackSnap = await db.collection('settings').doc('DeliveryCharge').get();
+          const deliveryData = (deliverySnap.exists ? deliverySnap.data() : null) ||
+            (fallbackSnap.exists ? fallbackSnap.data() : null) || {};
+          baseCharge = _asNumber(deliveryData.baseDeliveryCharge) ||
+            _asNumber(deliveryData.base_delivery_charge) || 0;
+          perKm = _asNumber(deliveryData.deliveryChargePerKm) ||
+            _asNumber(deliveryData.delivery_charge_per_km) || 0;
+          thresholdKm = _asNumber(deliveryData.minimumDistanceKm) ||
+            _asNumber(deliveryData.minimum_distance_km) || 1;
+        }
+
+        const deliveryLoc = _extractPautosDeliveryLocation(after);
+        let distanceKm = 3;
+        const driverId = after.driverID;
+        if (driverId) {
+          const driverSnap = await db.collection('users').doc(driverId).get();
+          if (driverSnap.exists) {
+            const loc = driverSnap.data()?.location;
+            if (loc && (loc.latitude != null || loc.lat != null)) {
+              const driverLat = _asNumber(loc.latitude ?? loc.lat);
+              const driverLng = _asNumber(loc.longitude ?? loc.lng);
+              if (driverLat || driverLng) {
+                const distM = _distanceMeters(
+                  { lat: driverLat, lng: driverLng },
+                  { lat: deliveryLoc.lat || 0, lng: deliveryLoc.lng || 0 }
+                );
+                distanceKm = Math.max(0.1, distM / 1000);
+              }
+            }
+          }
+        }
+
+        const effectiveThreshold = thresholdKm > 0 ? thresholdKm : 1;
+        deliveryFee = distanceKm < effectiveThreshold
+          ? baseCharge
+          : baseCharge + (distanceKm * perKm);
+        deliveryFee = Math.round(Math.max(0, deliveryFee) * 100) / 100;
+      } else {
+        deliveryFee = flatDeliveryFee;
+      }
+
+      const serviceFee = Math.round(actualItemCost * (serviceFeePercent / 100) * 100) / 100;
+      const total = Math.round((actualItemCost + deliveryFee + serviceFee) * 100) / 100;
+
+      await change.after.ref.update({
+        deliveryFee,
+        serviceFee,
+        totalAmount: total,
+      });
+      console.log(`[PAUTOS Billing] ${orderId}: delivery=${deliveryFee}, service=${serviceFee}, total=${total}`);
+    } catch (err) {
+      console.error('[PAUTOS Billing] Error:', err);
+    }
+    return null;
+  });
+
+/**
+ * PAUTOS Complete Order: Callable for rider to mark delivered and complete payment.
+ * Validates driver, processes wallet deduct (if Wallet) and rider credit, updates status.
+ */
+exports.pautosCompleteOrder = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
+    const { orderId } = data || {};
+    if (!orderId || typeof orderId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'orderId required');
+    }
+    const driverId = context.auth.uid;
+    const db = getDb();
+    const orderRef = db.collection(PAUTOS_ORDERS).doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) throw new functions.https.HttpsError('not-found', 'Order not found');
+    const orderData = orderSnap.data() || {};
+    if (orderData.driverID !== driverId) {
+      throw new functions.https.HttpsError('permission-denied', 'Not your order');
+    }
+    if (orderData.status !== 'Delivering') {
+      throw new functions.https.HttpsError('failed-precondition', 'Order must be Delivering');
+    }
+
+    const totalAmount = _asNumber(orderData.totalAmount);
+    const actualItemCost = _asNumber(orderData.actualItemCost);
+    const deliveryFee = _asNumber(orderData.deliveryFee);
+    const serviceFee = _asNumber(orderData.serviceFee);
+    const paymentMethod = String(orderData.paymentMethod || 'COD').toLowerCase();
+    const authorID = orderData.authorID || '';
+
+    if (totalAmount <= 0) {
+      throw new functions.https.HttpsError('failed-precondition', 'Billing not yet computed');
+    }
+
+    if (paymentMethod === 'wallet') {
+      const customerSnap = await db.collection('users').doc(authorID).get();
+      if (!customerSnap.exists) throw new functions.https.HttpsError('not-found', 'Customer not found');
+      const walletAmount = _asNumber(customerSnap.data()?.wallet_amount);
+      if (walletAmount < totalAmount) {
+        throw new functions.https.HttpsError(
+          'failed-precondition',
+          'INSUFFICIENT_WALLET_BALANCE'
+        );
+      }
+    }
+
+    const pautosSnap = await db.collection('settings').doc('PAUTOS_SETTINGS').get();
+    const pautosData = pautosSnap.exists ? pautosSnap.data() : {};
+    const overrideRiderPercent = _asNumber(pautosData.riderCommissionPercent);
+    let platformCommissionPercent;
+    if (overrideRiderPercent > 0 && overrideRiderPercent <= 100) {
+      platformCommissionPercent = 100 - overrideRiderPercent;
+    } else {
+      const driverPerfSnap = await db.collection('settings').doc('driver_performance').get();
+      const perfData = driverPerfSnap.exists ? driverPerfSnap.data() : {};
+      const perfVal = _asNumber((await db.collection('users').doc(driverId).get()).data()?.driver_performance) || 75;
+      const tier = perfVal >= 90 ? 'gold' : perfVal >= 75 ? 'silver' : 'bronze';
+      const commKey = tier + '_commission_percent';
+      platformCommissionPercent = _asNumber(perfData[commKey]) || 20;
+    }
+    const platformCommission = Math.round(deliveryFee * (platformCommissionPercent / 100) * 100) / 100;
+    const riderEarning = Math.round((deliveryFee - platformCommission + actualItemCost) * 100) / 100;
+
+    const customerRef = db.collection('users').doc(authorID);
+    const driverRef = db.collection('users').doc(driverId);
+
+    await db.runTransaction(async (tx) => {
+      const freshOrder = await tx.get(orderRef);
+      if (!freshOrder.exists) throw new Error('Order not found');
+      const freshData = freshOrder.data() || {};
+      if (freshData.status === 'Completed') throw new Error('ORDER_ALREADY_COMPLETED');
+      if (freshData.driverID !== driverId) throw new Error('Not your order');
+
+      if (paymentMethod === 'wallet') {
+        const customerSnap = await tx.get(customerRef);
+        if (!customerSnap.exists) throw new Error('Customer not found');
+        const custData = customerSnap.data() || {};
+        const walletAmount = _asNumber(custData.wallet_amount);
+        if (walletAmount < totalAmount) throw new Error('INSUFFICIENT_WALLET_BALANCE');
+        tx.update(customerRef, {
+          wallet_amount: Math.round((walletAmount - totalAmount) * 100) / 100,
+        });
+        const walletRef = db.collection('wallet').doc();
+        tx.set(walletRef, {
+          user_id: authorID,
+          order_id: orderId,
+          amount: -totalAmount,
+          date: admin.firestore.FieldValue.serverTimestamp(),
+          payment_method: 'Wallet',
+          payment_status: 'success',
+          transactionUser: 'customer',
+          isTopUp: false,
+          walletType: 'amount',
+          note: 'PAUTOS Order Payment',
+        });
+      }
+
+      const driverSnap = await tx.get(driverRef);
+      const driverData = driverSnap.exists ? driverSnap.data() : {};
+      const currentEarning = _asNumber(driverData.wallet_amount);
+      const currentCredit = _asNumber(driverData.wallet_credit);
+      const newEarning = Math.round((currentEarning + riderEarning) * 100) / 100;
+      const newCredit = Math.round((currentCredit + riderEarning) * 100) / 100;
+
+      tx.update(driverRef, {
+        wallet_amount: newEarning,
+        wallet_credit: newCredit,
+      });
+
+      const creditLogRef = db.collection('wallet').doc();
+      tx.set(creditLogRef, {
+        user_id: driverId,
+        order_id: orderId,
+        amount: riderEarning,
+        date: admin.firestore.FieldValue.serverTimestamp(),
+        payment_method: paymentMethod === 'wallet' ? 'Wallet' : 'COD',
+        payment_status: 'success',
+        transactionUser: 'driver',
+        isTopUp: true,
+        walletType: 'credit',
+        note: 'PAUTOS Delivery Credit',
+      });
+
+      tx.update(orderRef, {
+        status: 'Completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    console.log(`[PAUTOS Complete] ${orderId} completed by ${driverId}`);
+    return { success: true };
+  });
+
+async function _requirePautosAdmin(context) {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be signed in');
+  const db = getDb();
+  const callerDoc = await db.collection('users').doc(context.auth.uid).get();
+  const role = (callerDoc.exists ? callerDoc.data() : {}).role || '';
+  if (role !== 'admin' && role !== 'Admin') {
+    throw new functions.https.HttpsError('permission-denied', 'Admin only');
+  }
+  return { uid: context.auth.uid, db };
+}
+
+/**
+ * Callable: Get full PAUTOS order for admin dispute resolution.
+ * Returns order, chat messages, substitution requests.
+ */
+exports.pautosGetOrderForAdmin = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const { uid, db } = await _requirePautosAdmin(context);
+    const orderId = data?.orderId;
+    if (!orderId || typeof orderId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'orderId required');
+    }
+    const orderRef = db.collection(PAUTOS_ORDERS).doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Order not found');
+    }
+    const order = { id: orderSnap.id, ...orderSnap.data() };
+
+    const [chatSnap, subsSnap] = await Promise.all([
+      db.collection('chat_driver').doc(orderId).collection('thread')
+        .orderBy('createdAt', 'asc').get(),
+      db.collection(PAUTOS_ORDERS).doc(orderId)
+        .collection('substitution_requests').orderBy('createdAt', 'asc').get(),
+    ]);
+
+    const messages = chatSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const substitutions = subsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    return {
+      order: _serializeForClient(order),
+      messages,
+      substitutions,
+    };
+  });
+
+function _serializeForClient(obj) {
+  if (obj == null) return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v && typeof v.toDate === 'function') {
+      out[k] = { _seconds: v.seconds, _nanoseconds: v.nanoseconds };
+    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = _serializeForClient(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/**
+ * Callable: Issue refund to customer for PAUTOS order. Admin-only.
+ */
+exports.pautosIssueRefund = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const { uid, db } = await _requirePautosAdmin(context);
+    const { orderId, amount, reason } = data || {};
+    if (!orderId || typeof orderId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'orderId required');
+    }
+    const amt = _asNumber(amount);
+    if (amt <= 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'amount must be positive');
+    }
+    const orderSnap = await db.collection(PAUTOS_ORDERS).doc(orderId).get();
+    if (!orderSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Order not found');
+    }
+    const orderData = orderSnap.data() || {};
+    const authorID = orderData.authorID || '';
+    const callerDoc = await db.collection('users').doc(uid).get();
+    const adminName = `${(callerDoc.data()?.firstName || '')} ${(callerDoc.data()?.lastName || '')}`.trim() || 'Admin';
+
+    const customerRef = db.collection('users').doc(authorID);
+    const customerSnap = await customerRef.get();
+    if (!customerSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Customer not found');
+    }
+    const walletAmount = _asNumber(customerSnap.data()?.wallet_amount);
+    const newBalance = Math.round((walletAmount + amt) * 100) / 100;
+
+    await db.runTransaction(async (tx) => {
+      tx.update(customerRef, { wallet_amount: newBalance });
+      const walletRef = db.collection('wallet').doc();
+      tx.set(walletRef, {
+        user_id: authorID,
+        order_id: orderId,
+        amount: amt,
+        date: admin.firestore.FieldValue.serverTimestamp(),
+        payment_method: 'Wallet',
+        payment_status: 'success',
+        transactionUser: 'customer',
+        isTopUp: true,
+        walletType: 'amount',
+        note: reason ? `PAUTOS Refund: ${String(reason).slice(0, 200)}` : 'PAUTOS Refund',
+      });
+      const disputeRef = db.collection('pautos_disputes').doc();
+      tx.set(disputeRef, {
+        orderId,
+        action: 'refund',
+        adminId: uid,
+        adminName,
+        amount: amt,
+        note: reason || null,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    return { success: true };
+  });
+
+/**
+ * Callable: Adjust rider earnings for PAUTOS order. Admin-only.
+ */
+exports.pautosAdjustRiderEarnings = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const { uid, db } = await _requirePautosAdmin(context);
+    const { orderId, adjustmentAmount, reason } = data || {};
+    if (!orderId || typeof orderId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'orderId required');
+    }
+    const adj = _asNumber(adjustmentAmount);
+    if (adj === 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'adjustmentAmount cannot be zero');
+    }
+    const orderSnap = await db.collection(PAUTOS_ORDERS).doc(orderId).get();
+    if (!orderSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Order not found');
+    }
+    const orderData = orderSnap.data() || {};
+    const driverID = orderData.driverID || '';
+    if (!driverID) {
+      throw new functions.https.HttpsError('failed-precondition', 'Order has no assigned rider');
+    }
+    const callerDoc = await db.collection('users').doc(uid).get();
+    const adminName = `${(callerDoc.data()?.firstName || '')} ${(callerDoc.data()?.lastName || '')}`.trim() || 'Admin';
+
+    const driverRef = db.collection('users').doc(driverID);
+    const driverSnap = await driverRef.get();
+    if (!driverSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Rider not found');
+    }
+    const currentAmount = _asNumber(driverSnap.data()?.wallet_amount);
+    const newAmount = Math.round((currentAmount + adj) * 100) / 100;
+    if (newAmount < 0) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Adjustment would result in negative rider balance',
+      );
+    }
+
+    await db.runTransaction(async (tx) => {
+      tx.update(driverRef, { wallet_amount: newAmount });
+      const disputeRef = db.collection('pautos_disputes').doc();
+      tx.set(disputeRef, {
+        orderId,
+        action: 'adjust_earnings',
+        adminId: uid,
+        adminName,
+        amount: adj,
+        note: reason || null,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    return { success: true };
+  });
+
+/**
+ * Callable: Add dispute note for PAUTOS order. Admin-only.
+ */
+exports.pautosAddDisputeNote = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const { uid, db } = await _requirePautosAdmin(context);
+    const { orderId, note } = data || {};
+    if (!orderId || typeof orderId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'orderId required');
+    }
+    const noteStr = typeof note === 'string' ? note.trim() : '';
+    if (!noteStr) {
+      throw new functions.https.HttpsError('invalid-argument', 'note required');
+    }
+    const orderSnap = await db.collection(PAUTOS_ORDERS).doc(orderId).get();
+    if (!orderSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Order not found');
+    }
+    const callerDoc = await db.collection('users').doc(uid).get();
+    const adminName = `${(callerDoc.data()?.firstName || '')} ${(callerDoc.data()?.lastName || '')}`.trim() || 'Admin';
+
+    await db.collection('pautos_disputes').add({
+      orderId,
+      action: 'note',
+      adminId: uid,
+      adminName,
+      amount: null,
+      note: noteStr,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { success: true };
+  });
+
+// =========================
 // Rider-first dispatch (v1)
 // =========================
 
@@ -8757,9 +9571,30 @@ const {
   aggregateDailyUserMetrics,
   aggregateDailyRevenue,
 } = require('./dailyAggregations');
+const {
+  updateUserSegments,
+  manualUpdateUserSegments,
+  checkSegmentFields,
+  migrateAllUserSegments,
+  testFunctionWorks,
+  debugSingleUser,
+  checkNotificationAccess,
+  testSegmentationNoNotifications,
+  checkFirestorePermissions,
+} = require('./updateUserSegments');
 exports.aggregateDailyNotifications = aggregateDailyNotifications;
 exports.aggregateDailyUserMetrics = aggregateDailyUserMetrics;
 exports.aggregateDailyRevenue = aggregateDailyRevenue;
+exports.updateUserSegments = updateUserSegments;
+exports.manualUpdateUserSegments = manualUpdateUserSegments;
+exports.checkSegmentFields = checkSegmentFields;
+exports.migrateAllUserSegments = migrateAllUserSegments;
+exports.testFunctionWorks = testFunctionWorks;
+exports.debugSingleUser = debugSingleUser;
+exports.checkNotificationAccess = checkNotificationAccess;
+exports.testSegmentationNoNotifications =
+  testSegmentationNoNotifications;
+exports.checkFirestorePermissions = checkFirestorePermissions;
 
 // Conversion attribution and LTV
 const {

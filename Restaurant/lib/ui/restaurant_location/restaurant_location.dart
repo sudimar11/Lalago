@@ -13,6 +13,7 @@ import 'package:foodie_restaurant/services/helper.dart';
 import 'package:foodie_restaurant/ui/container/ContainerScreen.dart';
 import 'package:foodie_restaurant/ui/ordersScreen/OrdersScreen.dart';
 import 'package:geoflutterfire2/geoflutterfire2.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:place_picker_v2/entities/location_result.dart';
 import 'package:place_picker_v2/widgets/place_picker.dart';
 import 'package:uuid/uuid.dart';
@@ -97,7 +98,27 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
           }
         }
       }
+      if (widget.vendor!.latitude != 0.0 && widget.vendor!.longitude != 0.0) {
+        latValue = widget.vendor!.latitude;
+        longValue = widget.vendor!.longitude;
+      }
     }
+  }
+
+  LatLng get _mapCenter => LatLng(latValue, longValue);
+
+  bool get _hasValidCoordinates =>
+      latValue != 0.0 && longValue != 0.0;
+
+  Set<Marker> get _markers {
+    if (!_hasValidCoordinates) return {};
+    return {
+      Marker(
+        markerId: const MarkerId('restaurant'),
+        position: LatLng(latValue, longValue),
+        infoWindow: InfoWindow(title: 'Restaurant'),
+      ),
+    };
   }
 
   @override
@@ -419,6 +440,32 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             }
                           }),
                     ),
+                    if (_hasValidCoordinates) ...[
+                      SizedBox(height: 20),
+                      Card(
+                        elevation: 0.5,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: SizedBox(
+                            height: 220,
+                            child: GoogleMap(
+                              onMapCreated: (_) {},
+                              initialCameraPosition: CameraPosition(
+                                target: _mapCenter,
+                                zoom: 14.0,
+                              ),
+                              markers: _markers,
+                              myLocationEnabled: false,
+                              zoomControlsEnabled: false,
+                              mapType: MapType.normal,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ])))),
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.all(20.0),

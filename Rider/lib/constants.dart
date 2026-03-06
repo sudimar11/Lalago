@@ -23,6 +23,7 @@ const PRODUCTS = 'vendor_products';
 const Setting = 'settings';
 const CONTACT_US = 'ContactUs';
 const ORDERS = 'restaurant_orders';
+const PAUTOS_ORDERS = 'pautos_orders';
 const OrderTransaction = "order_transactions";
 const driverPayouts = "driver_payouts";
 const REFERRAL = 'referral';

@@ -51,6 +51,7 @@ import 'package:brgy/pages/cart_recovery_dashboard.dart';
 import 'package:brgy/pages/first_order_coupon_settings_page.dart';
 import 'package:brgy/pages/coupon_management_page.dart';
 import 'package:brgy/pages/new_user_promo_settings_page.dart';
+import 'package:brgy/pages/pautos_settings_page.dart';
 import 'package:brgy/pages/referral_settings_page.dart';
 import 'package:brgy/pages/delivery_zone_settings_page.dart';
 import 'package:brgy/pages/rider_overview_page.dart';
@@ -66,6 +67,7 @@ import 'package:brgy/pages/search_analytics_dashboard.dart';
 import 'package:brgy/pages/click_analytics_dashboard.dart';
 import 'package:brgy/pages/recommendation_performance.dart';
 import 'package:brgy/pages/full_operations_page.dart';
+import 'package:brgy/pages/user_segments_page.dart';
 import 'package:brgy/map_page.dart';
 import 'package:brgy/widgets/dashboard/analytics_kpi_cards.dart';
 import 'package:brgy/constants.dart';
@@ -892,6 +894,12 @@ class _AnalyticsDrawer extends StatelessWidget {
             subtitle: const Text('Most active hours'),
             onTap: () =>
                 _navigateAndClose(context, const AnalyticsTodayPage()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.pie_chart),
+            title: const Text('User Segments'),
+            onTap: () =>
+                _navigateAndClose(context, const UserSegmentsPage()),
           ),
           ListTile(
             leading: const Icon(Icons.calendar_view_week),
@@ -3280,7 +3288,7 @@ class SettingsPage extends StatelessWidget {
       ),
       body: ListView.separated(
         padding: EdgeInsets.all(12),
-        itemCount: _docIds.length + 13,
+        itemCount: _docIds.length + 14,
         separatorBuilder: (_, __) => SizedBox(height: 8),
         itemBuilder: (context, index) {
           if (index == 0) {
@@ -3322,7 +3330,10 @@ class SettingsPage extends StatelessWidget {
           if (index == 12) {
             return const _DispatchConfigTile();
           }
-          final String docId = _docIds[index - 13];
+          if (index == 13) {
+            return const _PautosSettingsTile();
+          }
+          final String docId = _docIds[index - 14];
           return _SettingsDocTile(collection: 'settings', docId: docId);
         },
       ),
@@ -3772,6 +3783,32 @@ class _DispatchConfigTile extends StatelessWidget {
             MaterialPageRoute(
               builder: (_) =>
                   const DispatchConfigPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PautosSettingsTile extends StatelessWidget {
+  const _PautosSettingsTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.shopping_bag, color: Colors.orange),
+        title: const Text('PAUTOS Settings'),
+        subtitle: const Text(
+          'Service fee, delivery fee, rider commission',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const PautosSettingsPage(),
             ),
           );
         },

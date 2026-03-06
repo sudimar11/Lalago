@@ -31,6 +31,7 @@ class ChatScreens extends StatefulWidget {
   final String? restaurantProfileImage;
   final String? token;
   final String? chatType;
+  final bool isPautos;
 
   ChatScreens(
       {Key? key,
@@ -42,7 +43,8 @@ class ChatScreens extends StatefulWidget {
       this.customerProfileImage,
       this.restaurantProfileImage,
       this.token,
-      this.chatType})
+      this.chatType,
+      this.isPautos = false})
       : super(key: key);
 
   @override
@@ -80,6 +82,9 @@ class _ChatScreensState extends State<ChatScreens> {
   @override
   void initState() {
     super.initState();
+    if (widget.isPautos) {
+      _ensurePautosInboxExists();
+    }
     _resetUnreadCount();
     _subscribeToOrderStatus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -89,6 +94,30 @@ class _ChatScreensState extends State<ChatScreens> {
     if (_controller.hasClients) {
       Timer(const Duration(milliseconds: 500),
           () => _controller.jumpTo(_controller.position.maxScrollExtent));
+    }
+  }
+
+  Future<void> _ensurePautosInboxExists() async {
+    try {
+      if (widget.orderId == null || widget.orderId!.isEmpty) return;
+      if (widget.customerId == null || widget.restaurantId == null) return;
+
+      final inboxRef = FirebaseFirestore.instance
+          .collection('chat_driver')
+          .doc(widget.orderId);
+
+      final snapshot = await inboxRef.get();
+      if (!snapshot.exists) {
+        await inboxRef.set({
+          'customerId': widget.customerId,
+          'restaurantId': widget.restaurantId,
+          'orderId': widget.orderId,
+          'chatType': 'Driver',
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (e) {
+      debugPrint('Error ensuring PAUTOS inbox: $e');
     }
   }
 
@@ -313,8 +342,9 @@ class _ChatScreensState extends State<ChatScreens> {
     if (_orderSubscription != null) {
       return;
     }
+    final collection = widget.isPautos ? PAUTOS_ORDERS : ORDERS;
     _orderSubscription = FirebaseFirestore.instance
-        .collection(ORDERS)
+        .collection(collection)
         .doc(widget.orderId)
         .snapshots()
         .listen((orderDoc) async {
@@ -379,6 +409,13 @@ class _ChatScreensState extends State<ChatScreens> {
   }
 
   String? _buildRiderStatusText() {
+    if (widget.isPautos) {
+      if (_orderStatus == 'Shopping') return 'Shopping in progress';
+      if (_orderStatus == 'Delivering') return 'On the way';
+      if (_orderStatus == 'Delivered') return 'Delivered';
+      if (_driverId != null && _isDriverOnline) return 'Rider online';
+      return null;
+    }
     if (_orderStatus == ORDER_STATUS_IN_TRANSIT ||
         _orderStatus == ORDER_STATUS_SHIPPED) {
       return 'On the way';
@@ -394,6 +431,21 @@ class _ChatScreensState extends State<ChatScreens> {
 
   Map<String, String>? _systemMessageInfo(String? status) {
     if (status == null || status.isEmpty) return null;
+    if (widget.isPautos) {
+      if (status == 'Driver Accepted') {
+        return {'key': 'accepted', 'text': 'Driver accepted. Shopping soon.'};
+      }
+      if (status == 'Shopping') {
+        return {'key': 'shopping', 'text': 'Rider is shopping.'};
+      }
+      if (status == 'Delivering') {
+        return {'key': 'on_the_way', 'text': 'Rider is on the way.'};
+      }
+      if (status == 'Delivered') {
+        return {'key': 'delivered', 'text': 'Order delivered.'};
+      }
+      return null;
+    }
     if (status == ORDER_STATUS_ACCEPTED) {
       return {'key': 'accepted', 'text': 'Order is being prepared.'};
     }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:brgy/constants.dart';
+import 'package:brgy/services/user_segment_service.dart';
 import 'package:intl/intl.dart';
 
 class CustomerInformationPage extends StatefulWidget {
@@ -120,6 +121,10 @@ class _CustomerInformationPageState extends State<CustomerInformationPage> {
 
                 // Preference Profile Card
                 _buildPreferenceProfileCard(userData),
+                const SizedBox(height: 16),
+
+                // User Engagement Card
+                _buildEngagementCard(userData),
                 const SizedBox(height: 16),
 
                 // Order History Section
@@ -414,6 +419,107 @@ class _CustomerInformationPageState extends State<CustomerInformationPage> {
                 fontSize: 12,
                 color: Colors.grey[600],
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMetric(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[600],
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEngagementCard(Map<String, dynamic> userData) {
+    final segment = (userData['segment'] ?? 'unknown').toString();
+    final engagementScore = userData['engagementScore'] as num?;
+    final lastOrderRecencyDays = userData['lastOrderRecencyDays'] as num?;
+    final orderFrequency = userData['orderFrequency'] as num?;
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'User Engagement',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: UserSegmentService.getSegmentColor(segment),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    UserSegmentService.getSegmentDisplayName(segment),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (engagementScore != null) ...[
+                  const SizedBox(width: 12),
+                  Text(
+                    'Score: ${engagementScore.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                if (lastOrderRecencyDays != null)
+                  _buildMetric(
+                    'Last order (days ago)',
+                    lastOrderRecencyDays.toStringAsFixed(0),
+                  ),
+                if (orderFrequency != null)
+                  _buildMetric(
+                    'Orders per month',
+                    orderFrequency.toStringAsFixed(1),
+                  ),
+              ],
             ),
           ],
         ),

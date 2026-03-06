@@ -23,6 +23,7 @@ import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/ui/container/ContainerScreen.dart';
 import 'package:foodie_driver/ui/onBoarding/OnBoardingScreen.dart';
 import 'package:foodie_driver/userPrefrence.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:foodie_driver/utils/shared_preferences_helper.dart';
 
@@ -689,6 +690,17 @@ class OnBoardingState extends State<OnBoarding> {
 
             // user is guaranteed non-null here due to outer if (user != null) check
             if (user != null) {
+              // Reset check-in status when it's a new calendar day
+              final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+              final lastActive = user.lastActiveDate ?? '';
+              if (lastActive != today) {
+                user.checkedInToday = false;
+                user.checkedOutToday = false;
+                user.todayCheckInTime = null;
+                user.todayCheckOutTime = null;
+                user.isOnline = false;
+              }
+
               user.isActive = true;
               user.role = USER_ROLE_DRIVER;
               // Sync isOnline: if not checked in today, force isOnline false so
@@ -715,6 +727,12 @@ class OnBoardingState extends State<OnBoarding> {
               } catch (_) {}
 
               MyAppState.currentUser = user;
+
+              try {
+                await OrderService.updateRiderStatus();
+              } catch (e) {
+                print('❌ Error updating rider status on login: $e');
+              }
 
               // Refresh FCM token on every app start when rider is already logged in
               print('🔑 Refreshing FCM token for rider on app start...');

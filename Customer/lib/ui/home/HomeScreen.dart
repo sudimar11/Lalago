@@ -87,6 +87,7 @@ import 'package:foodie_customer/ui/home/sections/home_popular_today_section.dart
 import 'package:foodie_customer/ui/home/sections/home_header_section.dart';
 import 'package:foodie_customer/ui/home/sections/banner_section.dart';
 import 'package:foodie_customer/ui/home/sections/bundle_deals_section.dart';
+import 'package:foodie_customer/ui/home/sections/home_pautos_entry_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/promo_card.dart';
 
@@ -1460,7 +1461,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     child: CachedNetworkImage(
                       imageUrl: getImageVAlidUrl(product.photo),
-                      memCacheWidth: (screenWidth * 0.4).round(),
+                      memCacheWidth: ((screenWidth * 0.4).round()).clamp(1, 300),
                       memCacheHeight: 240,
                       maxWidthDiskCache: 600,
                       maxHeightDiskCache: 600,
@@ -2183,6 +2184,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             ),
 
+                            RepaintBoundary(
+                              child: const HomePautosEntrySection(),
+                            ),
+
                             //storyWidget(),
 
                             RepaintBoundary(
@@ -2869,6 +2874,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 borderRadius: BorderRadius.circular(20),
                 child: CachedNetworkImage(
                   imageUrl: AppGlobal.placeHolderImage!,
+                  memCacheWidth: 300,
+                  memCacheHeight: 300,
                   fit: BoxFit.cover,
                 ),
               ),
@@ -3174,9 +3181,11 @@ class _HomeScreenState extends State<HomeScreen> {
               ClipRRect(
                 borderRadius: BorderRadius.circular(15),
                 child: CachedNetworkImage(
-                  imageUrl: product.photo,
+                  imageUrl: getImageVAlidUrl(product.photo),
                   width: double.infinity,
                   height: 120,
+                  memCacheWidth: 300,
+                  memCacheHeight: 300,
                   fit: BoxFit.cover,
                   errorWidget: (context, url, error) => const Icon(Icons.error),
                 ),
@@ -3569,8 +3578,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             child: CachedNetworkImage(
                               imageUrl:
                                   getImageVAlidUrl(offerModel.imageOffer!),
-                              memCacheWidth: (screenWidth * 0.35).round(),
-                              memCacheHeight: 340,
+                              memCacheWidth: ((screenWidth * 0.35).round())
+                                  .clamp(1, 300),
+                              memCacheHeight: 300,
                               maxWidthDiskCache: 800,
                               maxHeightDiskCache: 400,
                               width: double.infinity,
@@ -4005,7 +4015,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Expanded(
                     child: CachedNetworkImage(
                   imageUrl: getImageVAlidUrl(vendorModel.photo),
-                  memCacheWidth: screenWidth.toInt(),
+                  memCacheWidth: (screenWidth.toInt()).clamp(1, 300),
                   memCacheHeight: 120,
                   imageBuilder: (context, imageProvider) => Container(
                     decoration: BoxDecoration(
@@ -4022,6 +4032,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       borderRadius: BorderRadius.circular(20),
                       child: CachedNetworkImage(
                         imageUrl: AppGlobal.placeHolderImage!,
+                        memCacheWidth: 300,
+                        memCacheHeight: 300,
                         fit: BoxFit.cover,
                       )),
                   fit: BoxFit.cover,

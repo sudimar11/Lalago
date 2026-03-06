@@ -99,7 +99,9 @@ class _RestaurantsPageState extends State<RestaurantsPage> {
           vendorData: Map<String, dynamic>.from(vData),
         ),
       ),
-    );
+    ).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -200,6 +202,7 @@ class _RestaurantsPageState extends State<RestaurantsPage> {
 
                 final filteredVendors = vendors.where((v) {
                   final data = v.data() as Map<String, dynamic>;
+                  if (data['isDeleted'] == true) return false;
                   final title =
                       (data['title'] ?? data['authorName'] ?? '').toString();
                   if (_query.isEmpty) return true;

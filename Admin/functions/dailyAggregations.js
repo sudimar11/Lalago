@@ -5,7 +5,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const ANALYTICS = require('./analyticsConstants');
-const { getUserSegment } = require('./userSegmentation');
+const { updateUserSegment } = require('./userSegmentation');
 
 function getDb() {
   if (!admin.apps.length) {
@@ -139,7 +139,7 @@ exports.aggregateDailyUserMetrics = functions
         metrics.newUsers += 1;
       }
 
-      const segment = await getUserSegment(userDoc.id, userData, db);
+      const segment = await updateUserSegment(userDoc.id, userData, db);
       metrics.bySegment[segment] = (metrics.bySegment[segment] || 0) + 1;
     }
 

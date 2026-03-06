@@ -4,6 +4,7 @@ import 'dart:developer';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/order_notification_listener.dart';
+import 'package:foodie_driver/services/pautos_order_notification_listener.dart';
 import 'package:foodie_driver/services/earnings_notification_listener.dart';
 import 'package:foodie_driver/services/performance_notification_listener.dart';
 import 'package:foodie_driver/services/checkout_reminder_service.dart';
@@ -18,6 +19,7 @@ class UnifiedNotificationListener {
 
   // Handler instances (not listeners - just handlers)
   OrderNotificationHandler? _orderHandler;
+  PautosOrderNotificationHandler? _pautosHandler;
   EarningsNotificationHandler? _earningsHandler;
   PerformanceNotificationHandler? _performanceHandler;
   CheckoutReminderHandler? _checkoutHandler;
@@ -35,6 +37,12 @@ class UnifiedNotificationListener {
         _orderHandler = OrderNotificationHandler(_notificationService, _userId);
         await _orderHandler!.initialize();
       }
+
+      _pautosHandler = PautosOrderNotificationHandler(
+        _notificationService,
+        _userId,
+      );
+      await _pautosHandler!.initialize();
 
       if (_preferences.earningNotificationsEnabled) {
         _earningsHandler = EarningsNotificationHandler(_notificationService, _userId);
@@ -65,6 +73,14 @@ class UnifiedNotificationListener {
             if (_preferences.orderNotificationsEnabled && _orderHandler != null) {
               final orderRequestData = data['orderRequestData'] as List<dynamic>?;
               _orderHandler!.handleOrderRequestDataChange(orderRequestData ?? []);
+            }
+
+            if (_pautosHandler != null) {
+              final pautosOrderRequestData =
+                  data['pautosOrderRequestData'] as List<dynamic>?;
+              _pautosHandler!.handlePautosOrderRequestDataChange(
+                pautosOrderRequestData ?? [],
+              );
             }
 
             if (_preferences.earningNotificationsEnabled && _earningsHandler != null) {
@@ -99,6 +115,7 @@ class UnifiedNotificationListener {
     _userSubscription?.cancel();
     _userSubscription = null;
     _orderHandler?.dispose();
+    _pautosHandler?.dispose();
     _earningsHandler?.dispose();
     _performanceHandler?.dispose();
     _checkoutHandler?.dispose();

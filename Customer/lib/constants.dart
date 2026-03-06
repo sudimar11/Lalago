@@ -60,6 +60,7 @@ const FavouriteItem = "favorite_item";
 const VENDORS = 'vendors';
 const PRODUCTS = 'vendor_products';
 const ORDERS = 'restaurant_orders';
+const PAUTOS_ORDERS = 'pautos_orders';
 const ORDER_FEEDBACK = 'order_feedback';
 const ADVERTISEMENTS = 'advertisements';
 const ORDERS_TABLE = 'booked_table';

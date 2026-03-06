@@ -1150,11 +1150,24 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                     final product = entry.product!;
                     VariantInfo? variantIno = product.variant_info;
 
-                    List<dynamic>? addon = product.extras;
+                    List<dynamic>? addon;
+                    final e = product.extras;
+                    if (e is List) {
+                      addon = e;
+                    } else if (e is String && e.isNotEmpty && e != '[]') {
+                      try {
+                        final decoded = jsonDecode(e);
+                        addon = decoded is List
+                            ? List<dynamic>.from(decoded)
+                            : [decoded];
+                      } catch (_) {
+                        addon = [e];
+                      }
+                    }
 
                     String extrasDisVal = '';
 
-                    if (addon != null) {
+                    if (addon != null && addon.isNotEmpty) {
                       for (int i = 0; i < addon.length; i++) {
                         extrasDisVal +=
                             '${addon[i].toString().replaceAll("\"", "")} ${(i == addon.length - 1) ? "" : ","}';
@@ -1309,12 +1322,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                       )),
                                   onTap: () async {
                                     try {
-                                      showProgress(
+                                      await showProgress(
                                           context, "Please wait", false);
 
                                       // Validate order has products
                                       if (widget.orderModel.products.isEmpty) {
-                                        hideProgress();
+                                        await hideProgress();
                                         showAlertDialog(
                                           context,
                                           "Reorder Failed",
@@ -1361,8 +1374,16 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                         if (bundleId != null &&
                                             bundleId.isNotEmpty) {
                                           try {
-                                            final bundle = await BundleService
-                                                .getBundle(bundleId);
+                                            final bundle =
+                                                await BundleService
+                                                    .getBundle(bundleId)
+                                                    .timeout(
+                                              const Duration(seconds: 10),
+                                              onTimeout: () => throw
+                                                  TimeoutException(
+                                                'Bundle fetch timed out',
+                                              ),
+                                            );
                                             if (bundle != null &&
                                                 bundle.isActive) {
                                               final itemsWithPhotos =
@@ -1370,6 +1391,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                                       .itemsWithPhotos(
                                                 bundle.restaurantId,
                                                 bundle.items,
+                                              ).timeout(
+                                                const Duration(seconds: 15),
+                                                onTimeout: () => throw
+                                                    TimeoutException(
+                                                  'Items fetch timed out',
+                                                ),
                                               );
                                               await cartDatabase.addBundleToCart(
                                                 bundleId: bundle.bundleId,
@@ -1420,7 +1447,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                         }
                                       }
 
-                                      hideProgress();
+                                      await hideProgress();
 
                                       // Debug logging
                                       debugPrint(
@@ -1474,7 +1501,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                         );
                                       }
                                     } catch (e, stackTrace) {
-                                      hideProgress();
+                                      await hideProgress();
                                       debugPrint("Error during reorder: $e");
                                       debugPrint("StackTrace: $stackTrace");
                                       showAlertDialog(
@@ -2912,6 +2939,17 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
           extrasString = product.extras as String;
         } else {
           extrasString = product.extras.toString();
+        }
+      }
+      // Treat empty/meaningless extras as null to avoid displaying "\\", "null", etc
+      if (extrasString != null) {
+        final s = extrasString.trim();
+        if (s.isEmpty ||
+            s == '[]' ||
+            s == 'null' ||
+            s == '\\' ||
+            s == r'\\') {
+          extrasString = null;
         }
       }
 

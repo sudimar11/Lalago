@@ -77,31 +77,30 @@ class TopRestaurantsSection extends StatelessWidget {
                     context,
                     fallbackRestaurants,
                   ))
-            : Container(
-                width: MediaQuery.of(context).size.width,
-                height: 260,
-                margin: const EdgeInsets.fromLTRB(10, 0, 0, 10),
-                child: RepaintBoundary(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
-                    cacheExtent: 400.0,
-                    itemCount: popularRestaurantLst
-                                .toSet()
-                                .toList()
-                                .length >=
-                            5
-                        ? 5
-                        : popularRestaurantLst.toSet().toList().length,
-                    itemBuilder: (context, index) {
-                      final List uniqueRestaurants =
-                          popularRestaurantLst.toSet().toList();
-                      final VendorModel vendorModel = uniqueRestaurants[index];
-                      return _buildRestaurantCard(vendorModel);
-                    },
-                  ),
-                ),
+            : Builder(
+                builder: (context) {
+                  final uniqueRestaurants =
+                      popularRestaurantLst.toSet().toList();
+                  final count = uniqueRestaurants.length >= 5
+                      ? 5
+                      : uniqueRestaurants.length;
+                  return Container(
+                    width: MediaQuery.of(context).size.width,
+                    height: 260,
+                    margin: const EdgeInsets.fromLTRB(10, 0, 0, 10),
+                    child: RepaintBoundary(
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        cacheExtent: 400.0,
+                        itemCount: count,
+                        itemBuilder: (context, index) =>
+                            _buildRestaurantCard(uniqueRestaurants[index]),
+                      ),
+                    ),
+                  );
+                },
               ),
       ],
     );

@@ -2843,6 +2843,15 @@ class _CartScreenState extends State<CartScreen> {
       if (cartProduct.extras is List) {
         addOnVal = List.from(cartProduct.extras);
       }
+      // Filter out meaningless addon values (\\, null, [], empty) that display as garbage
+      addOnVal = addOnVal.where((e) {
+        final s = e.toString().trim();
+        return s.isNotEmpty &&
+            s != 'null' &&
+            s != '[]' &&
+            s != '\\' &&
+            s != r'\\';
+      }).toList();
     }
 
     if (cartProduct.extras_price != null &&

@@ -32,6 +32,7 @@ class _RestaurantInfoPageState extends State<RestaurantInfoPage> {
   bool _updatingStatus = false;
   String? _selectedBadgeOverride;
   bool _savingBadgeOverride = false;
+  bool _isDeleting = false;
 
   @override
   void initState() {
@@ -519,10 +520,75 @@ class _RestaurantInfoPageState extends State<RestaurantInfoPage> {
             ),
             const Divider(),
             _buildBadgeOverrideSection(),
+            const Divider(),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _isDeleting ? null : _deleteRestaurant,
+                icon: const Icon(Icons.delete_forever, color: Colors.red),
+                label: Text(
+                  _isDeleting ? 'Deleting…' : 'Delete Restaurant',
+                  style: const TextStyle(color: Colors.red),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.red),
+                  foregroundColor: Colors.red,
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _deleteRestaurant() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Restaurant?'),
+        content: const Text(
+          'This will hide the restaurant from customers. '
+          'Restaurant data will be preserved for order history.\n\n'
+          'Are you sure?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isDeleting = true);
+    try {
+      await VendorService().deleteVendor(widget.vendorId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Restaurant deleted.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isDeleting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to delete: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildBadgeOverrideSection() {

@@ -13,6 +13,7 @@ import 'package:brgy/services/driver_assignment_service.dart';
 import 'package:brgy/services/delivery_zone_service.dart';
 import 'package:brgy/services/driver_response_tracking_service.dart';
 import 'package:brgy/widgets/orders/assignments_log_list.dart';
+import 'package:brgy/widgets/orders/pautos_queue_list.dart';
 import 'package:brgy/widgets/orders/order_helpers.dart';
 import 'package:brgy/widgets/orders/pending_device_less_orders.dart';
 import 'package:brgy/widgets/orders/order_preparation_dialog.dart';
@@ -44,9 +45,9 @@ class _OrderDispatcherPageState extends State<OrderDispatcherPage>
   void initState() {
     super.initState();
     _tab = TabController(
-      length: 2,
+      length: 3,
       vsync: this,
-      initialIndex: widget.initialTabIndex,
+      initialIndex: widget.initialTabIndex.clamp(0, 2),
     );
   }
 
@@ -65,20 +66,29 @@ class _OrderDispatcherPageState extends State<OrderDispatcherPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: TabBar(
+        controller: _tab,
+        tabs: const [
+          Tab(text: 'Assignments'),
+          Tab(text: 'Orders'),
+          Tab(text: 'PAUTOS'),
+        ],
+      ),
       body: TabBarView(
         controller: _tab,
         children: [
-          // --- TAB 1: assignments_log stream ---
           RefreshIndicator(
             onRefresh: _pullToRefresh,
             child:
                 AssignmentsLogList(key: ValueKey('assignments$_refreshBump')),
           ),
-
-          // --- TAB 2: restaurant_orders stream ---
           RefreshIndicator(
             onRefresh: _pullToRefresh,
             child: _RecentOrdersList(key: ValueKey('orders$_refreshBump')),
+          ),
+          RefreshIndicator(
+            onRefresh: _pullToRefresh,
+            child: PautosQueueList(key: ValueKey('pautos$_refreshBump')),
           ),
         ],
       ),

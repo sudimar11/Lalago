@@ -113,10 +113,10 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
     setState(() => _isProcessingReorder = true);
 
     try {
-      showProgress(context, "Please wait", false);
+      await showProgress(context, "Please wait", false);
 
       if (widget.order.products.isEmpty) {
-        hideProgress();
+        await hideProgress();
         showAlertDialog(
           context,
           "Reorder Failed",
@@ -161,7 +161,7 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
         }
       }
 
-      hideProgress();
+      await hideProgress();
 
       if (successCount > 0 && failCount == 0) {
         _dismissDialog();
@@ -192,7 +192,7 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
         );
       }
     } catch (e) {
-      hideProgress();
+      await hideProgress();
       showAlertDialog(
         context,
         "Reorder Failed",
@@ -228,6 +228,17 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
           extrasString = product.extras as String;
         } else {
           extrasString = product.extras.toString();
+        }
+      }
+      // Treat empty/meaningless extras as null to avoid displaying "\\", "null", etc
+      if (extrasString != null) {
+        final s = extrasString.trim();
+        if (s.isEmpty ||
+            s == '[]' ||
+            s == 'null' ||
+            s == '\\' ||
+            s == r'\\') {
+          extrasString = null;
         }
       }
 

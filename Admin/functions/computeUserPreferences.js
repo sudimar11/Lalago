@@ -172,6 +172,7 @@ exports.computeUserPreferences = functions
         .slice(0, 5)
         .map(([categoryId, count]) => ({ categoryId, count }));
 
+      const orderFrequencyDays = calculateAverageOrderFrequency(orders);
       const preferenceProfile = {
         cuisinePreferences: cuisinePrefs,
         avgSpend: totalOrders > 0 ? totalSpend / totalOrders : 0,
@@ -182,7 +183,7 @@ exports.computeUserPreferences = functions
         lastOrderVendorId: lastCompletedOrder?.vendorID || null,
         lastOrderVendorName: lastCompletedOrder?.vendor?.title || null,
         lastOrderProducts,
-        orderFrequencyDays: calculateAverageOrderFrequency(orders),
+        orderFrequencyDays,
         totalCompletedOrders: totalOrders,
         favoriteProducts,
         topCategories,
@@ -192,6 +193,24 @@ exports.computeUserPreferences = functions
         preferenceProfile,
         lastOrderCompletedAt: lastCompletedOrder?.createdAt || null,
         reorderEligible: totalOrders >= 2,
+        engagementScore: Math.round(
+          totalOrders * 10 +
+            totalSpend / 100 +
+            (orderFrequencyDays ? 100 / orderFrequencyDays : 0),
+        ),
+        lastOrderRecencyDays: lastCompletedOrder
+          ? Math.floor(
+              (Date.now() -
+                (lastCompletedOrder.createdAt?.toDate?.() || new Date())
+                  .getTime()) /
+                86400000,
+            )
+          : 999,
+        orderFrequency:
+          totalOrders > 0 && orderFrequencyDays
+            ? 30 / orderFrequencyDays
+            : 0,
+        totalSpend,
       };
 
       try {

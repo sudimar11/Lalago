@@ -19,6 +19,7 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/services/BackendService.dart';
@@ -34,6 +35,7 @@ import 'package:foodie_customer/model/FavouriteItemModel.dart';
 import 'package:foodie_customer/model/FavouriteModel.dart';
 //import 'package:foodie_customer/model/FlutterWaveSettingDataModel.dart';
 import 'package:foodie_customer/model/OrderModel.dart';
+import 'package:foodie_customer/model/PautosOrderModel.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/Ratingmodel.dart';
 import 'package:foodie_customer/model/ReviewAttributeModel.dart';
@@ -249,6 +251,14 @@ Future<void> _appendCursorDebugLog({
       } catch (_) {}
     }
   }
+}
+
+/// Result of a paginated product query.
+class ProductPageResult {
+  final List<ProductModel> products;
+  final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
+
+  const ProductPageResult(this.products, this.lastDocument);
 }
 
 class FireStoreUtils {
@@ -1253,16 +1263,55 @@ class FireStoreUtils {
     });
   }
 
+  static const _codCacheKey = 'cod_settings_enabled';
+
   Future<CodModel?> getCod() async {
-    DocumentSnapshot<Map<String, dynamic>> codQuery =
-        await firestore.collection(Setting).doc('CODSettings').get();
-    if (codQuery.data() != null) {
-      debugPrint("dataaaaaa");
-      return CodModel.fromJson(codQuery.data()!);
-    } else {
-      debugPrint("nulllll");
-      return null;
+    CodModel? result;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final codQuery = await firestore
+            .collection(Setting)
+            .doc('CODSettings')
+            .get()
+            .timeout(const Duration(seconds: 10));
+        if (codQuery.data() != null) {
+          result = CodModel.fromJson(codQuery.data()!);
+          _cacheCodEnabled(result.cod);
+          if (kDebugMode) {
+            log('COD: loaded from Firestore, enabled=${result.cod}');
+          }
+          return result;
+        }
+        result = CodModel(cod: false);
+        _cacheCodEnabled(false);
+        return result;
+      } catch (e, st) {
+        if (kDebugMode) {
+          log('COD: fetch failed (attempt ${attempt + 1}): $e', stackTrace: st);
+        }
+      }
     }
+    result = await _getCachedCodModel();
+    if (kDebugMode) {
+      log('COD: using fallback, enabled=${result?.cod ?? true}');
+    }
+    return result ?? CodModel(cod: true);
+  }
+
+  Future<void> _cacheCodEnabled(bool enabled) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_codCacheKey, enabled);
+    } catch (_) {}
+  }
+
+  Future<CodModel?> _getCachedCodModel() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = prefs.getBool(_codCacheKey);
+      if (cached != null) return CodModel(cod: cached);
+    } catch (_) {}
+    return null;
   }
 
   Future<DeliveryChargeModel?> getDeliveryCharges() async {
@@ -2039,7 +2088,7 @@ class FireStoreUtils {
         debugPrint(
             '✅ getCategoryRestaurants(categoryId="$categoryId"): Found ${vendors.length} restaurants within radius, emitting stream');
         categoryStreamController
-            .add(List.from(vendors)); // Create a copy to avoid reference issues
+            .add(vendors.take(20).toList()); // Limit for low-memory devices
       });
     } catch (e) {
       debugPrint(
@@ -2094,7 +2143,8 @@ class FireStoreUtils {
           });
         }
         if (!newArrivalStreamController!.isClosed) {
-          newArrivalStreamController!.add(List.from(vendors));
+          newArrivalStreamController!
+              .add(vendors.take(20).toList()); // Limit for low-memory devices
         }
       });
 
@@ -2278,46 +2328,61 @@ class FireStoreUtils {
     return story;
   }
 
-  Future<List<ProductModel>> getVendorProductsTakeAWay(String vendorID) async {
+  Future<ProductPageResult> getVendorProductsTakeAWay(
+    String vendorID, {
+    DocumentSnapshot<Map<String, dynamic>>? lastDocument,
+    int limit = 20,
+  }) async {
     List<ProductModel> products = [];
-
-    QuerySnapshot<Map<String, dynamic>> productsQuery = await firestore
+    Query<Map<String, dynamic>> q = firestore
         .collection(PRODUCTS)
         .where('vendorID', isEqualTo: vendorID)
         .where('publish', isEqualTo: true)
-        .get();
-    await Future.forEach(productsQuery.docs,
-        (QueryDocumentSnapshot<Map<String, dynamic>> document) {
+        .limit(limit);
+    if (lastDocument != null) {
+      q = q.startAfterDocument(lastDocument);
+    }
+    final productsQuery = await q.get();
+    for (final document in productsQuery.docs) {
       try {
         products.add(ProductModel.fromJson(document.data()));
-        //print('=====TP+++++ ${document.data().toString()}');
       } catch (e) {
-        print('FireStoreUtils.getVendorProducts Parse error $e');
+        if (kDebugMode) {
+          debugPrint('FireStoreUtils.getVendorProducts Parse error $e');
+        }
       }
-    });
-    print("=====IDDDDDD" + products.length.toString());
-    return products;
+    }
+    final lastDoc = productsQuery.docs.isNotEmpty ? productsQuery.docs.last : null;
+    return ProductPageResult(products, lastDoc);
   }
 
-  Future<List<ProductModel>> getVendorProductsDelivery(String vendorID) async {
+  Future<ProductPageResult> getVendorProductsDelivery(
+    String vendorID, {
+    DocumentSnapshot<Map<String, dynamic>>? lastDocument,
+    int limit = 20,
+  }) async {
     List<ProductModel> products = [];
-
-    QuerySnapshot<Map<String, dynamic>> productsQuery = await firestore
+    Query<Map<String, dynamic>> q = firestore
         .collection(PRODUCTS)
         .where('vendorID', isEqualTo: vendorID)
-        .where("takeawayOption", isEqualTo: false)
+        .where('takeawayOption', isEqualTo: false)
         .where('publish', isEqualTo: true)
-        .get();
-    await Future.forEach(productsQuery.docs,
-        (QueryDocumentSnapshot<Map<String, dynamic>> document) {
+        .limit(limit);
+    if (lastDocument != null) {
+      q = q.startAfterDocument(lastDocument);
+    }
+    final productsQuery = await q.get();
+    for (final document in productsQuery.docs) {
       try {
         products.add(ProductModel.fromJson(document.data()));
       } catch (e) {
-        print('FireStoreUtils.getVendorProducts Parse error $e');
+        if (kDebugMode) {
+          debugPrint('FireStoreUtils.getVendorProducts Parse error $e');
+        }
       }
-    });
-    print("=====IDDDDDD----" + products.length.toString());
-    return products;
+    }
+    final lastDoc = productsQuery.docs.isNotEmpty ? productsQuery.docs.last : null;
+    return ProductPageResult(products, lastDoc);
   }
 
   Future<List<OfferModel>> getOfferByVendorID(String vendorID) async {
@@ -2330,15 +2395,14 @@ class FireStoreUtils {
         .where('expiresAt', isGreaterThanOrEqualTo: Timestamp.now())
         .get();
 
-    print("-------->${bannerHomeQuery.docs}");
     await Future.forEach(bannerHomeQuery.docs,
         (QueryDocumentSnapshot<Map<String, dynamic>> document) {
       try {
-        print("-------->");
-        print(document.data());
         offers.add(OfferModel.fromJson(document.data()));
       } catch (e) {
-        print('FireStoreUtils.getCuisines Parse error $e');
+        if (kDebugMode) {
+          debugPrint('FireStoreUtils.getOfferByVendorID Parse error $e');
+        }
       }
     });
     return offers;
@@ -2346,7 +2410,6 @@ class FireStoreUtils {
 
   Future<VendorCategoryModel?> getVendorCategoryById(
       String vendorCategoryID) async {
-    print('we are enter-->');
     VendorCategoryModel? vendorCategoryModel;
     QuerySnapshot<Map<String, dynamic>> vendorsQuery = await firestore
         .collection(VENDORS_CATEGORIES)
@@ -2354,15 +2417,52 @@ class FireStoreUtils {
         .where('publish', isEqualTo: true)
         .get();
     try {
-      print('we are enter-->');
-      if (vendorsQuery.docs.length > 0) {
+      if (vendorsQuery.docs.isNotEmpty) {
         vendorCategoryModel =
             VendorCategoryModel.fromJson(vendorsQuery.docs.first.data());
       }
     } catch (e) {
-      print('FireStoreUtils.getVendorByVendorID Parse error $e');
+      if (kDebugMode) {
+        debugPrint('FireStoreUtils.getVendorCategoryById Parse error $e');
+      }
     }
     return vendorCategoryModel;
+  }
+
+  /// Fetches multiple categories by ID in batch. Firestore whereIn max is 30.
+  Future<List<VendorCategoryModel>> getVendorCategoriesByIds(
+    List<String> categoryIds,
+  ) async {
+    if (categoryIds.isEmpty) return [];
+    const chunkSize = 30;
+    final List<VendorCategoryModel> result = [];
+    final Map<String, int> orderMap = {
+      for (var i = 0; i < categoryIds.length; i++) categoryIds[i]: i,
+    };
+    for (var i = 0; i < categoryIds.length; i += chunkSize) {
+      final chunk = categoryIds
+          .skip(i)
+          .take(chunkSize)
+          .toList();
+      final query = await firestore
+          .collection(VENDORS_CATEGORIES)
+          .where('id', whereIn: chunk)
+          .where('publish', isEqualTo: true)
+          .get();
+      for (final doc in query.docs) {
+        try {
+          result.add(VendorCategoryModel.fromJson(doc.data()));
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint('getVendorCategoriesByIds Parse error $e');
+          }
+        }
+      }
+    }
+    result.sort(
+      (a, b) => (orderMap[a.id] ?? 0).compareTo(orderMap[b.id] ?? 0),
+    );
+    return result;
   }
 
   Future<VendorModel> getVendorByVendorID(String vendorID) async {
@@ -2753,6 +2853,41 @@ class FireStoreUtils {
     return orderModel;
   }
 
+  Future<String> createPautosOrder(PautosOrderModel order) async {
+    final ref = firestore.collection(PAUTOS_ORDERS).doc();
+    order.id = ref.id;
+    await ref.set(order.toJson());
+    return order.id;
+  }
+
+  Stream<List<PautosOrderModel>> getPautosOrdersByAuthor(String authorID) {
+    return firestore
+        .collection(PAUTOS_ORDERS)
+        .where('authorID', isEqualTo: authorID)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((d) {
+              final data = d.data();
+              data['id'] = d.id;
+              return PautosOrderModel.fromJson(data);
+            })
+            .toList());
+  }
+
+  Stream<PautosOrderModel?> getPautosOrderStream(String orderId) {
+    return firestore
+        .collection(PAUTOS_ORDERS)
+        .doc(orderId)
+        .snapshots()
+        .map((doc) {
+          if (!doc.exists || doc.data() == null) return null;
+          final data = doc.data()!;
+          data['id'] = doc.id;
+          return PautosOrderModel.fromJson(data);
+        });
+  }
+
   static createOrder() async {
     DocumentReference documentReference = firestore.collection(ORDERS).doc();
     final orderId = documentReference.id;
@@ -2947,11 +3082,26 @@ class FireStoreUtils {
       }
       total += element.quantity * double.parse(element.price);
 
-      List<dynamic>? addon = element.extras;
+      List<dynamic>? addon;
+      final e = element.extras;
+      if (e is List) {
+        addon = e;
+      } else if (e is String && e.isNotEmpty && e != '[]') {
+        try {
+          final decoded = jsonDecode(e);
+          addon = decoded is List
+              ? List<dynamic>.from(decoded)
+              : [decoded];
+        } catch (_) {
+          addon = [e];
+        }
+      }
       String extrasDisVal = '';
-      for (int i = 0; i < addon!.length; i++) {
-        extrasDisVal +=
-            '${addon[i].toString().replaceAll("\"", "")} ${(i == addon.length - 1) ? "" : ","}';
+      if (addon != null) {
+        for (int i = 0; i < addon.length; i++) {
+          extrasDisVal +=
+              '${addon[i].toString().replaceAll("\"", "")} ${(i == addon.length - 1) ? "" : ","}';
+        }
       }
       String product = """
         <tr>

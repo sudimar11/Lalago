@@ -24,4 +24,13 @@ class VendorService {
       'reststatus': isOpen,
     });
   }
+
+  /// Soft-deletes a restaurant (sets isDeleted: true). Preserves data for
+  /// order history. Filter isDeleted vendors when displaying the list.
+  Future<void> deleteVendor(String vendorId) async {
+    await _firestore.collection(_vendors).doc(vendorId).update({
+      'isDeleted': true,
+      'deletedAt': FieldValue.serverTimestamp(),
+    });
+  }
 }
