@@ -217,17 +217,20 @@ class RestaurantCard extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           Expanded(
-                            child: Text(vendorModel.title,
-                          maxLines: 1,
-                          style: TextStyle(
-                            fontFamily: "Poppinsm",
-                            letterSpacing: 0.5,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                            color: isDarkMode(context)
-                                ? Colors.white
-                                : Colors.black,
-                          )),
+                            child: Text(
+                              vendorModel.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontFamily: "Poppinsm",
+                                letterSpacing: 0.5,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color: isDarkMode(context)
+                                    ? Colors.white
+                                    : Colors.black,
+                              ),
+                            ),
                           ),
                           PerformanceBadge(
                             vendorModel: vendorModel,
@@ -248,7 +251,7 @@ class RestaurantCard extends StatelessWidget {
                             const SizedBox(width: 5),
                             Expanded(
                               child: Text(
-                                vendorModel.location,
+                                vendorModel.location ?? '',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
