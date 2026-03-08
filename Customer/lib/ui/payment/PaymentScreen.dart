@@ -17,6 +17,7 @@ import 'package:foodie_customer/userPrefrence.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../model/OrderModel.dart';
+import '../../services/gift_card_service.dart';
 import '../../model/TaxModel.dart';
 import '../../model/User.dart';
 import '../../model/VendorModel.dart';
@@ -51,6 +52,15 @@ class PaymentScreen extends StatefulWidget {
   // Referral wallet parameter
   final double? referralWalletAmountUsed;
 
+  // Gift card parameters
+  final double? giftCardAmountUsed;
+  final List<Map<String, dynamic>>? giftCardBreakdown;
+
+  // Loyalty free delivery
+  final double? loyaltyFreeDeliveryAmount;
+  final String? loyaltyFreeDeliveryRewardId;
+  final String? loyaltyFreeDeliveryCycle;
+
   const PaymentScreen(
       {Key? key,
       required this.total,
@@ -73,7 +83,12 @@ class PaymentScreen extends StatefulWidget {
       this.manualCouponId,
       this.manualCouponDiscountAmount,
       this.manualCouponImage,
-      this.referralWalletAmountUsed})
+      this.referralWalletAmountUsed,
+      this.giftCardAmountUsed,
+      this.giftCardBreakdown,
+      this.loyaltyFreeDeliveryAmount,
+      this.loyaltyFreeDeliveryRewardId,
+      this.loyaltyFreeDeliveryCycle})
       : super(key: key);
 
   @override
@@ -475,6 +490,9 @@ class PaymentScreenState extends State<PaymentScreen> {
         manualCouponId: widget.manualCouponId,
         manualCouponDiscountAmount: widget.manualCouponDiscountAmount,
         manualCouponImage: widget.manualCouponImage,
+        referralWalletAmountUsed: widget.referralWalletAmountUsed,
+        giftCardAmountUsed: widget.giftCardAmountUsed,
+        giftCardBreakdown: widget.giftCardBreakdown,
       );
 
       if (oid != null && oid.isNotEmpty) {
@@ -526,6 +544,28 @@ class PaymentScreenState extends State<PaymentScreen> {
 
           await FireStoreUtils.updateProduct(productModel).then((value) {});
         });
+      }
+
+      // Redeem gift cards used in this order
+      if (widget.giftCardBreakdown != null &&
+          widget.giftCardBreakdown!.isNotEmpty &&
+          MyAppState.currentUser != null) {
+        final userId = MyAppState.currentUser!.userID;
+        for (final entry in widget.giftCardBreakdown!) {
+          final cardId = entry['cardId'] as String?;
+          final amount = (entry['amount'] as num?)?.toDouble();
+          if (cardId == null || amount == null || amount <= 0) continue;
+          try {
+            await GiftCardService.redeemGiftCard(
+              cardId: cardId,
+              amount: amount,
+              userId: userId,
+              orderId: placedOrder.id,
+            );
+          } catch (e) {
+            debugPrint('Gift card redeem failed: $e');
+          }
+        }
       }
 
       showModalBottomSheet(
@@ -583,6 +623,11 @@ class PaymentScreenState extends State<PaymentScreen> {
         manualCouponDiscountAmount: widget.manualCouponDiscountAmount,
         manualCouponImage: widget.manualCouponImage,
         referralWalletAmountUsed: widget.referralWalletAmountUsed,
+        giftCardAmountUsed: widget.giftCardAmountUsed,
+        giftCardBreakdown: widget.giftCardBreakdown,
+        loyaltyFreeDeliveryAmount: widget.loyaltyFreeDeliveryAmount,
+        loyaltyFreeDeliveryRewardId: widget.loyaltyFreeDeliveryRewardId,
+        loyaltyFreeDeliveryCycle: widget.loyaltyFreeDeliveryCycle,
       ),
     );
   }

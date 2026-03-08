@@ -53,6 +53,8 @@ import 'package:brgy/pages/coupon_management_page.dart';
 import 'package:brgy/pages/new_user_promo_settings_page.dart';
 import 'package:brgy/pages/pautos_settings_page.dart';
 import 'package:brgy/pages/referral_settings_page.dart';
+import 'package:brgy/pages/loyalty_settings_page.dart';
+import 'package:brgy/pages/gift_card_settings_page.dart';
 import 'package:brgy/pages/delivery_zone_settings_page.dart';
 import 'package:brgy/pages/rider_overview_page.dart';
 import 'package:brgy/pages/dispatch_analytics_page.dart';
@@ -3288,7 +3290,7 @@ class SettingsPage extends StatelessWidget {
       ),
       body: ListView.separated(
         padding: EdgeInsets.all(12),
-        itemCount: _docIds.length + 14,
+        itemCount: _docIds.length + 16,
         separatorBuilder: (_, __) => SizedBox(height: 8),
         itemBuilder: (context, index) {
           if (index == 0) {
@@ -3313,27 +3315,33 @@ class SettingsPage extends StatelessWidget {
             return _ReferralSettingsTile();
           }
           if (index == 7) {
-            return _UsersTile();
+            return _LoyaltySettingsTile();
           }
           if (index == 8) {
-            return _CustomerRepeatRateTile();
+            return const _GiftCardSettingsTile();
           }
           if (index == 9) {
-            return _AssignmentLogTile();
+            return _UsersTile();
           }
           if (index == 10) {
-            return _DeliveryZoneSettingsTile();
+            return _CustomerRepeatRateTile();
           }
           if (index == 11) {
-            return const _RiderTimeSettingsTile();
+            return _AssignmentLogTile();
           }
           if (index == 12) {
-            return const _DispatchConfigTile();
+            return _DeliveryZoneSettingsTile();
           }
           if (index == 13) {
+            return const _RiderTimeSettingsTile();
+          }
+          if (index == 14) {
+            return const _DispatchConfigTile();
+          }
+          if (index == 15) {
             return const _PautosSettingsTile();
           }
-          final String docId = _docIds[index - 14];
+          final String docId = _docIds[index - 16];
           return _SettingsDocTile(collection: 'settings', docId: docId);
         },
       ),
@@ -3642,6 +3650,52 @@ class _ReferralSettingsTile extends StatelessWidget {
             context,
             MaterialPageRoute(
               builder: (context) => const ReferralSettingsPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _LoyaltySettingsTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.emoji_events, color: Colors.orange),
+        title: Text('Loyalty Program'),
+        subtitle: Text('Manage tiers, tokens, and rewards'),
+        trailing: Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const LoyaltySettingsPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _GiftCardSettingsTile extends StatelessWidget {
+  const _GiftCardSettingsTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.card_giftcard, color: Colors.orange),
+        title: Text('Gift Cards'),
+        subtitle: Text('Configure denominations, validity, and delivery'),
+        trailing: Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const GiftCardSettingsPage(),
             ),
           );
         },

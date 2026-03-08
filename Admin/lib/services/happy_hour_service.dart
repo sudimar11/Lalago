@@ -96,6 +96,10 @@ class HappyHourService {
       final updatedSettings = HappyHourSettings(
         enabled: settings.enabled,
         configs: updatedConfigs,
+        autoCreateNotification: settings.autoCreateNotification,
+        notificationTemplate: settings.notificationTemplate,
+        lastTriggeredAt: settings.lastTriggeredAt,
+        lastTriggeredConfigId: settings.lastTriggeredConfigId,
       );
 
       await saveHappyHourSettings(updatedSettings);
@@ -131,6 +135,10 @@ class HappyHourService {
       final updatedSettings = HappyHourSettings(
         enabled: settings.enabled,
         configs: updatedConfigs,
+        autoCreateNotification: settings.autoCreateNotification,
+        notificationTemplate: settings.notificationTemplate,
+        lastTriggeredAt: settings.lastTriggeredAt,
+        lastTriggeredConfigId: settings.lastTriggeredConfigId,
       );
 
       await saveHappyHourSettings(updatedSettings);
@@ -154,6 +162,10 @@ class HappyHourService {
       final updatedSettings = HappyHourSettings(
         enabled: settings.enabled,
         configs: updatedConfigs,
+        autoCreateNotification: settings.autoCreateNotification,
+        notificationTemplate: settings.notificationTemplate,
+        lastTriggeredAt: settings.lastTriggeredAt,
+        lastTriggeredConfigId: settings.lastTriggeredConfigId,
       );
 
       await saveHappyHourSettings(updatedSettings);
@@ -207,6 +219,80 @@ class HappyHourService {
       print('Error checking active Happy Hour: $e');
       return null;
     }
+  }
+
+  /// Update automation settings (auto-create switch and notification template).
+  static Future<void> updateAutoCreateSettings(
+    bool autoCreateNotification,
+    NotificationTemplate template,
+  ) async {
+    try {
+      await firestore
+          .collection(settingsCollection)
+          .doc(settingsDocId)
+          .set(
+            {
+              'autoCreateNotification': autoCreateNotification,
+              'notificationTemplate': template.toJson(),
+            },
+            SetOptions(merge: true),
+          );
+    } catch (e) {
+      print('Error updating auto-create settings: $e');
+      throw Exception('Failed to update auto-create settings: $e');
+    }
+  }
+
+  /// Create a Happy Hour notification job in notification_jobs.
+  /// Called by manual override or scheduled function.
+  static Future<String> createHappyHourNotificationJob(
+    HappyHourConfig config,
+    NotificationTemplate template, {
+    String triggeredBy = 'manual',
+  }) async {
+    if (!template.isValid) {
+      throw Exception('Template title and body are required');
+    }
+
+    final campaignId =
+        'happy_hour_${config.id}_${DateTime.now().millisecondsSinceEpoch}';
+
+    final payload = <String, dynamic>{
+      'title': template.title.trim(),
+      'body': template.body.trim(),
+      'type': 'happy_hour',
+      'configId': config.id,
+      'configName': config.name,
+      'promoType': config.promoType,
+      'promoValue': config.promoValue,
+    };
+    if (template.imageUrl != null && template.imageUrl!.isNotEmpty) {
+      payload['imageUrl'] = template.imageUrl!.trim();
+    }
+    if (template.deepLink != null && template.deepLink!.isNotEmpty) {
+      payload['deepLink'] = template.deepLink!.trim();
+    }
+    payload['campaignId'] = campaignId;
+
+    final job = <String, dynamic>{
+      'kind': 'happy_hour',
+      'status': 'queued',
+      'payload': payload,
+      'triggeredBy': triggeredBy,
+      'triggeredAt': FieldValue.serverTimestamp(),
+      'configSnapshot': config.toJson(),
+      'stats': {
+        'totalRecipients': 0,
+        'processedCount': 0,
+        'successfulDeliveries': 0,
+        'failedDeliveries': 0,
+        'percentComplete': 0.0,
+      },
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+
+    final ref = await firestore.collection('notification_jobs').add(job);
+    return ref.id;
   }
 
   // Format notification body based on Happy Hour config

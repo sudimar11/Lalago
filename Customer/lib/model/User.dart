@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/AddressModel.dart';
+import 'package:foodie_customer/model/LoyaltyData.dart';
 
 class User with ChangeNotifier {
   String email;
@@ -47,6 +48,9 @@ class User with ChangeNotifier {
   // Referral wallet amount (separate from regular wallet)
   double referralWalletAmount; // Referral credits usable only for orders
 
+  // Loyalty program data (backend-managed)
+  LoyaltyData? loyalty;
+
   User(
       {this.email = '',
       this.userID = '',
@@ -64,6 +68,7 @@ class User with ChangeNotifier {
       this.referralRewardAmount,
       this.hasOrderedBefore = false,
       this.referralWalletAmount = 0.0,
+      this.loyalty,
       this.rotation,
       this.vendorID,
       lastOnlineTimestamp,
@@ -166,7 +171,11 @@ class User with ChangeNotifier {
                 : double.tryParse(
                         parsedJson['referralWalletAmount'].toString()) ??
                     0.0)
-            : 0.0);
+            : 0.0,
+        loyalty: parsedJson['loyalty'] != null
+            ? LoyaltyData.fromJson(
+                parsedJson['loyalty'] as Map<String, dynamic>)
+            : null);
   }
 
   Map<String, dynamic> toJson() {
@@ -199,6 +208,7 @@ class User with ChangeNotifier {
       'referralRewardAmount': this.referralRewardAmount,
       'hasOrderedBefore': this.hasOrderedBefore,
       'referralWalletAmount': this.referralWalletAmount,
+      if (loyalty != null) 'loyalty': loyalty!.toJson(),
     };
     if (this.role == USER_ROLE_DRIVER) {
       json.addAll({

@@ -18,6 +18,36 @@ const COMPLETED_STATUSES = [
   'Completed',
 ];
 
+/** Fetch all-time completed order count for segmentation (totalOrders must be all-time). */
+async function getAllTimeOrderStats(db, userId) {
+  try {
+    const snap = await db
+      .collection(ORDERS)
+      .where('authorID', '==', userId)
+      .get();
+    const completed = snap.docs
+      .map((d) => d.data())
+      .filter((o) =>
+        COMPLETED_STATUSES.some((s) =>
+          (o.status || '').toString().toLowerCase().includes(s.toLowerCase())
+        )
+      );
+    const sorted = completed.sort((a, b) => {
+      const dateA = a.createdAt?.toDate?.() || new Date(0);
+      const dateB = b.createdAt?.toDate?.() || new Date(0);
+      return dateB - dateA;
+    });
+    const lastOrder = sorted[0];
+    return {
+      totalCompletedOrdersAllTime: completed.length,
+      lastOrderedAtAllTime: lastOrder?.createdAt || null,
+    };
+  } catch (e) {
+    console.log('getAllTimeOrderStats error for', userId, e.message);
+    return { totalCompletedOrdersAllTime: 0, lastOrderedAtAllTime: null };
+  }
+}
+
 function calculateAverageOrderFrequency(orders) {
   if (!orders || orders.length < 2) return null;
   const sorted = [...orders].sort((a, b) => {
@@ -64,6 +94,7 @@ exports.computeUserPreferences = functions
 
     for (const userId of Object.keys(userOrderIds)) {
       const orders = userOrderIds[userId];
+      const allTimeStats = await getAllTimeOrderStats(db, userId);
       const cuisineCounts = {};
       let totalSpend = 0;
       const timeCounts = { breakfast: 0, lunch: 0, dinner: 0, lateNight: 0 };
@@ -173,25 +204,31 @@ exports.computeUserPreferences = functions
         .map(([categoryId, count]) => ({ categoryId, count }));
 
       const orderFrequencyDays = calculateAverageOrderFrequency(orders);
+      const totalCompletedOrdersAllTime =
+        allTimeStats.totalCompletedOrdersAllTime ?? totalOrders;
+      const lastOrderedAtAllTime =
+        allTimeStats.lastOrderedAtAllTime ?? lastCompletedOrder?.createdAt;
+
       const preferenceProfile = {
         cuisinePreferences: cuisinePrefs,
         avgSpend: totalOrders > 0 ? totalSpend / totalOrders : 0,
         preferredTimes,
         favoriteRestaurants: topRestaurants,
         lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-        lastOrderedAt: lastCompletedOrder?.createdAt || null,
-        lastOrderVendorId: lastCompletedOrder?.vendorID || null,
-        lastOrderVendorName: lastCompletedOrder?.vendor?.title || null,
+        lastOrderedAt: lastOrderedAtAllTime ?? lastCompletedOrder?.createdAt ?? null,
+        lastOrderVendorId: lastCompletedOrder?.vendorID ?? null,
+        lastOrderVendorName: lastCompletedOrder?.vendor?.title ?? null,
         lastOrderProducts,
         orderFrequencyDays,
-        totalCompletedOrders: totalOrders,
+        totalCompletedOrders: totalCompletedOrdersAllTime,
         favoriteProducts,
         topCategories,
       };
 
       const updateData = {
         preferenceProfile,
-        lastOrderCompletedAt: lastCompletedOrder?.createdAt || null,
+        totalCompletedOrders: totalCompletedOrdersAllTime,
+        lastOrderCompletedAt: lastOrderedAtAllTime ?? lastCompletedOrder?.createdAt ?? null,
         reorderEligible: totalOrders >= 2,
         engagementScore: Math.round(
           totalOrders * 10 +

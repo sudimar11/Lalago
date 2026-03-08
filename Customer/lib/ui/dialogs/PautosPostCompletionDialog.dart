@@ -81,6 +81,8 @@ class _PautosPostCompletionDialogState extends State<PautosPostCompletionDialog>
           '${MyAppState.currentUser?.lastName ?? ''}'.trim(),
       profile: MyAppState.currentUser?.profilePictureURL ?? '',
       createdAt: Timestamp.now(),
+      reviewType: 'rider',
+      status: 'approved',
     );
 
     final err = await FireStoreUtils.firebaseCreateNewReview(rate);

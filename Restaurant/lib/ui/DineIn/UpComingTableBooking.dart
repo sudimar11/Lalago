@@ -1,5 +1,5 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
@@ -41,7 +41,7 @@ class _UpComingTableBookingState extends State<UpComingTableBooking> {
 
             if (!snapshot.hasData || (snapshot.data?.isEmpty ?? true)) {
               return Center(
-                child: showEmptyState('No Upcoming Booking'.tr(), "bookTable".tr()),
+                child: showEmptyState('No Upcoming Booking', "bookTable"),
               );
             } else {
               return ListView.builder(
@@ -109,7 +109,7 @@ class _UpComingTableBookingState extends State<UpComingTableBooking> {
                                   Padding(
                                     padding: const EdgeInsets.only(top: 6),
                                     child: Text(
-                                      "Table Booking Request".tr(),
+                                      "Table Booking Request",
                                       style: TextStyle(
                                         fontFamily: "Poppinssm",
                                         color: isDarkMode(context) ? Colors.white60 : Color(GREY_TEXT_COLOR),
@@ -123,17 +123,17 @@ class _UpComingTableBookingState extends State<UpComingTableBooking> {
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
                             child: Text(
-                              "Booking Details".tr(),
+                              "Booking Details",
                               style: TextStyle(
                                 fontFamily: "Poppinsssb",
                                 fontSize: 16,
                               ),
                             ),
                           ),
-                          buildDetails(iconsData: Icons.person_outline, title: 'Name'.tr(), value: "${bookTableModel.author.firstName} ${bookTableModel.author.lastName}"),
-                          buildDetails(iconsData: Icons.phone, title: 'Phone Number'.tr(), value: "${bookTableModel.author.phoneNumber}"),
-                          buildDetails(iconsData: Icons.date_range, title: 'Date'.tr(), value: "${DateFormat("MMM dd, yyyy 'at' hh:mm a").format(bookTableModel.date.toDate())}"),
-                          buildDetails(iconsData: Icons.group, title: 'Guest'.tr(), value: "${bookTableModel.totalGuest}"),
+                          buildDetails(iconsData: Icons.person_outline, title: 'Name', value: "${bookTableModel.author.firstName} ${bookTableModel.author.lastName}"),
+                          buildDetails(iconsData: Icons.phone, title: 'Phone Number', value: "${bookTableModel.author.phoneNumber}"),
+                          buildDetails(iconsData: Icons.date_range, title: 'Date', value: "${DateFormat("MMM dd, yyyy 'at' hh:mm a").format(bookTableModel.date.toDate())}"),
+                          buildDetails(iconsData: Icons.group, title: 'Guest', value: "${bookTableModel.totalGuest}"),
                           buildDetails(iconsData: Icons.discount, title: 'Discount', value: "${bookTableModel.discount} ${bookTableModel.discountType == "amount" ? currencyModel!.symbol : "%"} Off"),
                           (bookTableModel.status == ORDER_STATUS_PLACED)
                               ? Row(
@@ -147,7 +147,7 @@ class _UpComingTableBookingState extends State<UpComingTableBooking> {
                                               decoration: BoxDecoration(borderRadius: BorderRadius.circular(5), border: Border.all(width: 0.8, color: Color(COLOR_PRIMARY))),
                                               child: Center(
                                                 child: Text(
-                                                  'Accept'.tr(),
+                                                  'Accept',
                                                   style: TextStyle(color: isDarkMode(context) ? Color(0xffFFFFFF) : Color(COLOR_PRIMARY), fontFamily: "Poppinsm", fontSize: 15
                                                       // fontWeight: FontWeight.bold,
                                                       ),
@@ -170,7 +170,7 @@ class _UpComingTableBookingState extends State<UpComingTableBooking> {
                                               decoration: BoxDecoration(borderRadius: BorderRadius.circular(5), border: Border.all(width: 0.8, color: Colors.grey)),
                                               child: Center(
                                                 child: Text(
-                                                  'Rejected'.tr(),
+                                                  'Rejected',
                                                   style: TextStyle(color: Colors.grey, fontFamily: "Poppinsm", fontSize: 15
                                                       // fontWeight: FontWeight.bold,
                                                       ),

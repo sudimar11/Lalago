@@ -37,6 +37,8 @@ import 'package:foodie_customer/services/happy_hour_service.dart';
 import 'package:foodie_customer/services/first_order_coupon_service.dart';
 import 'package:foodie_customer/services/coupon_service.dart';
 import 'package:foodie_customer/services/new_user_promo_service.dart';
+import 'package:foodie_customer/services/loyalty_service.dart';
+import 'package:foodie_customer/services/gift_card_service.dart';
 import 'package:foodie_customer/services/distance_service.dart';
 import 'package:foodie_customer/ui/cartScreen/voucher_screen.dart';
 import 'package:geolocator/geolocator.dart';
@@ -187,6 +189,18 @@ class _CartScreenState extends State<CartScreen> {
   double referralWalletAmountToUse = 0.0;
   bool isReferralWalletApplied = false;
 
+  // Gift card variables
+  List<Map<String, dynamic>> activeGiftCards = [];
+  double giftCardAmountToUse = 0.0;
+  List<Map<String, dynamic>> giftCardBreakdown = [];
+  bool isGiftCardApplied = false;
+  GiftCardConfig? giftCardConfig;
+
+  // Loyalty free delivery
+  double loyaltyFreeDeliveryAmount = 0.0;
+  String? loyaltyFreeDeliveryRewardId;
+  String? loyaltyFreeDeliveryCycle;
+
   // State management variables to prevent UI flashing
   bool _isInitialized = false;
   bool _isDeliveryDataLoading = false;
@@ -230,6 +244,25 @@ class _CartScreenState extends State<CartScreen> {
     _lastCalculatedLng = null;
     _cacheTimestamp = null;
     _estimatedDeliveryTimeText = null;
+  }
+
+  List<Map<String, dynamic>> _prorateGiftCardBreakdown(
+    List<Map<String, dynamic>> breakdown,
+    double maxTotal,
+  ) {
+    final total = breakdown.fold<double>(
+      0,
+      (s, e) => s + ((e['amount'] as num?)?.toDouble() ?? 0),
+    );
+    if (total <= 0 || maxTotal >= total) return breakdown;
+    final ratio = maxTotal / total;
+    return breakdown.map((e) {
+      final amt = (e['amount'] as num?)?.toDouble() ?? 0;
+      return {
+        ...e,
+        'amount': (amt * ratio).roundToDouble(),
+      };
+    }).where((e) => (e['amount'] as num) > 0).toList();
   }
 
   String? _validatePhoneNumber(String value) {
@@ -699,6 +732,31 @@ class _CartScreenState extends State<CartScreen> {
       calculatedGrandTotal -= promoDiscountAmount;
     }
 
+    // Calculate gift card (payment order: gift card first)
+    double calculatedGiftCardAmountToUse = 0.0;
+    List<Map<String, dynamic>> calculatedGiftCardBreakdown = [];
+    if (isGiftCardApplied && giftCardBreakdown.isNotEmpty) {
+      for (final entry in giftCardBreakdown) {
+        final amt = (entry['amount'] as num?)?.toDouble() ?? 0;
+        if (amt > 0) {
+          calculatedGiftCardAmountToUse += amt;
+          calculatedGiftCardBreakdown.add(Map<String, dynamic>.from(entry));
+        }
+      }
+      final maxGiftCard =
+          calculatedGiftCardAmountToUse.clamp(0.0, calculatedGrandTotal);
+      if (maxGiftCard < calculatedGiftCardAmountToUse) {
+        calculatedGiftCardAmountToUse = maxGiftCard;
+        calculatedGiftCardBreakdown = _prorateGiftCardBreakdown(
+          giftCardBreakdown,
+          maxGiftCard,
+        );
+      }
+      calculatedGrandTotal =
+          (calculatedGrandTotal - calculatedGiftCardAmountToUse)
+              .clamp(0.0, double.infinity);
+    }
+
     // Calculate referral wallet
     double calculatedReferralWalletAmountToUse = 0.0;
     bool calculatedIsReferralWalletApplied = isReferralWalletApplied;
@@ -717,6 +775,17 @@ class _CartScreenState extends State<CartScreen> {
     } else {
       calculatedIsReferralWalletApplied = false;
       calculatedReferralWalletAmountToUse = 0.0;
+    }
+
+    // Loyalty free delivery (auto-applied when available)
+    double effectiveLoyaltyFreeDelivery = 0.0;
+    if (loyaltyFreeDeliveryRewardId != null && deliveryCharges != "0.0") {
+      effectiveLoyaltyFreeDelivery =
+          (double.tryParse(deliveryCharges) ?? 0.0)
+              .clamp(0.0, calculatedGrandTotal);
+      calculatedGrandTotal =
+          (calculatedGrandTotal - effectiveLoyaltyFreeDelivery)
+              .clamp(0.0, double.infinity);
     }
 
     // Calculate tax
@@ -747,7 +816,12 @@ class _CartScreenState extends State<CartScreen> {
         specialDiscountAmount = calculatedSpecialDiscountAmount;
         specialType = calculatedSpecialType;
         selectedDiscount = calculatedSelectedDiscount;
+        giftCardAmountToUse = calculatedGiftCardAmountToUse;
+        if (calculatedGiftCardBreakdown.isNotEmpty) {
+          giftCardBreakdown = calculatedGiftCardBreakdown;
+        }
         referralWalletAmountToUse = calculatedReferralWalletAmountToUse;
+        loyaltyFreeDeliveryAmount = effectiveLoyaltyFreeDelivery;
         if (isReferralWalletApplied != calculatedIsReferralWalletApplied) {
           isReferralWalletApplied = calculatedIsReferralWalletApplied;
         }
@@ -891,6 +965,8 @@ class _CartScreenState extends State<CartScreen> {
     await _checkFirstOrderEligibility();
     await _checkReferralPath();
     await _loadReferralWalletBalance();
+    await _loadGiftCards();
+    await _loadLoyaltyFreeDelivery();
     await _checkNewUserPromoEligibility();
 
     if (mounted) {
@@ -953,6 +1029,35 @@ class _CartScreenState extends State<CartScreen> {
     }
   }
 
+  Future<void> _loadGiftCards() async {
+    try {
+      if (MyAppState.currentUser == null) {
+        if (!mounted) return;
+        setState(() {
+          activeGiftCards = [];
+          giftCardConfig = null;
+        });
+        return;
+      }
+      final cfg = await GiftCardService.getConfig();
+      final cards = await GiftCardService.getUserActiveGiftCards(
+        MyAppState.currentUser!.userID,
+      );
+      if (!mounted) return;
+      setState(() {
+        activeGiftCards = cards;
+        giftCardConfig = cfg;
+      });
+    } catch (e) {
+      debugPrint('Error loading gift cards: $e');
+      if (!mounted) return;
+      setState(() {
+        activeGiftCards = [];
+        giftCardConfig = null;
+      });
+    }
+  }
+
   Future<void> _loadReferralWalletBalance() async {
     try {
       if (MyAppState.currentUser == null) {
@@ -981,6 +1086,43 @@ class _CartScreenState extends State<CartScreen> {
       if (!mounted) return;
       setState(() {
         referralWalletAmountAvailable = 0.0;
+      });
+    }
+  }
+
+  Future<void> _loadLoyaltyFreeDelivery() async {
+    try {
+      if (MyAppState.currentUser == null) return;
+      final config = await LoyaltyService.getLoyaltyConfig();
+      if (config?['enabled'] != true) return;
+      final loyalty = await LoyaltyService.getLoyalty(MyAppState.currentUser!.userID);
+      if (loyalty == null || loyalty.currentCycle.isEmpty) return;
+
+      final freeDelivery = loyalty.rewardsClaimed.where((r) {
+        return r.rewardId == 'free_delivery' &&
+            !r.isExpired &&
+            !r.isUsed &&
+            r.cycle == loyalty.currentCycle;
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        if (freeDelivery.isNotEmpty) {
+          loyaltyFreeDeliveryRewardId = 'free_delivery';
+          loyaltyFreeDeliveryCycle = loyalty.currentCycle;
+        } else {
+          loyaltyFreeDeliveryRewardId = null;
+          loyaltyFreeDeliveryCycle = null;
+          loyaltyFreeDeliveryAmount = 0.0;
+        }
+      });
+    } catch (e) {
+      debugPrint('Error loading loyalty free delivery: $e');
+      if (!mounted) return;
+      setState(() {
+        loyaltyFreeDeliveryRewardId = null;
+        loyaltyFreeDeliveryCycle = null;
+        loyaltyFreeDeliveryAmount = 0.0;
       });
     }
   }
@@ -2722,6 +2864,16 @@ class _CartScreenState extends State<CartScreen> {
                               referralWalletAmountToUse > 0
                                   ? referralWalletAmountToUse
                                   : null,
+                          giftCardAmountUsed:
+                              giftCardAmountToUse > 0 ? giftCardAmountToUse : null,
+                          giftCardBreakdown:
+                              giftCardBreakdown.isNotEmpty ? giftCardBreakdown : null,
+                          loyaltyFreeDeliveryAmount:
+                              loyaltyFreeDeliveryAmount > 0
+                                  ? loyaltyFreeDeliveryAmount
+                                  : null,
+                          loyaltyFreeDeliveryRewardId: loyaltyFreeDeliveryRewardId,
+                          loyaltyFreeDeliveryCycle: loyaltyFreeDeliveryCycle,
                         ),
                       );
                     } else {
@@ -2754,6 +2906,16 @@ class _CartScreenState extends State<CartScreen> {
                               referralWalletAmountToUse > 0
                                   ? referralWalletAmountToUse
                                   : null,
+                          giftCardAmountUsed:
+                              giftCardAmountToUse > 0 ? giftCardAmountToUse : null,
+                          giftCardBreakdown:
+                              giftCardBreakdown.isNotEmpty ? giftCardBreakdown : null,
+                          loyaltyFreeDeliveryAmount:
+                              loyaltyFreeDeliveryAmount > 0
+                                  ? loyaltyFreeDeliveryAmount
+                                  : null,
+                          loyaltyFreeDeliveryRewardId: loyaltyFreeDeliveryRewardId,
+                          loyaltyFreeDeliveryCycle: loyaltyFreeDeliveryCycle,
                         ),
                       );
                     }
@@ -3393,6 +3555,38 @@ class _CartScreenState extends State<CartScreen> {
               const Divider(
                 thickness: 1,
               ),
+
+              // Gift Card Section (above Referral Wallet per payment order)
+              if (activeGiftCards.isNotEmpty &&
+                  (giftCardConfig?.enabled ?? true))
+                _GiftCardSection(
+                  activeGiftCards: activeGiftCards,
+                  giftCardAmountToUse: giftCardAmountToUse,
+                  isGiftCardApplied: isGiftCardApplied,
+                  onApply: (cardId, amount) {
+                    setState(() {
+                      giftCardBreakdown = [
+                        {'cardId': cardId, 'amount': amount}
+                      ];
+                      isGiftCardApplied = true;
+                    });
+                    if (cartProducts.isNotEmpty) {
+                      _calculateAndUpdateTotals(
+                          cartProducts, lstExtras, vendorID);
+                    }
+                  },
+                  onRemove: () {
+                    setState(() {
+                      giftCardBreakdown = [];
+                      isGiftCardApplied = false;
+                    });
+                    if (cartProducts.isNotEmpty) {
+                      _calculateAndUpdateTotals(
+                          cartProducts, lstExtras, vendorID);
+                    }
+                  },
+                  isDarkMode: isDarkMode(context),
+                ),
 
               // Referral Wallet Section
               if (referralWalletAmountAvailable > 0 &&
@@ -5163,6 +5357,154 @@ class _DeliveryChargesRow extends StatelessWidget {
           const Divider(
             thickness: 1,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GiftCardSection extends StatefulWidget {
+  final List<Map<String, dynamic>> activeGiftCards;
+  final double giftCardAmountToUse;
+  final bool isGiftCardApplied;
+  final void Function(String cardId, double amount) onApply;
+  final VoidCallback onRemove;
+  final bool isDarkMode;
+
+  const _GiftCardSection({
+    required this.activeGiftCards,
+    required this.giftCardAmountToUse,
+    required this.isGiftCardApplied,
+    required this.onApply,
+    required this.onRemove,
+    required this.isDarkMode,
+  });
+
+  @override
+  State<_GiftCardSection> createState() => _GiftCardSectionState();
+}
+
+class _GiftCardSectionState extends State<_GiftCardSection> {
+  int _selectedIndex = 0;
+  final _amountController = TextEditingController();
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cards = widget.activeGiftCards;
+    if (cards.isEmpty) return const SizedBox.shrink();
+
+    final selected = cards[_selectedIndex.clamp(0, cards.length - 1)];
+    final balance = (selected['remainingBalance'] as num?)?.toDouble() ?? 0.0;
+    final cardId = selected['cardId'] as String? ?? '';
+    final maskedCode = selected['maskedCode'] as String? ?? '****';
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.orange.shade200, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.card_giftcard,
+                  color: Colors.orange.shade700, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Gift Card',
+                style: TextStyle(
+                  fontFamily: 'Poppinsm',
+                  fontWeight: FontWeight.w600,
+                  color: Colors.orange.shade900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (!widget.isGiftCardApplied) ...[
+            if (cards.length > 1)
+              DropdownButton<int>(
+                value: _selectedIndex.clamp(0, cards.length - 1),
+                items: List.generate(cards.length, (i) {
+                  final c = cards[i];
+                  final m = c['maskedCode'] ?? '****';
+                  final b = (c['remainingBalance'] as num?)?.toDouble() ?? 0;
+                  return DropdownMenuItem(
+                    value: i,
+                    child: Text('$m - ${amountShow(amount: b.toStringAsFixed(0))}'),
+                  );
+                }),
+                onChanged: (v) {
+                  if (v != null) setState(() => _selectedIndex = v);
+                },
+              ),
+            TextField(
+              controller: _amountController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                hintText: 'Amount (max ${amountShow(amount: balance.toStringAsFixed(0))})',
+                border: const OutlineInputBorder(),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    final amt = double.tryParse(_amountController.text.trim());
+                    if (amt == null || amt <= 0 || amt > balance) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Enter amount between 1 and ${balance.toStringAsFixed(0)}',
+                          ),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+                    widget.onApply(cardId, amt);
+                    _amountController.clear();
+                  },
+                  child: const Text('Apply'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ] else ...[
+            Text(
+              'Applied: ${amountShow(amount: widget.giftCardAmountToUse.toStringAsFixed(2))}',
+              style: TextStyle(
+                fontFamily: 'Poppinsm',
+                color: Colors.orange.shade800,
+                fontSize: 14,
+              ),
+            ),
+            TextButton(
+              onPressed: widget.onRemove,
+              child: Text(
+                'Remove',
+                style: TextStyle(color: Colors.orange.shade800),
+              ),
+            ),
+          ],
         ],
       ),
     );

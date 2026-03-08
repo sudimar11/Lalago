@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -201,7 +201,7 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  'Orders for: '.tr(),
+                  'Orders for: ',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
@@ -221,7 +221,7 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
                 TextButton(
                   onPressed: () => _selectDate(context),
                   child: Text(
-                    'Change Date'.tr(),
+                    'Change Date',
                     style: TextStyle(
                       color: Color(COLOR_PRIMARY),
                       fontWeight: FontWeight.w600,
@@ -252,8 +252,8 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
                       if (!snapshot.hasData || snapshot.data!.isEmpty) {
                         return Center(
                           child: showEmptyState(
-                            'No Completed Orders'.tr(),
-                            'No completed orders found'.tr(),
+                            'No Completed Orders',
+                            'No completed orders found',
                           ),
                         );
                       }
@@ -395,9 +395,9 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
                     const SizedBox(height: 4),
                     Text(
                       orderModel.takeAway == true
-                          ? 'Takeaway'.tr()
+                          ? 'Takeaway'
                           : 'Deliver to: ${orderModel.address.getFullAddress()}'
-                              .tr(),
+                              ,
                       style: const TextStyle(
                         fontSize: 14,
                         color: Colors.grey,
@@ -463,7 +463,7 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
           // Order Status
           ListTile(
             contentPadding: EdgeInsets.zero,
-            title: Text('Status'.tr(), style: TextStyle(color: Colors.grey)),
+            title: Text('Status', style: TextStyle(color: Colors.grey)),
             subtitle: Container(
               padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
@@ -484,7 +484,7 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
           if (orderModel.notes != null && orderModel.notes!.isNotEmpty)
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: Text('Remarks'.tr(), style: TextStyle(color: Colors.grey)),
+              title: Text('Remarks', style: TextStyle(color: Colors.grey)),
               subtitle: Text(
                 orderModel.notes!,
                 style: TextStyle(
@@ -514,11 +514,11 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
               size: 20,
             ),
             title: Text(
-              'Rider'.tr(),
+              'Rider',
               style: TextStyle(color: Colors.grey),
             ),
             subtitle: Text(
-              'Loading rider info...'.tr(),
+              'Loading rider info...',
               style: TextStyle(color: Colors.grey),
             ),
           );
@@ -533,7 +533,7 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
               size: 20,
             ),
             title: Text(
-              'Rider'.tr(),
+              'Rider',
               style: TextStyle(color: Colors.grey),
             ),
             subtitle: Text(
@@ -552,7 +552,7 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
               size: 20,
             ),
             title: Text(
-              'Rider'.tr(),
+              'Rider',
               style: TextStyle(color: Colors.grey),
             ),
             subtitle: Text(
@@ -574,7 +574,7 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
               size: 20,
             ),
             title: Text(
-              'Rider'.tr(),
+              'Rider',
               style: TextStyle(color: Colors.grey),
             ),
             subtitle: Text(
@@ -597,11 +597,11 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
                   size: 20,
                 ),
                 title: Text(
-                  'Rider'.tr(),
+                  'Rider',
                   style: TextStyle(color: Colors.grey),
                 ),
                 subtitle: Text(
-                  'Loading rider info...'.tr(),
+                  'Loading rider info...',
                   style: TextStyle(color: Colors.grey),
                 ),
               );
@@ -616,7 +616,7 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
                   size: 20,
                 ),
                 title: Text(
-                  'Rider'.tr(),
+                  'Rider',
                   style: TextStyle(color: Colors.grey),
                 ),
                 subtitle: Text(
@@ -637,7 +637,7 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
                 size: 20,
               ),
               title: Text(
-                'Rider'.tr(),
+                'Rider',
                 style: TextStyle(color: Colors.grey),
               ),
               subtitle: Text(
@@ -731,11 +731,11 @@ class _CompletedOrdersScreenState extends State<CompletedOrdersScreen> {
   String _getStatusText(String status) {
     switch (status) {
       case "In Transit":
-        return "In Transit".tr();
+        return "In Transit";
       case ORDER_STATUS_COMPLETED:
-        return "Completed".tr();
+        return "Completed";
       case "Order Shipped":
-        return "Shipped".tr();
+        return "Shipped";
       default:
         return status;
     }

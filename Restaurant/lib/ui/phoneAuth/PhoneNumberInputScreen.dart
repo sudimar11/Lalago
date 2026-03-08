@@ -4,9 +4,6 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 
-import 'package:easy_localization/easy_localization.dart' as Easy;
-
-
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 
 
@@ -168,7 +165,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
                     child: Text(
 
-                      widget.login ? 'Sign In'.tr() : 'Create new account'.tr(),
+                      widget.login ? 'Sign In' : 'Create new account',
 
                       style: TextStyle(
 
@@ -178,7 +175,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
                           fontSize: 25.0),
 
-                    ).tr()),
+                    )),
 
 
                 /// user profile picture,  this is visible until we verify the
@@ -368,7 +365,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
                           fillColor: Colors.white,
 
-                          hintText: 'First Name'.tr(),
+                          hintText: 'First Name',
 
                           focusedBorder: OutlineInputBorder(
 
@@ -463,7 +460,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
                           fillColor: Colors.white,
 
-                          hintText: 'Last Name'.tr(),
+                          hintText: 'Last Name',
 
                           focusedBorder: OutlineInputBorder(
 
@@ -549,7 +546,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
                         inputDecoration: InputDecoration(
 
-                          hintText: 'Phone Number'.tr(),
+                          hintText: 'Phone Number',
 
                           border: OutlineInputBorder(
 
@@ -724,7 +721,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
                         child: Text(
 
-                          'Send code'.tr(),
+                          'Send code',
 
                           style: TextStyle(
 
@@ -767,7 +764,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
                               : Colors.black),
 
-                    ).tr(),
+                    ),
 
                   ),
 
@@ -789,9 +786,9 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
                     widget.login
 
-                        ? 'Login with E-mail'.tr()
+                        ? 'Login with E-mail'
 
-                        : 'Sign up with E-mail'.tr(),
+                        : 'Sign up with E-mail',
 
                     style: TextStyle(
 
@@ -836,7 +833,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
   void _submitCode(String code) async {
     await showProgress(
       context,
-      widget.login ? 'Logging in...'.tr() : 'Signing up...'.tr(),
+      widget.login ? 'Logging in...' : 'Signing up...',
       false,
     );
 
@@ -854,8 +851,8 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
           print("Error during verification: ${error.toString()}");
           showAlertDialog(
             context,
-            'Verification Error'.tr(),
-            "An error occurred during verification: ${error.toString()}".tr(),
+            'Verification Error',
+            "An error occurred during verification: ${error.toString()}",
             true,
           );
         });
@@ -876,9 +873,9 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
             } else {
               showAlertDialog(
                 context,
-                "Account Disabled".tr(),
+                "Account Disabled",
                 "Your account has been disabled. Please contact the administrator."
-                    .tr(),
+                    ,
                 true,
               );
             }
@@ -888,9 +885,9 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
             } else {
               showAlertDialog(
                 context,
-                'Approval Pending'.tr(),
+                'Approval Pending',
                 "Thank you for signing up. Your account is under approval. Please wait for approval."
-                    .tr(),
+                    ,
                 true,
                 login: true,
               );
@@ -899,16 +896,16 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
         } else if (result != null && result is String) {
           showAlertDialog(
             context,
-            'Error'.tr(),
-            "An error occurred: $result".tr(),
+            'Error',
+            "An error occurred: $result",
             true,
           );
         } else {
           showAlertDialog(
             context,
-            'Error'.tr(),
+            'Error',
             "Unable to create a user with this phone number. Please try again."
-                .tr(),
+                ,
             true,
           );
         }
@@ -916,15 +913,15 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
         await hideProgress();
         showAlertDialog(
           context,
-          'Error'.tr(),
-          "Verification ID is missing. Please try again.".tr(),
+          'Error',
+          "Verification ID is missing. Please try again.",
           true,
         );
       }
     } on auth.FirebaseAuthException catch (exception) {
       hideProgress();
 
-      String title = "Authentication Error".tr();
+      String title = "Authentication Error";
       String message;
 
       // Handle specific error codes with detailed messages
@@ -932,20 +929,20 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
         case 'invalid-verification-code':
           message =
               'The verification code is invalid or has expired. Please try again.'
-                  .tr();
+                  ;
           break;
         case 'user-disabled':
           message =
               'This user account has been disabled. Please contact support.'
-                  .tr();
+                  ;
           break;
         case 'too-many-requests':
           message =
               'Too many attempts. Please wait a while before trying again.'
-                  .tr();
+                  ;
           break;
         default:
-          message = "An error occurred. Please try again.".tr();
+          message = "An error occurred. Please try again.";
           break;
       }
 
@@ -967,8 +964,8 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
       // Show a general error message
       showAlertDialog(
         context,
-        'Unexpected Error'.tr(),
-        "An unexpected error occurred: $e. Please try again.".tr(),
+        'Unexpected Error',
+        "An unexpected error occurred: $e. Please try again.",
         true,
       );
     }
@@ -1021,7 +1018,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
 
-          content: Text('Invalid phone number, Please try again.'.tr()),
+          content: Text('Invalid phone number, Please try again.'),
 
         ));
 
@@ -1049,7 +1046,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
     //send code
 
 
-    await showProgress(context, 'Sending code...'.tr(), true);
+    await showProgress(context, 'Sending code...', true);
 
 
     await FireStoreUtils.firebaseSubmitPhoneNumber(
@@ -1069,7 +1066,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
               content: Text(
 
-                "timeoutRequestNewCode".tr(),
+                "timeoutRequestNewCode",
 
               ),
 
@@ -1118,14 +1115,14 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
           print('${error.message} ${error.stackTrace}');
 
 
-          String message = "errorTryAgain".tr();
+          String message = "errorTryAgain";
 
 
           switch (error.code) {
 
             case 'invalid-verification-code':
 
-              message = 'Invalid code or has been expired.'.tr();
+              message = 'Invalid code or has been expired.';
 
 
               break;
@@ -1133,7 +1130,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
             case 'user-disabled':
 
-              message = 'This user has been disabled.'.tr();
+              message = 'This user has been disabled.';
 
 
               break;
@@ -1141,7 +1138,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
             default:
 
-              message = "errorTryAgain".tr();
+              message = "errorTryAgain";
 
 
               break;
@@ -1155,7 +1152,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
               content: Text(
 
-                message.tr(),
+                message,
 
               ),
 
@@ -1266,7 +1263,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
 
               showAlertDialog(
 
-                  context, 'Failed'.tr(), "notCreateUserThisPhone".tr(), true);
+                  context, 'Failed', "notCreateUserThisPhone", true);
 
             }
 

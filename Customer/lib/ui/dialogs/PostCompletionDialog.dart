@@ -9,6 +9,8 @@ import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
+import 'package:foodie_customer/model/LoyaltyData.dart';
+import 'package:foodie_customer/services/loyalty_service.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 import 'package:foodie_customer/ui/reviewScreen.dart/reviewScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
@@ -45,11 +47,33 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
   double? _confirmationSpeedRating;
   bool _savingConfirmationFeedback = false;
   final TextEditingController _reportController = TextEditingController();
+  LoyaltyData? _loyaltyData;
+  Map<String, dynamic>? _loyaltyConfig;
 
   @override
   void initState() {
     super.initState();
     _checkFavoriteStatus();
+    _fetchLoyaltyData();
+  }
+
+  Future<void> _fetchLoyaltyData() async {
+    if (MyAppState.currentUser == null) return;
+    try {
+      final config = await LoyaltyService.getLoyaltyConfig();
+      if (config?['enabled'] != true) return;
+      final user = await FireStoreUtils.getCurrentUser(
+        MyAppState.currentUser!.userID,
+      );
+      if (mounted && user?.loyalty != null) {
+        setState(() {
+          _loyaltyData = user!.loyalty;
+          _loyaltyConfig = config;
+        });
+      }
+    } catch (e) {
+      debugPrint('PostCompletionDialog: error fetching loyalty: $e');
+    }
   }
 
   @override
@@ -103,6 +127,7 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
         builder: (context) => ReviewScreen(
           product: firstProduct,
           orderId: widget.order.id,
+          driverId: widget.order.driverID,
         ),
       ),
     );
@@ -550,6 +575,81 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
                         ),
                       ),
                     ),
+
+                    // Loyalty token earned
+                    if (_loyaltyData != null &&
+                        _loyaltyConfig != null &&
+                        _loyaltyData!.currentCycle.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 24),
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.shade50,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.amber.shade200,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.emoji_events,
+                                color: Colors.amber.shade700,
+                                size: 32,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'You earned 1 token!',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.amber.shade900,
+                                      ),
+                                    ),
+                                    Builder(
+                                      builder: (context) {
+                                        final tokensNeeded =
+                                            LoyaltyService.getTokensToNextTier(
+                                          _loyaltyData!.tokensThisCycle,
+                                          _loyaltyConfig,
+                                        );
+                                        final nextTier =
+                                            LoyaltyService.getNextTierName(
+                                          _loyaltyData!.tokensThisCycle,
+                                          _loyaltyConfig,
+                                        );
+                                        if (tokensNeeded <= 0 ||
+                                            nextTier == null) {
+                                          return Text(
+                                            'You\'re at the top tier!',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.amber.shade800,
+                                            ),
+                                          );
+                                        }
+                                        return Text(
+                                          '$tokensNeeded more orders to reach ${nextTier[0].toUpperCase() + nextTier.substring(1)}!',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.amber.shade800,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
 
                     const SizedBox(height: 24),
 

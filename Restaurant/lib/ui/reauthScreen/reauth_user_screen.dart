@@ -1,4 +1,3 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/material.dart';
 import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
@@ -54,7 +53,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 40.0),
                 child: Text(
-                  "Re-AuthenticateToAction".tr(),
+                  "Re-AuthenticateToAction",
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -73,7 +72,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
         TextField(
           controller: _passwordController,
           obscureText: true,
-          decoration: InputDecoration(hintText: 'Password'.tr()),
+          decoration: InputDecoration(hintText: 'Password'),
         ),
         Padding(
           padding: const EdgeInsets.only(top: 12.0),
@@ -88,7 +87,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
             ),
             onPressed: () async => passwordButtonPressed(),
             child: Text(
-              'Verify'.tr(),
+              'Verify',
               style: TextStyle(color: isDarkMode(context) ? Colors.black : Colors.white),
             ),
           ),
@@ -101,7 +100,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
     return ElevatedButton.icon(
       label: Expanded(
         child: Text(
-          'Facebook Verify'.tr(),
+          'Facebook Verify',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
         ),
@@ -138,7 +137,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
           );
         }
         if (!snapshot.hasData || (snapshot.data != true)) {
-          return Center(child: Text("AppleSignNotAvailable".tr()));
+          return Center(child: Text("AppleSignNotAvailable"));
         } else {
           return apple.AppleSignInButton(
             cornerRadius: 12.0,
@@ -196,20 +195,20 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
     if (_passwordController.text.isEmpty) {
       showAlertDialog(
         context,
-        'Empty Password'.tr(),
-        'Password is required to update email'.tr(),
+        'Empty Password',
+        'Password is required to update email',
         true,
       );
     } else {
-      await showProgress(context, 'Verifying...'.tr(), false);
+      await showProgress(context, 'Verifying...', false);
       try {
         auth.UserCredential? result = await FireStoreUtils.reAuthUser(widget.provider, email: MyAppState.currentUser!.email, password: _passwordController.text);
         if (result == null) {
           await hideProgress();
           showAlertDialog(
             context,
-            "notVerify".tr(),
-            'Please double check the password and try again.'.tr(),
+            "notVerify",
+            'Please double check the password and try again.',
             true,
           );
         } else {
@@ -223,7 +222,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                  "notVerifyTryAgain".tr(),
+                  "notVerifyTryAgain",
                   style: TextStyle(fontSize: 17),
                 ),
               ),
@@ -237,7 +236,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              "notVerifyTryAgain".tr(),
+              "notVerifyTryAgain",
               style: TextStyle(fontSize: 17),
             ),
           ),
@@ -248,7 +247,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
 
   facebookButtonPressed() async {
     try {
-      await showProgress(context, 'Verifying...'.tr(), false);
+      await showProgress(context, 'Verifying...', false);
       AccessToken? token;
       FacebookAuth facebookAuth = FacebookAuth.instance;
       if (await facebookAuth.accessToken == null) {
@@ -268,7 +267,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
       showAlertDialog(
         context,
         'Error',
-        "notVerify".tr() + ' with facebook.'.tr(),
+        "notVerify" + ' with facebook.',
         true,
       );
     }
@@ -276,7 +275,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
 
   appleButtonPressed() async {
     try {
-      await showProgress(context, 'Verifying...'.tr(), false);
+      await showProgress(context, 'Verifying...', false);
       final appleCredential = await apple.TheAppleSignIn.performRequests([
         apple.AppleIdRequest(requestedScopes: [apple.Scope.email, apple.Scope.fullName])
       ]);
@@ -284,7 +283,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
         showAlertDialog(
           context,
           'Error',
-          "notVerify".tr() + ' with apple.'.tr(),
+          "notVerify" + ' with apple.',
           true,
         );
       }
@@ -299,14 +298,14 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
       showAlertDialog(
         context,
         'Error',
-        "notVerify".tr() + ' with apple.'.tr(),
+        "notVerify" + ' with apple.',
         true,
       );
     }
   }
 
   _submitPhoneNumber() async {
-    await showProgress(context, 'Sending code...'.tr(), true);
+    await showProgress(context, 'Sending code...', true);
     await FireStoreUtils.firebaseSubmitPhoneNumber(
       widget.phoneNumber!,
       (String verificationId) {
@@ -315,7 +314,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                "timeoutRequestNewCode".tr(),
+                "timeoutRequestNewCode",
               ),
             ),
           );
@@ -333,16 +332,16 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
         if (mounted) {
           await hideProgress();
           print('${error.message} ${error.stackTrace}');
-          String message = "errorTryAgain".tr();
+          String message = "errorTryAgain";
           switch (error.code) {
             case 'invalid-verification-code':
-              message = 'Invalid code or has been expired.'.tr();
+              message = 'Invalid code or has been expired.';
               break;
             case 'user-disabled':
-              message = 'This user has been disabled.'.tr();
+              message = 'This user has been disabled.';
               break;
             default:
-              message = "errorTryAgain".tr();
+              message = "errorTryAgain";
               break;
           }
           ScaffoldMessenger.of(context).showSnackBar(
@@ -362,7 +361,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
   }
 
   void _submitCode(String code) async {
-    await showProgress(context, 'Verifying...'.tr(), false);
+    await showProgress(context, 'Verifying...', false);
     try {
       if (_verificationID != null) {
         if (widget.deleteUser) {
@@ -378,7 +377,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("errorTryAgain".tr()),
+            content: Text("errorTryAgain"),
             duration: Duration(seconds: 6),
           ),
         );
@@ -388,16 +387,16 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
       await hideProgress();
       Navigator.pop(context);
 
-      String message = "errorTryAgain".tr();
+      String message = "errorTryAgain";
       switch (exception.code) {
         case 'invalid-verification-code':
-          message = 'Invalid code or has been expired.'.tr();
+          message = 'Invalid code or has been expired.';
           break;
         case 'user-disabled':
-          message = 'This user has been disabled.'.tr();
+          message = 'This user has been disabled.';
           break;
         default:
-          message = "errorTryAgain".tr();
+          message = "errorTryAgain";
           break;
       }
       ScaffoldMessenger.of(context).showSnackBar(
@@ -414,7 +413,7 @@ class _ReAuthUserScreenState extends State<ReAuthUserScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            "errorTryAgain".tr(),
+            "errorTryAgain",
           ),
         ),
       );

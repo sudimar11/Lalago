@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_video_info/flutter_video_info.dart';
@@ -61,7 +60,7 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
                   Padding(
                     padding: const EdgeInsets.all(8.0),
                     child: Text(
-                      'Select humbling GIF / Image'.tr(),
+                      'Select humbling GIF / Image',
                       style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
                     ),
                   ),
@@ -69,7 +68,7 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
                   Padding(
                     padding: const EdgeInsets.all(8.0),
                     child: Text(
-                      'Select Story Video'.tr(),
+                      'Select Story Video',
                       style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
                     ),
                   ),
@@ -162,12 +161,12 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
                       onPressed: () async {
                         if (thumbnailFile == null) {
                           final snackBar = SnackBar(
-                            content: const Text('Please select thumbnail.').tr(),
+                            content: const Text('Please select thumbnail.'),
                           );
                           ScaffoldMessenger.of(context).showSnackBar(snackBar);
                         } else if (_mediaFiles.isEmpty) {
                           final snackBar = SnackBar(
-                            content: const Text('Please Select video').tr(),
+                            content: const Text('Please Select video'),
                           );
                           ScaffoldMessenger.of(context).showSnackBar(snackBar);
                         } else {
@@ -185,14 +184,12 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
 
                           if (imagesToUpload.isNotEmpty) {
                             updateProgress(
-                              'Uploading  {} of {}'.tr(args: ['1', '${imagesToUpload.length}']),
+                              'Uploading 1 of ${imagesToUpload.length}',
                             );
                             for (int i = 0; i < imagesToUpload.length; i++) {
                               if (i != 0)
                                 updateProgress(
-                                  'Uploading  {} of {}'.tr(
-                                    args: ['${i + 1}', '${imagesToUpload.length}'],
-                                  ),
+                                  'Uploading ${i + 1} of ${imagesToUpload.length}',
                                 );
                               String? url = await FireStoreUtils().uploadVideoStory(
                                 imagesToUpload[i],
@@ -206,7 +203,7 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
                           FireStoreUtils().addOrUpdateStory(storyModel).then((value) {
                             hideProgress();
                             final snackBar = SnackBar(
-                              content: const Text('Story upload successfully').tr(),
+                              content: const Text('Story upload successfully'),
                             );
                             ScaffoldMessenger.of(context).showSnackBar(snackBar);
                           });
@@ -240,7 +237,7 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
                         await FireStoreUtils().removeStory(MyAppState.currentUser!.vendorID.toString()).then((value) {
                           hideProgress();
                           final snackBar = SnackBar(
-                            content: const Text('Story remove successfully').tr(),
+                            content: const Text('Story remove successfully'),
                           );
                           ScaffoldMessenger.of(context).showSnackBar(snackBar);
                           getStory();
@@ -307,12 +304,12 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
       message: Text(
         'Send Video',
         style: TextStyle(fontSize: 15.0),
-      ).tr(),
+      ),
       actions: <Widget>[
         Visibility(
           visible: multipleSelect,
           child: CupertinoActionSheetAction(
-            child: Text('Choose video from gallery').tr(),
+            child: Text('Choose video from gallery'),
             isDefaultAction: false,
             onPressed: () async {
               Navigator.pop(context);
@@ -328,7 +325,7 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
                   });
                 } else {
                   final snackBar = SnackBar(
-                    content: Text('Please select ${videoDuration.toString()} second below video.').tr(),
+                    content: Text('Please select ${videoDuration.toString()} second below video.'),
                   );
                   ScaffoldMessenger.of(context).showSnackBar(snackBar);
                 }
@@ -339,7 +336,7 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
         Visibility(
           visible: !multipleSelect,
           child: CupertinoActionSheetAction(
-            child: Text('Choose thubling image / GIF').tr(),
+            child: Text('Choose thubling image / GIF'),
             isDefaultAction: false,
             onPressed: () async {
               Navigator.pop(context);
@@ -356,7 +353,7 @@ class _AddStoryScreenState extends State<AddStoryScreen> {
       cancelButton: CupertinoActionSheetAction(
         child: Text(
           'Cancel',
-        ).tr(),
+        ),
         onPressed: () {
           Navigator.pop(context);
         },

@@ -1,24 +1,48 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/model/ProductModel.dart';
+import 'package:foodie_restaurant/model/categoryModel.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
 import 'package:foodie_restaurant/ui/addOrUpdateProduct/AddOrUpdateProductScreen.dart';
 
-class ManageProductsScreen extends StatefulWidget {
-  @override
-  _ManageProductsScreenState createState() => _ManageProductsScreenState();
+enum ProductFilter { all, lowStockOnly, outOfStockOnly, trackedOnly, unpublished }
+
+enum ProductSort {
+  nameAsc,
+  nameDesc,
+  priceAsc,
+  priceDesc,
+  stockAsc,
+  stockDesc,
 }
 
-class _ManageProductsScreenState extends State<ManageProductsScreen> {
+class ManageProductsScreen extends StatefulWidget {
+  final void Function(int)? onLowStockCountChanged;
+
+  const ManageProductsScreen({Key? key, this.onLowStockCountChanged})
+      : super(key: key);
+
+  @override
+  ManageProductsScreenState createState() => ManageProductsScreenState();
+}
+
+class ManageProductsScreenState extends State<ManageProductsScreen> {
   FireStoreUtils fireStoreUtils = FireStoreUtils();
   Stream<List<ProductModel>>? productsStream;
   late ProductModel futureproduct;
   late bool publish;
   var product;
+  bool _isSelectionMode = false;
+  final Set<String> _selectedIds = {};
+  List<ProductModel>? _currentProducts;
+  List<ProductModel>? _filteredProducts;
+  ProductFilter _filter = ProductFilter.all;
+  ProductSort _sort = ProductSort.nameAsc;
+  int _lastReportedLowStockCount = -1;
 
   @override
   void initState() {
@@ -39,18 +63,94 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
     super.dispose();
   }
 
+  void toggleSelectionMode() {
+    setState(() {
+      _isSelectionMode = !_isSelectionMode;
+      if (!_isSelectionMode) _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelection(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+  }
+
+  void _selectAll(List<ProductModel> products) {
+    setState(() {
+      for (final p in products) _selectedIds.add(p.id);
+    });
+  }
+
+  List<ProductModel> _applyFilterAndSort(List<ProductModel> products) {
+    var list = products.where((p) {
+      switch (_filter) {
+        case ProductFilter.lowStockOnly:
+          return p.isLowStock;
+        case ProductFilter.outOfStockOnly:
+          return p.trackInventory && p.quantity <= 0;
+        case ProductFilter.trackedOnly:
+          return p.trackInventory;
+        case ProductFilter.unpublished:
+          return !p.publish;
+        case ProductFilter.all:
+          return true;
+      }
+    }).toList();
+    list.sort((a, b) {
+      switch (_sort) {
+        case ProductSort.nameAsc:
+          return (a.name).toLowerCase().compareTo((b.name).toLowerCase());
+        case ProductSort.nameDesc:
+          return (b.name).toLowerCase().compareTo((a.name).toLowerCase());
+        case ProductSort.priceAsc:
+          return (double.tryParse(a.price) ?? 0)
+              .compareTo(double.tryParse(b.price) ?? 0);
+        case ProductSort.priceDesc:
+          return (double.tryParse(b.price) ?? 0)
+              .compareTo(double.tryParse(a.price) ?? 0);
+        case ProductSort.stockAsc:
+          return a.quantity.compareTo(b.quantity);
+        case ProductSort.stockDesc:
+          return b.quantity.compareTo(a.quantity);
+      }
+    });
+    return list;
+  }
+
+  String _sortLabel(ProductSort s) {
+    switch (s) {
+      case ProductSort.nameAsc:
+        return 'Name A-Z';
+      case ProductSort.nameDesc:
+        return 'Name Z-A';
+      case ProductSort.priceAsc:
+        return 'Price Low';
+      case ProductSort.priceDesc:
+        return 'Price High';
+      case ProductSort.stockAsc:
+        return 'Stock Low';
+      case ProductSort.stockDesc:
+        return 'Stock High';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
         backgroundColor: isDarkMode(context) ? Color(COLOR_DARK) : null,
-        floatingActionButton: Padding(
+        floatingActionButton: _isSelectionMode ? null : Padding(
           padding: const EdgeInsets.all(8.0),
           child: FloatingActionButton(
             elevation: 10,
             onPressed: () {
               if (MyAppState.currentUser!.vendorID.isEmpty) {
                 final snackBar = SnackBar(
-                  content: const Text('Please add a restaurant first').tr(),
+                  content: const Text('Please add a restaurant first'),
                 );
                 ScaffoldMessenger.of(context).showSnackBar(snackBar);
               } else {
@@ -66,48 +166,170 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
             ),
           ),
         ),
-        body: SingleChildScrollView(
-            child: Container(
-          width: MediaQuery.of(context).size.width * 1,
-          height: MediaQuery.of(context).size.height * 0.9,
-          child: Stack(children: [
-            StreamBuilder<List<ProductModel>>(
-              stream: productsStream,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) if (fireStoreUtils.isShowLoader == true) {
-                } else {
-                  return Container(
-                    child: Center(
-                      child: CircularProgressIndicator(),
+        body: Column(
+          children: [
+            if (_isSelectionMode)
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                color: isDarkMode(context)
+                    ? Color(DARK_VIEWBG_COLOR)
+                    : Colors.grey.shade200,
+                child: Row(
+                  children: [
+                    TextButton(
+                      onPressed: () {
+                        final data = _filteredProducts ?? _currentProducts;
+                        if (data != null) _selectAll(data);
+                      },
+                      child: Text('Select All'),
                     ),
-                  );
-                }
-                if (!snapshot.hasData || (snapshot.data?.isEmpty ?? true)) {
-                  return Container(
-                    height: MediaQuery.of(context).size.height * 0.9,
-                    alignment: Alignment.center,
-                    child: showEmptyState('No Products'.tr(), 'All your products will show up here'.tr()),
-                  );
-                } else {
-                  return ListView.builder(shrinkWrap: true, itemCount: snapshot.data!.length, padding: const EdgeInsets.all(12), itemBuilder: (context, index) => buildRow(snapshot.data![index]));
-                }
-              },
+                    Spacer(),
+                    Text('${_selectedIds.length} selected'),
+                    SizedBox(width: 8),
+                    TextButton(
+                      onPressed: toggleSelectionMode,
+                      child: Text('Done'),
+                    ),
+                  ],
+                ),
+              ),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Container(
+                  width: MediaQuery.of(context).size.width * 1,
+                  height: MediaQuery.of(context).size.height * 0.9,
+                  child: Stack(children: [
+                    StreamBuilder<List<ProductModel>>(
+                      stream: productsStream,
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                                ConnectionState.waiting &&
+                            fireStoreUtils.isShowLoader != true) {
+                          return Container(
+                            child: Center(child: CircularProgressIndicator()),
+                          );
+                        }
+                        if (!snapshot.hasData ||
+                            (snapshot.data?.isEmpty ?? true)) {
+                          return Container(
+                            height: MediaQuery.of(context).size.height * 0.9,
+                            alignment: Alignment.center,
+                            child: showEmptyState(
+                                'No Products',
+                                'All your products will show up here'),
+                          );
+                        }
+                        final products = snapshot.data!;
+                        _currentProducts = products;
+                        final lowStockCount =
+                            products.where((p) => p.isLowStock).length;
+                        if (lowStockCount != _lastReportedLowStockCount) {
+                          _lastReportedLowStockCount = lowStockCount;
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            widget.onLowStockCountChanged?.call(lowStockCount);
+                          });
+                        }
+                        final filtered = _applyFilterAndSort(products);
+                        _filteredProducts = filtered;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 8),
+                              child: Wrap(
+                                spacing: 6,
+                                children: [
+                                  ChoiceChip(
+                                    label: Text('All'),
+                                    selected: _filter == ProductFilter.all,
+                                    onSelected: (_) =>
+                                        setState(() => _filter = ProductFilter.all),
+                                  ),
+                                  ChoiceChip(
+                                    label: Text('Low Stock'),
+                                    selected:
+                                        _filter == ProductFilter.lowStockOnly,
+                                    onSelected: (_) => setState(
+                                        () => _filter = ProductFilter.lowStockOnly),
+                                  ),
+                                  ChoiceChip(
+                                    label: Text('Out of Stock'),
+                                    selected: _filter ==
+                                        ProductFilter.outOfStockOnly,
+                                    onSelected: (_) => setState(() =>
+                                        _filter = ProductFilter.outOfStockOnly),
+                                  ),
+                                  ChoiceChip(
+                                    label: Text('Tracked'),
+                                    selected:
+                                        _filter == ProductFilter.trackedOnly,
+                                    onSelected: (_) => setState(
+                                        () => _filter = ProductFilter.trackedOnly),
+                                  ),
+                                  ChoiceChip(
+                                    label: Text('Unpublished'),
+                                    selected:
+                                        _filter == ProductFilter.unpublished,
+                                    onSelected: (_) => setState(
+                                        () => _filter = ProductFilter.unpublished),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 4),
+                              child: DropdownButton<ProductSort>(
+                                value: _sort,
+                                isExpanded: false,
+                                underline: SizedBox(),
+                                items: ProductSort.values
+                                    .map((s) => DropdownMenuItem(
+                                          value: s,
+                                          child: Text(_sortLabel(s)),
+                                        ))
+                                    .toList(),
+                                onChanged: (v) {
+                                  if (v != null) setState(() => _sort = v);
+                                },
+                              ),
+                            ),
+                            Expanded(
+                              child: ListView.builder(
+                                shrinkWrap: true,
+                                itemCount: filtered.length,
+                                padding: const EdgeInsets.all(12),
+                                itemBuilder: (context, index) =>
+                                    buildRow(filtered[index]),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ]),
+                ),
+              ),
             ),
-          ]),
-        )));
+            if (_isSelectionMode && _selectedIds.isNotEmpty)
+              _buildBulkActionsBar(),
+          ],
+        ));
   }
 
   Widget buildRow(ProductModel productModel) {
-    // publish = productModel.publish;
+    final isSelected = _selectedIds.contains(productModel.id);
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onTap: () => push(
-        context,
-        AddOrUpdateProductScreen(
-          product: productModel,
-        ),
-      ),
-      // onLongPress: () => showProductOptionsSheet(productModel),
+      onTap: () {
+        if (_isSelectionMode) {
+          _toggleSelection(productModel.id);
+        } else {
+          push(context, AddOrUpdateProductScreen(product: productModel));
+        }
+      },
+      onLongPress: () => _showQuickInventorySheet(productModel),
       child: Container(
         margin: EdgeInsets.fromLTRB(7, 7, 7, 7),
         child: Card(
@@ -132,6 +354,15 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
+                        if (_isSelectionMode)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10, right: 8),
+                            child: Checkbox(
+                              value: isSelected,
+                              onChanged: (_) => _toggleSelection(productModel.id),
+                              activeColor: Color(COLOR_PRIMARY),
+                            ),
+                          ),
                         Container(
                             width: MediaQuery.of(context).size.width * 0.25,
                             height: MediaQuery.of(context).size.height * 0.1,
@@ -222,6 +453,38 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
                                         ),
                                       ),
                                     ),
+                                    if (productModel.trackInventory)
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 6),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: productModel.isLowStock
+                                                ? Colors.orange
+                                                : Color(COLOR_PRIMARY),
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.inventory_2,
+                                                size: 12,
+                                                color: Colors.white,
+                                              ),
+                                              const SizedBox(width: 3),
+                                              Text(
+                                                'Qty: ${productModel.quantity}',
+                                                style: const TextStyle(
+                                                  fontSize: 11,
+                                                  color: Colors.white,
+                                                  fontFamily: 'Poppins',
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
                                   ],
                                 ),
                                 Visibility(
@@ -244,7 +507,7 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
                                       children: [
                                         SizedBox(height: 8),
                                         Text(
-                                          "Addons".tr(),
+                                          "Addons",
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
@@ -290,7 +553,7 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
                                       width: 20,
                                     )),
                                 Text(
-                                  "Delete".tr(),
+                                  "Delete",
                                   style: TextStyle(fontSize: 15, color: isDarkMode(context) ? Colors.white : Color(0XFF768296), fontFamily: "Poppins"),
                                 )
                               ],
@@ -315,7 +578,7 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
                               SwitchListTile.adaptive(
                                   contentPadding: EdgeInsets.zero,
                                   activeColor: Color(COLOR_ACCENT),
-                                  title: Text('Publish'.tr(),
+                                  title: Text('Publish',
                                       textAlign: TextAlign.end, style: TextStyle(fontSize: 15, color: isDarkMode(context) ? Colors.white : Color(0XFF768296), fontFamily: "Poppins")),
                                   value: productModel.publish,
                                   onChanged: (bool newValue) async {
@@ -415,7 +678,7 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              "Addons".tr(),
+                              "Addons",
                               style: TextStyle(fontFamily: "Poppinsb", fontSize: 15, color: Color(0xff000000)),
                             ),
                             SizedBox(
@@ -474,19 +737,349 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
     );
   }
 
+  void _showQuickInventorySheet(ProductModel product) {
+    final qtyController = TextEditingController(text: product.quantity.toString());
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          return Container(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            ),
+            decoration: BoxDecoration(
+              color: isDarkMode(ctx) ? Color(DARK_CARD_BG_COLOR) : Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    product.name,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: isDarkMode(ctx) ? Colors.white : Colors.black,
+                    ),
+                  ),
+                  SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        onPressed: () {
+                          final n = int.tryParse(qtyController.text) ?? 0;
+                          qtyController.text = (n - 1).toString();
+                          setModalState(() {});
+                        },
+                        icon: Icon(Icons.remove_circle, color: Color(COLOR_PRIMARY)),
+                      ),
+                      SizedBox(
+                        width: 80,
+                        child: TextField(
+                          controller: qtyController,
+                          keyboardType: TextInputType.numberWithOptions(signed: true),
+                          textAlign: TextAlign.center,
+                          decoration: InputDecoration(
+                            hintText: '0',
+                            border: OutlineInputBorder(),
+                          ),
+                          onChanged: (_) => setModalState(() {}),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          final n = int.tryParse(qtyController.text) ?? 0;
+                          qtyController.text = (n + 1).toString();
+                          setModalState(() {});
+                        },
+                        icon: Icon(Icons.add_circle, color: Color(COLOR_PRIMARY)),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () async {
+                      final text = qtyController.text;
+                      final qty = int.tryParse(text);
+                      if (qty == null) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          SnackBar(content: Text('Enter a valid number')),
+                        );
+                        return;
+                      }
+                      Navigator.pop(ctx);
+                      try {
+                        await fireStoreUtils.updateProductStock(product.id, qty);
+                        if (mounted) EasyLoading.showSuccess('Stock updated');
+                      } catch (e) {
+                        if (mounted) EasyLoading.showError('Failed: $e');
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color(COLOR_PRIMARY),
+                    ),
+                    child: Text('Save'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildBulkActionsBar() {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      color: isDarkMode(context) ? Color(DARK_VIEWBG_COLOR) : Colors.white,
+      child: SafeArea(
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            TextButton.icon(
+              onPressed: _showBulkCategoryDialog,
+              icon: Icon(Icons.category, size: 18),
+              label: Text('Category'),
+            ),
+            TextButton.icon(
+              onPressed: _showBulkPublishDialog,
+              icon: Icon(Icons.publish, size: 18),
+              label: Text('Publish'),
+            ),
+            TextButton.icon(
+              onPressed: _showBulkDeleteDialog,
+              icon: Icon(Icons.delete, size: 18),
+              label: Text('Delete'),
+            ),
+            TextButton.icon(
+              onPressed: _showBulkStockDialog,
+              icon: Icon(Icons.inventory, size: 18),
+              label: Text('Stock'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showBulkCategoryDialog() async {
+    final categories = await FireStoreUtils.getVendorCategoryById();
+    if (categories.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No categories available')),
+      );
+      return;
+    }
+    VendorCategoryModel selected = categories.first;
+    final cat = await showDialog<VendorCategoryModel>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          title: Text('Bulk Edit Category'),
+          content: DropdownButtonFormField<VendorCategoryModel>(
+            value: selected,
+            items: categories
+                .map((c) => DropdownMenuItem(
+                      value: c,
+                      child: Text(c.title ?? ''),
+                    ))
+                .toList(),
+            onChanged: (v) {
+              if (v != null) {
+                setModalState(() => selected = v);
+              }
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, selected),
+              child: Text('Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (cat == null) return;
+    if (cat.id == null || cat.id!.isEmpty) return;
+    try {
+      await fireStoreUtils.bulkUpdateProductsCategory(
+          _selectedIds.toList(), cat.id!);
+      setState(() {
+        _selectedIds.clear();
+        _isSelectionMode = false;
+      });
+      if (mounted) EasyLoading.showSuccess('Category updated');
+    } catch (e) {
+      if (mounted) EasyLoading.showError('Failed: $e');
+    }
+  }
+
+  Future<void> _showBulkPublishDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Bulk Publish Toggle'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text('Publish Selected'),
+              onTap: () => Navigator.pop(ctx, true),
+            ),
+            ListTile(
+              title: Text('Unpublish Selected'),
+              onTap: () => Navigator.pop(ctx, false),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null) return;
+    try {
+      await fireStoreUtils.bulkUpdateProductsPublishStatus(
+          _selectedIds.toList(), result);
+      setState(() {
+        _selectedIds.clear();
+        _isSelectionMode = false;
+      });
+      if (mounted) EasyLoading.showSuccess(result ? 'Published' : 'Unpublished');
+    } catch (e) {
+      if (mounted) EasyLoading.showError('Failed: $e');
+    }
+  }
+
+  Future<void> _showBulkDeleteDialog() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Bulk Delete'),
+        content: Text(
+          'Delete ${_selectedIds.length} products? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await fireStoreUtils.bulkDeleteProducts(_selectedIds.toList());
+      setState(() {
+        _selectedIds.clear();
+        _isSelectionMode = false;
+      });
+      if (mounted) EasyLoading.showSuccess('Products deleted');
+    } catch (e) {
+      if (mounted) EasyLoading.showError('Failed: $e');
+    }
+  }
+
+  Future<void> _showBulkStockDialog() async {
+    final ctrl = TextEditingController(text: '0');
+    String op = 'set';
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          title: Text('Bulk Stock Update'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: ctrl,
+                keyboardType: TextInputType.numberWithOptions(signed: false),
+                decoration: InputDecoration(labelText: 'Value'),
+              ),
+              SizedBox(height: 12),
+              Wrap(
+                children: [
+                  ChoiceChip(
+                    label: Text('Set to value'),
+                    selected: op == 'set',
+                    onSelected: (_) => setModalState(() => op = 'set'),
+                  ),
+                  SizedBox(width: 8),
+                  ChoiceChip(
+                    label: Text('Increase by'),
+                    selected: op == 'increment',
+                    onSelected: (_) => setModalState(() => op = 'increment'),
+                  ),
+                  SizedBox(width: 8),
+                  ChoiceChip(
+                    label: Text('Decrease by'),
+                    selected: op == 'decrement',
+                    onSelected: (_) => setModalState(() => op = 'decrement'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                final v = int.tryParse(ctrl.text);
+                if (v != null) Navigator.pop(ctx, {'value': v, 'op': op});
+              },
+              child: Text('Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null) return;
+    final v = result['value'] as int?;
+    final operation = result['op'] as String? ?? 'set';
+    if (v == null) return;
+    try {
+      await fireStoreUtils.bulkUpdateProductsStock(
+          _selectedIds.toList(), v,
+          operation: operation);
+      setState(() {
+        _selectedIds.clear();
+        _isSelectionMode = false;
+      });
+      if (mounted) EasyLoading.showSuccess('Stock updated');
+    } catch (e) {
+      if (mounted) EasyLoading.showError('Failed: $e');
+    }
+  }
+
   showProductOptionsSheet(ProductModel productModel) {
     final action = CupertinoActionSheet(
       message: Text(
-        'Are you sure you want to delete this product?'.tr(),
+        'Are you sure you want to delete this product?',
         style: TextStyle(fontSize: 15.0),
-      ).tr(),
+      ),
       title: Text(
         '${productModel.name}',
         style: TextStyle(fontSize: 17.0),
       ),
       actions: <Widget>[
         CupertinoActionSheetAction(
-          child: Text("YesSureToDelete").tr(),
+          child: Text("YesSureToDelete"),
           isDestructiveAction: true,
           onPressed: () async {
             Navigator.pop(context);
@@ -495,7 +1088,7 @@ class _ManageProductsScreenState extends State<ManageProductsScreen> {
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel').tr(),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },

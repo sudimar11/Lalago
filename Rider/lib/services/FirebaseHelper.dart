@@ -39,6 +39,7 @@ import 'package:foodie_driver/model/ChatVideoContainer.dart';
 import 'package:foodie_driver/model/CurrencyModel.dart';
 import 'package:foodie_driver/model/OrderModel.dart';
 import 'package:foodie_driver/model/User.dart';
+import 'package:foodie_driver/model/Ratingmodel.dart';
 import 'package:foodie_driver/model/VendorModel.dart';
 import 'package:foodie_driver/model/withdrawHistoryModel.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
@@ -408,6 +409,68 @@ class FireStoreUtils {
     _contactUsCache = result;
     _contactUsCachedAt = now;
     return result;
+  }
+
+  static Stream<List<RatingModel>> getReviewsByDriver(String driverId) {
+    return firestore
+        .collection(Order_Rating)
+        .where('driverId', isEqualTo: driverId)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((doc) => RatingModel.fromJson({
+                  ...doc.data(),
+                  'Id': doc.id,
+                  'id': doc.id,
+                }))
+            .toList());
+  }
+
+  static Future<void> addReviewReply(
+    String reviewId,
+    String text, {
+    required String userId,
+    required String userType,
+    required String userName,
+  }) async {
+    final reply = {
+      'userId': userId,
+      'userType': userType,
+      'userName': userName,
+      'text': text,
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    await firestore.collection(Order_Rating).doc(reviewId).update({
+      'replies': FieldValue.arrayUnion([reply]),
+    });
+  }
+
+  static Future<void> flagReview(
+    String reviewId, {
+    required String userId,
+    required String reason,
+  }) async {
+    final flagEntry = {
+      'userId': userId,
+      'reason': reason,
+      'timestamp': FieldValue.serverTimestamp(),
+    };
+    final ref = firestore.collection(Order_Rating).doc(reviewId);
+    final doc = await ref.get();
+    if (!doc.exists) return;
+    final data = doc.data() ?? {};
+    final flaggedBy = List<Map<String, dynamic>>.from(
+      (data['flaggedBy'] as List?)
+              ?.map((e) => Map<String, dynamic>.from(
+                    e is Map ? e : <String, dynamic>{},
+                  )) ??
+          [],
+    );
+    final updates = <String, dynamic>{
+      'flaggedBy': FieldValue.arrayUnion([flagEntry]),
+    };
+    if (flaggedBy.isEmpty) updates['status'] = 'flagged';
+    await ref.update(updates);
   }
 
   static Future createPaymentId({collectionName = "wallet"}) async {

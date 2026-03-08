@@ -68,6 +68,10 @@ class OrderModel {
   // Referral wallet usage
   double? referralWalletAmountUsed; // Amount of referral wallet used in this order
 
+  // Gift card usage
+  double? giftCardAmountUsed;
+  List<Map<String, dynamic>>? giftCardBreakdown; // [{cardId, amount}]
+
   double _tryParseDouble(dynamic value) {
     if (value == null) return 0.0;
     if (value is num) return value.toDouble();
@@ -143,7 +147,9 @@ class OrderModel {
       this.manualCouponId,
       this.manualCouponDiscountAmount,
       this.manualCouponImage,
-      this.referralWalletAmountUsed})
+      this.referralWalletAmountUsed,
+      this.giftCardAmountUsed,
+      this.giftCardBreakdown})
       : this.author = author ?? User(),
         this.createdAt = createdAt ?? Timestamp.now(),
         this.vendor = vendor ?? VendorModel();
@@ -310,6 +316,17 @@ class OrderModel {
                       parsedJson['referralWalletAmountUsed'].toString()) ??
                   0.0)
           : null,
+      giftCardAmountUsed: parsedJson['giftCardAmountUsed'] != null
+          ? (parsedJson['giftCardAmountUsed'] is num
+              ? (parsedJson['giftCardAmountUsed'] as num).toDouble()
+              : double.tryParse(
+                      parsedJson['giftCardAmountUsed'].toString()) ?? 0.0)
+          : null,
+      giftCardBreakdown: parsedJson['giftCardBreakdown'] != null
+          ? (parsedJson['giftCardBreakdown'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList()
+          : null,
     );
   }
 
@@ -367,6 +384,8 @@ class OrderModel {
       "manualCouponDiscountAmount": this.manualCouponDiscountAmount,
       "manualCouponImage": this.manualCouponImage,
       "referralWalletAmountUsed": this.referralWalletAmountUsed,
+      "giftCardAmountUsed": this.giftCardAmountUsed,
+      "giftCardBreakdown": this.giftCardBreakdown,
     };
   }
 }

@@ -1,6 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
@@ -41,7 +41,7 @@ class _HistoryTableBookingState extends State<HistoryTableBooking> {
               );
             if (!snapshot.hasData || (snapshot.data?.isEmpty ?? true)) {
               return Center(
-                child: showEmptyState('No Previous Booking'.tr(), "bookTable".tr()),
+                child: showEmptyState('No Previous Booking', "bookTable"),
               );
             } else {
               // ordersList = snapshot.data!;
@@ -124,7 +124,7 @@ class _HistoryTableBookingState extends State<HistoryTableBooking> {
                                     Padding(
                                       padding: const EdgeInsets.only(top: 6),
                                       child: Text(
-                                        "Table Booking Request".tr(),
+                                        "Table Booking Request",
                                         style: TextStyle(
                                           fontFamily: "Poppinssm",
                                           color: isDarkMode(context) ? Colors.white60 : Color(GREY_TEXT_COLOR),
@@ -139,7 +139,7 @@ class _HistoryTableBookingState extends State<HistoryTableBooking> {
                         ),
                         ListTile(
                           title: Text(
-                            'Name'.tr(),
+                            'Name',
                             style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black),
                           ),
                           leading: Icon(Icons.person_outline, color: isDarkMode(context) ? Colors.white : Colors.black),
@@ -151,7 +151,7 @@ class _HistoryTableBookingState extends State<HistoryTableBooking> {
                         ),
                         ListTile(
                           title: Text(
-                            'Phone Number'.tr(),
+                            'Phone Number',
                             style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black),
                           ),
                           leading: Icon(Icons.phone, color: isDarkMode(context) ? Colors.white : Colors.black),
@@ -163,7 +163,7 @@ class _HistoryTableBookingState extends State<HistoryTableBooking> {
                         ),
                         ListTile(
                           title: Text(
-                            'Date'.tr(),
+                            'Date',
                             style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black),
                           ),
                           leading: Icon(Icons.date_range, color: isDarkMode(context) ? Colors.white : Colors.black),
@@ -175,7 +175,7 @@ class _HistoryTableBookingState extends State<HistoryTableBooking> {
                         ),
                         ListTile(
                           title: Text(
-                            'Guest'.tr(),
+                            'Guest',
                             style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black),
                           ),
                           leading: Icon(Icons.group, color: isDarkMode(context) ? Colors.white : Colors.black87),

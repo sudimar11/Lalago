@@ -14,8 +14,17 @@ const EngagementAnalytics = require('./engagementAnalytics');
 const NotificationBuilder = require('./notificationBuilder');
 const AshNotificationBuilder = require('./ashNotificationBuilder');
 const { trackNotificationAction } = require('./notificationActionAnalytics');
+const loyaltyHelpers = require('./loyaltyHelpers');
+const giftCardFunctions = require('./giftCardFunctions');
 
 exports.trackNotificationAction = trackNotificationAction;
+exports.createGiftCard = giftCardFunctions.createGiftCard;
+exports.validateGiftCard = giftCardFunctions.validateGiftCard;
+exports.redeemGiftCard = giftCardFunctions.redeemGiftCard;
+exports.claimGiftCard = giftCardFunctions.claimGiftCard;
+exports.migrateLegacyGiftCards = giftCardFunctions.migrateLegacyGiftCards;
+exports.processExpiredGiftCards = giftCardFunctions.processExpiredGiftCards;
+exports.refundGiftCard = giftCardFunctions.refundGiftCard;
 
 // Lazy initialization functions - only called inside Cloud Functions
 function initializeAdmin() {
@@ -5001,7 +5010,7 @@ exports.sendBroadcastNotifications = functions.region('us-central1').https.onReq
  */
 exports.processNotificationJob = functions
   .region('us-central1')
-  .runWith({ timeoutSeconds: 540, memory: '256MB' })
+  .runWith({ timeoutSeconds: 540, memory: '1GB' })
   .firestore.document('notification_jobs/{jobId}')
   .onCreate(async (snap, context) => {
     const jobId = context.params.jobId;
@@ -5009,13 +5018,14 @@ exports.processNotificationJob = functions
     const kind = String(job.kind || '').trim();
     const payload = job.payload && typeof job.payload === 'object' ? job.payload : {};
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/4503ab82-cc6d-4a10-828e-d233928c2cbf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'functions/processNotificationJob:onCreate', message: 'triggered', data: { jobId, kind }, hypothesisId: 'H3', timestamp: Date.now() }) }).catch(() => {});
+    const _log = (h, msg, d) => { try { console.log('[DBG-0fb808] ' + JSON.stringify({ hypothesisId: h, message: msg, data: d || {}, timestamp: Date.now() })); } catch (_) {} };
+    _log('H1', 'triggered', { jobId, kind, segment: payload.segment });
     // #endregion
 
     const jobRef = snap.ref;
     const now = admin.firestore.FieldValue.serverTimestamp();
 
-    if (kind !== 'broadcast' && kind !== 'happy_hour') {
+    if (kind !== 'broadcast' && kind !== 'happy_hour' && kind !== 'segment') {
       await jobRef.set(
         {
           status: 'failed',
@@ -5048,6 +5058,13 @@ exports.processNotificationJob = functions
       return;
     }
 
+    // Check if job was cancelled before we started (e.g. admin cancelled quickly)
+    const freshSnap = await jobRef.get();
+    if (freshSnap.exists && (freshSnap.data() || {}).status === 'cancelled') {
+      console.log(`[processNotificationJob] Job ${jobId} was cancelled, skipping`);
+      return;
+    }
+
     await jobRef.set(
       {
         status: 'in_progress',
@@ -5064,72 +5081,66 @@ exports.processNotificationJob = functions
 
     try {
       const db = getDb();
-      // Fetch all active customers with FCM tokens
-      const usersSnapshot = await db
+      // Build query: all active customers, optionally filtered by segment
+      let usersQuery = db
         .collection('users')
         .where('role', '==', 'customer')
-        .where('active', '==', true)
-        .get();
+        .where('active', '==', true);
 
-      const fcmTokens = [];
-      for (const userDoc of usersSnapshot.docs) {
-        const tokens = await _getUserFcmTokens(db, userDoc.id);
-        fcmTokens.push(...tokens);
+      const segment = payload.segment;
+      const segmentFilter = (
+        kind === 'segment' &&
+        segment &&
+        typeof segment === 'string' &&
+        segment.trim() !== '' &&
+        segment.trim().toLowerCase() !== 'all'
+      );
+      if (segmentFilter) {
+        usersQuery = usersQuery.where('segment', '==', segment.trim().toLowerCase());
       }
-
-      const totalUsers = fcmTokens.length;
-      await jobRef.set({ totalUsers: totalUsers, updatedAt: now }, { merge: true });
+      usersQuery = usersQuery.orderBy('__name__');
       // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/4503ab82-cc6d-4a10-828e-d233928c2cbf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'functions/processNotificationJob:after_users', message: 'fcm_tokens', data: { totalUsers, userDocs: usersSnapshot.size }, hypothesisId: 'H3', timestamp: Date.now() }) }).catch(() => {});
+      _log('H2', 'before_query', { segment: payload.segment, segmentFilter, kind });
       // #endregion
 
-      if (totalUsers === 0) {
-        await jobRef.set(
-          {
-            status: 'completed',
-            completedAt: now,
-            updatedAt: now,
-          },
-          { merge: true }
-        );
-        return;
-      }
-
-      const BATCH_SIZE = 500;
+      const FCM_BATCH_SIZE = 500;
+      const USER_PAGE_SIZE = 200;
+      let lastDoc = null;
+      let totalUsers = 0;
       let sentCount = 0;
       let errorCount = 0;
       let processedCount = 0;
+      let batchNumber = 0;
       const firstErrors = [];
+      let tokenAccumulator = [];
 
-      for (let i = 0; i < fcmTokens.length; i += BATCH_SIZE) {
-        const batch = fcmTokens.slice(i, i + BATCH_SIZE);
-        const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-
-        const message = {
-          notification: { title: title, body: body },
-          data: {
-            type: type,
-            timestamp: Date.now().toString(),
-          },
-          tokens: batch,
+      const buildMessage = (tokens) => {
+        const msg = {
+          notification: { title, body },
+          data: { type, timestamp: Date.now().toString() },
+          tokens,
         };
-
         if (payload.imageUrl && String(payload.imageUrl).trim().length > 0) {
-          message.notification.imageUrl = String(payload.imageUrl).trim();
+          msg.notification.imageUrl = String(payload.imageUrl).trim();
         }
         if (payload.deepLink && String(payload.deepLink).trim().length > 0) {
-          message.data.deepLink = String(payload.deepLink).trim();
+          msg.data.deepLink = String(payload.deepLink).trim();
         }
         if (payload.targetScreen && String(payload.targetScreen).trim().length > 0) {
-          message.data.targetScreen = String(payload.targetScreen).trim();
+          msg.data.targetScreen = String(payload.targetScreen).trim();
         }
+        return msg;
+      };
 
+      const sendTokenBatch = async (batch) => {
+        if (batch.length === 0) return;
+        batchNumber++;
+        const message = buildMessage(batch);
         try {
           const resp = await getMessaging().sendEachForMulticast(message);
           sentCount += resp.successCount;
           errorCount += resp.failureCount;
           processedCount += batch.length;
-
           if (resp.failureCount > 0 && firstErrors.length < 10) {
             resp.responses.forEach((r, idx) => {
               if (firstErrors.length >= 10) return;
@@ -5142,39 +5153,145 @@ exports.processNotificationJob = functions
               }
             });
           }
-        } catch (batchError) {
+        } catch (batchErr) {
           errorCount += batch.length;
           processedCount += batch.length;
           if (firstErrors.length < 10) {
             firstErrors.push({
               batch: batchNumber,
-              errorCode: batchError.code || 'BATCH_SEND_ERROR',
-              error: batchError.message || 'Batch send failed',
+              errorCode: batchErr.code || 'BATCH_SEND_ERROR',
+              error: batchErr.message || 'Batch send failed',
             });
           }
         }
+      };
 
-        await jobRef.set(
-          {
-            sentCount: sentCount,
-            errorCount: errorCount,
-            processedCount: processedCount,
+      await jobRef.set({
+        totalUsers: 0,
+        stats: {
+          totalRecipients: 0,
+          processedCount: 0,
+          successfulDeliveries: 0,
+          failedDeliveries: 0,
+          currentBatchNumber: 0,
+          totalBatches: 0,
+          percentComplete: 0,
+          lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        batchStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: now,
+      }, { merge: true });
+
+      let hasMore = true;
+      while (hasMore) {
+        const batchSnap = await jobRef.get();
+        if (batchSnap.exists && (batchSnap.data() || {}).status === 'cancelled') {
+          console.log(`[processNotificationJob] Job ${jobId} cancelled, stopping`);
+          break;
+        }
+
+        let pageQuery = usersQuery.limit(USER_PAGE_SIZE);
+        if (lastDoc) pageQuery = pageQuery.startAfter(lastDoc);
+        const usersSnapshot = await pageQuery.get();
+        // #region agent log
+        _log('H2', 'after_query_page', { pageSize: usersSnapshot.size });
+        // #endregion
+
+        if (usersSnapshot.empty) {
+          hasMore = false;
+          break;
+        }
+
+        for (const userDoc of usersSnapshot.docs) {
+          const tokens = await _getUserFcmTokens(db, userDoc.id);
+          for (const t of tokens) {
+            tokenAccumulator.push(t);
+            if (tokenAccumulator.length >= FCM_BATCH_SIZE) {
+              await sendTokenBatch(tokenAccumulator);
+              tokenAccumulator = [];
+              const knownTotal = processedCount + tokenAccumulator.length;
+              const pct = knownTotal > 0 ? Math.round((processedCount / knownTotal) * 100) : 0;
+              await jobRef.set({
+                totalUsers: processedCount,
+                sentCount,
+                errorCount,
+                processedCount,
+                errors: firstErrors,
+                stats: {
+                  totalRecipients: processedCount,
+                  processedCount,
+                  successfulDeliveries: sentCount,
+                  failedDeliveries: errorCount,
+                  currentBatchNumber: batchNumber,
+                  totalBatches: batchNumber,
+                  percentComplete: pct,
+                  lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                },
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              }, { merge: true });
+            }
+          }
+        }
+
+        const knownTotal = processedCount + tokenAccumulator.length;
+        if (knownTotal > 0) {
+          const pct = Math.round((processedCount / knownTotal) * 100);
+          await jobRef.set({
+            totalUsers: knownTotal,
+            sentCount,
+            errorCount,
+            processedCount,
             errors: firstErrors,
+            stats: {
+              totalRecipients: knownTotal,
+              processedCount,
+              successfulDeliveries: sentCount,
+              failedDeliveries: errorCount,
+              currentBatchNumber: batchNumber,
+              totalBatches: batchNumber,
+              percentComplete: pct,
+              lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
+          }, { merge: true });
+        }
+
+        lastDoc = usersSnapshot.docs[usersSnapshot.docs.length - 1];
+        hasMore = usersSnapshot.size === USER_PAGE_SIZE;
       }
 
-      await jobRef.set(
-        {
-          status: 'completed',
-          completedAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      if (tokenAccumulator.length > 0) {
+        await sendTokenBatch(tokenAccumulator);
+      }
+      totalUsers = processedCount;
+      // #region agent log
+      _log('H3', 'after_all', { totalUsers, sentCount, errorCount });
+      // #endregion
+
+      await jobRef.set({
+        status: 'completed',
+        totalUsers,
+        sentCount,
+        errorCount,
+        processedCount,
+        errors: firstErrors,
+        stats: {
+          totalRecipients: totalUsers,
+          processedCount,
+          successfulDeliveries: sentCount,
+          failedDeliveries: errorCount,
+          currentBatchNumber: batchNumber,
+          totalBatches: batchNumber,
+          percentComplete: 100,
+          lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
-        { merge: true }
-      );
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
     } catch (error) {
+      // #region agent log
+      _log('H4', 'catch_error', { errorCode: error.code, errorMessage: error.message, jobId });
+      // #endregion
       console.error(`[processNotificationJob] Fatal error jobId=${jobId}`, error);
       const code = error.code || (error.errorInfo && error.errorInfo.code);
       const msg = error.message || String(error);
@@ -7020,6 +7137,27 @@ exports.sendOrderStatusNotification = functions
 
     if (beforeStatus === afterStatus) return null;
 
+    // Refund gift cards when order is cancelled
+    if (afterStatus === 'Order Cancelled') {
+      const breakdown = afterData.giftCardBreakdown;
+      if (Array.isArray(breakdown) && breakdown.length > 0) {
+        const db = getDb();
+        const refundHelper = giftCardFunctions._refundGiftCardForOrder;
+        for (const entry of breakdown) {
+          const cardId = entry?.cardId;
+          const amount = Number(entry?.amount);
+          if (cardId && !isNaN(amount) && amount > 0) {
+            try {
+              await refundHelper(db, cardId, amount, orderId);
+              console.log(`[sendOrderStatusNotification] Gift card refunded: cardId=${cardId} amount=${amount}`);
+            } catch (e) {
+              console.error(`[sendOrderStatusNotification] Gift card refund failed:`, e);
+            }
+          }
+        }
+      }
+    }
+
     const customerId = String(
       afterData.authorID ||
         afterData.authorId ||
@@ -7311,6 +7449,393 @@ exports.awardReferralCreditsOnOrderCompletion = functions.firestore
     return null;
   });
 
+/**
+ * Firestore Trigger: Award loyalty token on order completion
+ *
+ * Triggered on restaurant_orders/{orderId} document updates.
+ * Runs only when status transitions to 'Order Completed'.
+ * Idempotency: loyalty_credits/{customerId}_{orderId}
+ */
+exports.awardLoyaltyTokenOnOrderCompletion = functions.firestore
+  .document('restaurant_orders/{orderId}')
+  .onUpdate(async (change, context) => {
+    const orderId = String(context.params.orderId || '');
+    const beforeData = change.before.data() || {};
+    const afterData = change.after.data() || {};
+
+    const beforeStatus = String(beforeData.status || '');
+    const afterStatus = String(afterData.status || '');
+
+    if (
+      !(
+        beforeStatus !== 'Order Completed' &&
+        afterStatus === 'Order Completed'
+      )
+    ) {
+      return null;
+    }
+
+    const customerId = String(
+      afterData.authorID ||
+        afterData.authorId ||
+        afterData.customerId ||
+        afterData.customerID ||
+        ''
+    );
+
+    if (!customerId) {
+      console.log(
+        `[awardLoyaltyTokenOnOrderCompletion] Skip: missing customerId. orderId=${orderId}`
+      );
+      return null;
+    }
+
+    const db = getDb();
+
+    try {
+      const configSnap = await db
+        .collection('settings')
+        .doc('loyaltyConfig')
+        .get();
+      if (!configSnap.exists) {
+        console.log(
+          `[awardLoyaltyTokenOnOrderCompletion] Skip: no loyaltyConfig. orderId=${orderId}`
+        );
+        return null;
+      }
+
+      const config = configSnap.data() || {};
+      if (!config.enabled) {
+        console.log(
+          `[awardLoyaltyTokenOnOrderCompletion] Skip: loyalty disabled. orderId=${orderId}`
+        );
+        return null;
+      }
+
+      const tokensPerOrder = Number(config.tokensPerOrder || 1);
+      const tz = (config.cycles && config.cycles.timezone) || 'Asia/Manila';
+
+      const loyaltyCreditRef = db
+        .collection('loyalty_credits')
+        .doc(`${customerId}_${orderId}`);
+
+      const creditSnap = await loyaltyCreditRef.get();
+      if (creditSnap.exists) {
+        console.log(
+          `[awardLoyaltyTokenOnOrderCompletion] Skip: already credited. customerId=${customerId} orderId=${orderId}`
+        );
+        return null;
+      }
+
+      const orderDate =
+        afterData.deliveredAt ||
+        afterData.createdAt ||
+        admin.firestore.FieldValue.serverTimestamp();
+      let orderDateForCycle = new Date();
+      if (orderDate && typeof orderDate.toDate === 'function') {
+        orderDateForCycle = orderDate.toDate();
+      } else if (orderDate && orderDate.seconds != null) {
+        orderDateForCycle = new Date(orderDate.seconds * 1000);
+      }
+
+      const calculatedCycle = loyaltyHelpers.getCurrentCycle(
+        orderDateForCycle,
+        config
+      );
+
+      const customerRef = db.collection('users').doc(customerId);
+      const customerSnap = await customerRef.get();
+      if (!customerSnap.exists) {
+        console.log(
+          `[awardLoyaltyTokenOnOrderCompletion] Skip: customer not found. customerId=${customerId} orderId=${orderId}`
+        );
+        return null;
+      }
+
+      const customer = customerSnap.data() || {};
+      let loyalty = customer.loyalty || {};
+      const currentCycle = loyalty.currentCycle || '';
+      let tokensThisCycle = Number(loyalty.tokensThisCycle || 0);
+      let lifetimeTokens = Number(loyalty.lifetimeTokens || 0);
+      let previousCycle = loyalty.previousCycle || null;
+      let previousTier = loyalty.previousTier || null;
+      let previousTokens = loyalty.previousTokens ?? null;
+      let tierHistory = Array.isArray(loyalty.tierHistory)
+        ? [...loyalty.tierHistory]
+        : [];
+      let rewardsClaimed = Array.isArray(loyalty.rewardsClaimed)
+        ? loyalty.rewardsClaimed
+        : [];
+
+      if (currentCycle && currentCycle !== calculatedCycle) {
+        previousCycle = currentCycle;
+        previousTier = loyalty.currentTier || 'bronze';
+        previousTokens = tokensThisCycle;
+        tokensThisCycle = 0;
+      }
+
+      tokensThisCycle += tokensPerOrder;
+      lifetimeTokens += tokensPerOrder;
+
+      const previousTierName = loyalty.currentTier || 'bronze';
+      const newTier = loyaltyHelpers.getTierFromTokens(tokensThisCycle, config);
+
+      if (newTier !== previousTierName) {
+        tierHistory.push({
+          tier: newTier,
+          achievedAt: admin.firestore.FieldValue.serverTimestamp(),
+          cycle: calculatedCycle,
+        });
+      }
+
+      const { start, end } = loyaltyHelpers.getCycleDateRange(
+        calculatedCycle,
+        tz
+      );
+
+      const loyaltyUpdate = {
+        currentCycle: calculatedCycle,
+        cycleStartDate: admin.firestore.Timestamp.fromDate(start),
+        cycleEndDate: admin.firestore.Timestamp.fromDate(end),
+        tokensThisCycle,
+        currentTier: newTier,
+        lifetimeTokens,
+        rewardsClaimed,
+        tierHistory,
+      };
+      if (previousCycle != null) loyaltyUpdate.previousCycle = previousCycle;
+      if (previousTier != null) loyaltyUpdate.previousTier = previousTier;
+      if (previousTokens != null)
+        loyaltyUpdate.previousTokens = previousTokens;
+
+      await db.runTransaction(async (transaction) => {
+        transaction.update(customerRef, { loyalty: loyaltyUpdate });
+        transaction.set(loyaltyCreditRef, {
+          customerId,
+          orderId,
+          tokens: tokensPerOrder,
+          cycle: calculatedCycle,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+
+      console.log(
+        `[awardLoyaltyTokenOnOrderCompletion] Success. customerId=${customerId} orderId=${orderId} tokens=${tokensPerOrder} tier=${newTier}`
+      );
+
+      if (newTier !== previousTierName) {
+        try {
+          const customerTokens = await _getUserFcmTokens(db, customerId);
+          if (customerTokens.length > 0) {
+            const tierDisplay = newTier.charAt(0).toUpperCase() + newTier.slice(1);
+            const messagePayload = {
+              notification: {
+                title: 'Level Up!',
+                body: `Congratulations! You're now a ${tierDisplay} member!`,
+              },
+              data: {
+                type: 'loyalty_tier_up',
+                newTier,
+                customerId,
+              },
+              android: {
+                priority: 'high',
+                notification: { sound: 'default' },
+              },
+              apns: {
+                payload: { aps: { sound: 'default' } },
+              },
+            };
+            const multicastMessage = {
+              ...messagePayload,
+              tokens: customerTokens,
+            };
+            await getMessaging().sendEachForMulticast(multicastMessage);
+            console.log(
+              `[awardLoyaltyTokenOnOrderCompletion] Tier-up FCM sent. customerId=${customerId} newTier=${newTier}`
+            );
+          }
+        } catch (fcmErr) {
+          console.error(
+            `[awardLoyaltyTokenOnOrderCompletion] FCM failed:`,
+            fcmErr
+          );
+        }
+      }
+    } catch (error) {
+      console.error(
+        `[awardLoyaltyTokenOnOrderCompletion] Error. customerId=${customerId} orderId=${orderId}:`,
+        error
+      );
+    }
+
+    return null;
+  });
+
+/**
+ * Callable: claimLoyaltyReward
+ * Validates claim, adds to rewardsClaimed, applies wallet credit if applicable.
+ */
+exports.claimLoyaltyReward = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Must be authenticated',
+      );
+    }
+
+    const userId = context.auth.uid;
+    const rewardId = (data?.rewardId || '').toString().trim();
+    if (!rewardId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'rewardId required',
+      );
+    }
+
+    const db = getDb();
+
+    const configSnap = await db
+      .collection('settings')
+      .doc('loyaltyConfig')
+      .get();
+    if (!configSnap.exists) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Loyalty program not configured',
+      );
+    }
+
+    const config = configSnap.data() || {};
+    if (!config.enabled) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Loyalty program is disabled',
+      );
+    }
+
+    const userRef = db.collection('users').doc(userId);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'User not found',
+      );
+    }
+
+    const user = userSnap.data() || {};
+    const loyalty = user.loyalty || {};
+    const currentTier = loyalty.currentTier || 'bronze';
+    const currentCycle = loyalty.currentCycle || '';
+    const rewardsClaimed = Array.isArray(loyalty.rewardsClaimed)
+      ? [...loyalty.rewardsClaimed]
+      : [];
+
+    if (!currentCycle) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'No active loyalty cycle',
+      );
+    }
+
+    const benefit = _resolveBenefitForRewardId(rewardId, currentTier, config);
+    if (!benefit) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'Reward not available for your tier',
+      );
+    }
+
+    const alreadyClaimed = rewardsClaimed.some(
+      (r) => r.rewardId === rewardId && r.cycle === currentCycle
+    );
+    if (alreadyClaimed) {
+      throw new functions.https.HttpsError(
+        'already-exists',
+        'Reward already claimed this cycle',
+      );
+    }
+
+    const tz = (config.cycles && config.cycles.timezone) || 'Asia/Manila';
+    const { end } = loyaltyHelpers.getCycleDateRange(currentCycle, tz);
+    const expiresAt = admin.firestore.Timestamp.fromDate(end);
+
+    const newReward = {
+      rewardId,
+      claimedAt: admin.firestore.FieldValue.serverTimestamp(),
+      cycle: currentCycle,
+      expiresAt,
+      orderId: null,
+    };
+
+    const benefitType = benefit.type || '';
+    let walletCreditAmount = 0;
+    if (benefitType === 'wallet_credit' && benefit.amount != null) {
+      walletCreditAmount = Number(benefit.amount) || 0;
+    }
+
+    await db.runTransaction(async (transaction) => {
+      rewardsClaimed.push(newReward);
+      const loyaltyUpdate = {
+        ...loyalty,
+        rewardsClaimed,
+      };
+
+      const updateData = { loyalty: loyaltyUpdate };
+      if (walletCreditAmount > 0) {
+        const prevWallet = Number(user.wallet_amount || 0);
+        updateData.wallet_amount = prevWallet + walletCreditAmount;
+      }
+
+      transaction.update(userRef, updateData);
+    });
+
+    return {
+      success: true,
+      rewardId,
+      walletCredit: walletCreditAmount,
+    };
+  });
+
+function _resolveBenefitForRewardId(rewardId, tier, config) {
+  const benefitsConfig = config.benefits || {};
+  const benefits = _getAllBenefitsForTier(tier, benefitsConfig);
+  for (const b of benefits) {
+    const bid = _benefitToRewardId(b);
+    if (bid === rewardId) return b;
+  }
+  return null;
+}
+
+function _getAllBenefitsForTier(tier, benefitsConfig) {
+  const result = [];
+  const list = benefitsConfig[tier];
+  if (!Array.isArray(list)) return result;
+  for (const item of list) {
+    if (item && typeof item === 'object') {
+      if (item.type === 'inherits' && item.from) {
+        result.push(..._getAllBenefitsForTier(item.from, benefitsConfig));
+      } else {
+        result.push(item);
+      }
+    }
+  }
+  return result;
+}
+
+function _benefitToRewardId(b) {
+  const type = (b.type || '').toString();
+  if (type === 'free_delivery') return 'free_delivery';
+  if (type === 'wallet_credit') {
+    const amt = b.amount != null ? b.amount : 50;
+    return `wallet_credit_${amt}`;
+  }
+  if (type === 'badge') return `badge_${b.name || 'vip'}`;
+  return type;
+}
+
 // ============================================================
 // Phase 4D: Enrich dispatch_events when an order is completed
 // ============================================================
@@ -7457,8 +7982,8 @@ exports.orderCompletionEnrichment = functions.firestore
       let customerRating = null;
       try {
         const reviewSnap = await db
-          .collection('reviews')
-          .where('orderId', '==', orderId)
+          .collection('foods_review')
+          .where('orderid', '==', orderId)
           .limit(1)
           .get();
         if (!reviewSnap.empty) {
@@ -8075,12 +8600,12 @@ async function _recalculateRiderPerformance(riderId) {
     console.error(`[PerfRecalc] assignments_log error for ${riderId}:`, e);
   }
 
-  // 2) Average customer rating from last 50 reviews
+  // 2) Average customer rating from last 50 reviews (foods_review collection)
   let averageRating = 0;
   let hasRatings = false;
   try {
     const reviewsSnap = await db
-      .collection('reviews')
+      .collection('foods_review')
       .where('driverId', '==', riderId)
       .orderBy('createdAt', 'desc')
       .limit(50)
@@ -8101,7 +8626,7 @@ async function _recalculateRiderPerformance(riderId) {
       }
     }
   } catch (e) {
-    console.error(`[PerfRecalc] reviews error for ${riderId}:`, e);
+    console.error(`[PerfRecalc] foods_review error for ${riderId}:`, e);
   }
 
   // 3) Attendance score (existing driver_performance as attendance input)
@@ -8162,17 +8687,141 @@ async function _recalculateRiderPerformance(riderId) {
   );
 }
 
-// Trigger: recalculate when a customer review is created
+// Trigger: recalculate when a customer review is created (foods_review)
+// Also sends FCM to restaurant (vendor) and rider when review is created.
 exports.onReviewCreated = functions.firestore
-  .document('reviews/{reviewId}')
-  .onCreate(async (snap) => {
+  .document('foods_review/{reviewId}')
+  .onCreate(async (snap, context) => {
+    const reviewId = context.params.reviewId;
     const data = snap.data() || {};
     const riderId = String(data.driverId || '');
-    if (!riderId) return null;
+    const vendorId = String(data.VendorId || data.vendorId || '');
+    const rating = (data.rating != null) ? Number(data.rating) : 0;
+    const comment = String(data.comment || '').substring(0, 80);
+
     try {
-      await _recalculateRiderPerformance(riderId);
+      if (riderId) {
+        await _recalculateRiderPerformance(riderId);
+        console.log(`[onReviewCreated] Recalculated performance for rider ${riderId}`);
+      }
     } catch (e) {
-      console.error('[onReviewCreated] Error:', e);
+      console.error('[onReviewCreated] Error recalculating rider perf:', e);
+    }
+
+    const db = getDb();
+    const messaging = getMessaging();
+
+    // Notify restaurant (vendor)
+    if (vendorId) {
+      try {
+        const vendorTokens = await _getVendorFcmTokens(db, vendorId);
+        const title = 'New review';
+        const body = rating > 0
+          ? `${rating}★${comment ? `: ${comment}` : ''}`
+          : (comment || 'New customer feedback');
+        for (const token of vendorTokens) {
+          try {
+            await messaging.send({
+              token,
+              notification: { title, body },
+              data: {
+                type: 'new_review',
+                reviewId,
+                vendorId,
+                rating: String(rating),
+                timestamp: Date.now().toString(),
+              },
+              android: { priority: 'high' },
+              apns: { payload: { aps: { sound: 'default' } } },
+            });
+          } catch (err) {
+            console.warn('[onReviewCreated] FCM to vendor failed:', err.message);
+          }
+        }
+        if (vendorTokens.length > 0) {
+          console.log(`[onReviewCreated] Sent FCM to vendor ${vendorId}`);
+        }
+      } catch (e) {
+        console.error('[onReviewCreated] Error notifying vendor:', e);
+      }
+    }
+
+    // Notify rider
+    if (riderId) {
+      try {
+        const riderTokens = await _getUserFcmTokens(db, riderId);
+        const title = 'New rating';
+        const body = rating > 0
+          ? `${rating}★${comment ? `: ${comment}` : ''}`
+          : 'You received new feedback';
+        for (const token of riderTokens) {
+          try {
+            await messaging.send({
+              token,
+              notification: { title, body },
+              data: {
+                type: 'new_rider_review',
+                reviewId,
+                driverId: riderId,
+                rating: String(rating),
+                timestamp: Date.now().toString(),
+              },
+              android: { priority: 'high' },
+              apns: { payload: { aps: { sound: 'default' } } },
+            });
+          } catch (err) {
+            console.warn('[onReviewCreated] FCM to rider failed:', err.message);
+          }
+        }
+        if (riderTokens.length > 0) {
+          console.log(`[onReviewCreated] Sent FCM to rider ${riderId}`);
+        }
+      } catch (e) {
+        console.error('[onReviewCreated] Error notifying rider:', e);
+      }
+    }
+
+    return null;
+  });
+
+// Trigger: notify admins when a review is flagged
+exports.onReviewFlagged = functions.firestore
+  .document('foods_review/{reviewId}')
+  .onUpdate(async (change, context) => {
+    const after = change.after.data() || {};
+    const before = change.before.data() || {};
+    const wasFlagged = (before.flaggedBy || []).length > 0 || (before.status === 'flagged');
+    const isFlagged = (after.flaggedBy || []).length > 0 || (after.status === 'flagged');
+    if (wasFlagged || !isFlagged) return null;
+
+    const reviewId = context.params.reviewId;
+    const db = getDb();
+    const adminsSnap = await db.collection('users').where('role', '==', 'admin').get();
+    const tokens = [];
+    for (const doc of adminsSnap.docs) {
+      const t = doc.data()?.fcmToken;
+      if (t && typeof t === 'string' && t.trim()) tokens.push(t.trim());
+    }
+    if (tokens.length === 0) return null;
+
+    const rating = (after.rating != null) ? Number(after.rating) : 0;
+    const body = `Review flagged: ${rating}★ – ${String(after.comment || '').substring(0, 50)}`;
+    const msg = {
+      notification: { title: 'Review flagged', body },
+      data: {
+        type: 'review_flagged',
+        reviewId,
+        timestamp: Date.now().toString(),
+      },
+      tokens,
+      android: { priority: 'high' },
+      apns: { payload: { aps: { sound: 'default' } } },
+    };
+    try {
+      await getMessaging().sendEachForMulticast(msg);
+      console.log(`[onReviewFlagged] Notified ${tokens.length} admin(s)`);
+    } catch (e) {
+      console.error('[onReviewFlagged] FCM error:', e);
     }
     return null;
   });
@@ -8317,7 +8966,7 @@ exports.migratePerformanceFields = functions
         let hasRatings = false;
         try {
           const reviewsSnap = await db
-            .collection('reviews')
+            .collection('foods_review')
             .where('driverId', '==', riderId)
             .orderBy('createdAt', 'desc')
             .limit(50)
@@ -9574,7 +10223,10 @@ const {
 const {
   updateUserSegments,
   manualUpdateUserSegments,
+  runUserSegmentMigration,
   checkSegmentFields,
+  debugUserSegmentation,
+  fixSingleUnknownUser,
   migrateAllUserSegments,
   testFunctionWorks,
   debugSingleUser,
@@ -9587,7 +10239,10 @@ exports.aggregateDailyUserMetrics = aggregateDailyUserMetrics;
 exports.aggregateDailyRevenue = aggregateDailyRevenue;
 exports.updateUserSegments = updateUserSegments;
 exports.manualUpdateUserSegments = manualUpdateUserSegments;
+exports.runUserSegmentMigration = runUserSegmentMigration;
 exports.checkSegmentFields = checkSegmentFields;
+exports.debugUserSegmentation = debugUserSegmentation;
+exports.fixSingleUnknownUser = fixSingleUnknownUser;
 exports.migrateAllUserSegments = migrateAllUserSegments;
 exports.testFunctionWorks = testFunctionWorks;
 exports.debugSingleUser = debugSingleUser;
@@ -9615,6 +10270,31 @@ const {
 } = require('./exportService');
 exports.generateCSVExport = generateCSVExport;
 exports.scheduleWeeklyReport = scheduleWeeklyReport;
+
+// Happy Hour auto-create notification job
+const {
+  checkHappyHourAndCreateJob,
+} = require('./checkHappyHourAndCreateJob');
+exports.checkHappyHourAndCreateJob = checkHappyHourAndCreateJob;
+
+// Loyalty quarterly reset
+const { resetLoyaltyCycles } = require('./resetLoyaltyCycles');
+exports.resetLoyaltyCycles = resetLoyaltyCycles;
+
+// Demand forecasting
+const { aggregateForecastData } = require('./forecastAggregation');
+const { generateDemandForecasts } = require('./demandForecasting');
+exports.aggregateForecastData = aggregateForecastData;
+exports.generateDemandForecasts = generateDemandForecasts;
+
+// Driver performance analytics
+const driverMetrics = require('./driverMetrics');
+exports.processDriverMetrics = driverMetrics.processDriverMetrics;
+exports.calculateDriverIncentives = driverMetrics.calculateDriverIncentives;
+
+// Personalized loyalty offers
+const personalizedOffers = require('./personalizedOffers');
+exports.generatePersonalizedOffers = personalizedOffers.generatePersonalizedOffers;
 
 // Data retention and privacy
 const {

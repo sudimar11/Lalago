@@ -1,4 +1,3 @@
-import 'package:easy_localization/easy_localization.dart' as easyLocal;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:foodie_restaurant/constants.dart';
@@ -16,18 +15,18 @@ class _OnBoardingScreenState extends State<OnBoardingScreen> {
   PageController pageController = PageController();
   final List<String> _titlesList = [
     // easyLocal.tr('Welcome to '),
-    // 'Order Food'.tr(),
-    'Add Address'.tr(),
-    'Choose Your Favorite Food'.tr(),
-    'Fastest Delivery'.tr(),
+    // 'Order Food',
+    'Add Address',
+    'Choose Your Favorite Food',
+    'Fastest Delivery',
   ];
 
   final List<String> _subtitlesList = [
-    // 'Log in and order delicious food from restaurants around you.'.tr(),
-    // 'Hungry? Order food in just a few clicks and we\'ll take care of you.'.tr(),
-    'Find perfect restaurant nearby or  place order at your favorite restaurant in few clicks.'.tr().tr(),
-    'A diverse list of different dining restaurants throughout the territory and around your area carefully selected'.tr().tr(),
-    'Get your favorite food fastest delivered at your doorstep'.tr(),
+    // 'Log in and order delicious food from restaurants around you.',
+    // 'Hungry? Order food in just a few clicks and we\'ll take care of you.',
+    'Find perfect restaurant nearby or  place order at your favorite restaurant in few clicks.',
+    'A diverse list of different dining restaurants throughout the territory and around your area carefully selected',
+    'Get your favorite food fastest delivered at your doorstep',
   ];
 
   final List<dynamic> _imageList = [
@@ -80,7 +79,7 @@ class _OnBoardingScreenState extends State<OnBoardingScreen> {
                           backgroundColor: Color(COLOR_PRIMARY),
                         ),
                         child: Text(
-                          "GET STARTED".tr(),
+                          "GET STARTED",
                           style: TextStyle(fontSize: 16),
                         ),
                         onPressed: () {
@@ -98,7 +97,7 @@ class _OnBoardingScreenState extends State<OnBoardingScreen> {
               //           fontSize: 14.0,
               //           color: Colors.white,
               //           fontWeight: FontWeight.bold),
-              //     ).tr(),
+              //     ),
               //   ),
               // )),
               ),
@@ -151,7 +150,7 @@ class _OnBoardingScreenState extends State<OnBoardingScreen> {
                         pushReplacement(context, AuthScreen());
                       },
                       child: Text(
-                        "SKIP".tr(),
+                        "SKIP",
                         style: TextStyle(fontSize: 19, color: Color(COLOR_PRIMARY), fontFamily: 'Poppinsm'),
                       )))),
           Visibility(
@@ -171,7 +170,7 @@ class _OnBoardingScreenState extends State<OnBoardingScreen> {
                               backgroundColor: Color(COLOR_PRIMARY),
                             ),
                             child: Text(
-                              "NEXT".tr(),
+                              "NEXT",
                               style: TextStyle(fontSize: 16, color: isDarkMode(context) ? Color(0xffFFFFFF) : Color(0XFF333333)),
                             ),
                             onPressed: () {

@@ -3,7 +3,6 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/main.dart';
@@ -137,7 +136,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
       backgroundColor:
           isDarkMode(context) ? Color(COLOR_DARK) : Color(0xFFFFFFFF),
       appBar: AppBar(
-        title: Text('Restaurant Location'.tr()),
+        title: Text('Restaurant Location'),
         centerTitle: false,
         iconTheme: IconThemeData(
             color: isDarkMode(context) ? Colors.white : Colors.black),
@@ -152,7 +151,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                     Container(
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "Address".tr(),
+                          "Address",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -181,7 +180,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                           // : widget.vendor!.location.split(',')[0],
                           decoration: InputDecoration(
                             // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                            hintText: 'Address'.tr(),
+                            hintText: 'Address',
                             hintStyle: TextStyle(
                                 color: isDarkMode(context)
                                     ? Colors.white
@@ -203,7 +202,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                         padding: EdgeInsets.only(top: 20),
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "Apartment,suite,etc.".tr(),
+                          "Apartment,suite,etc.",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -231,7 +230,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             // initialValue: MyAppState.currentUser!.shippingAddress.line1,
                             decoration: InputDecoration(
                               // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                              hintText: 'Apartment,suite,etc.'.tr(),
+                              hintText: 'Apartment,suite,etc.',
                               hintStyle: TextStyle(
                                   color: isDarkMode(context)
                                       ? Colors.white
@@ -253,7 +252,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                         padding: EdgeInsets.only(top: 20),
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "City".tr(),
+                          "City",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -278,7 +277,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             // initialValue: MyAppState.currentUser!.shippingAddress.line1,
                             decoration: InputDecoration(
                               // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                              hintText: 'City'.tr(),
+                              hintText: 'City',
                               hintStyle: TextStyle(
                                   color: isDarkMode(context)
                                       ? Colors.white
@@ -300,7 +299,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                         padding: EdgeInsets.only(top: 20),
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "State".tr(),
+                          "State",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -325,7 +324,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             // initialValue: MyAppState.currentUser!.shippingAddress.line1,
                             decoration: InputDecoration(
                               // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                              hintText: 'State'.tr(),
+                              hintText: 'State',
                               hintStyle: TextStyle(
                                   color: isDarkMode(context)
                                       ? Colors.white
@@ -347,7 +346,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                         padding: EdgeInsets.only(top: 20),
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "Country".tr(),
+                          "Country",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -372,7 +371,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             // initialValue: MyAppState.currentUser!.shippingAddress.line1,
                             decoration: InputDecoration(
                               // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                              hintText: 'Country'.tr(),
+                              hintText: 'Country',
                               hintStyle: TextStyle(
                                   color: isDarkMode(context)
                                       ? Colors.white
@@ -408,11 +407,11 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             ],
                           ),
                           title: Text(
-                            "Current Location".tr(),
+                            "Current Location",
                             style: TextStyle(color: Color(COLOR_PRIMARY)),
                           ),
                           subtitle: Text(
-                            "Using GPS".tr(),
+                            "Using GPS",
                             style: TextStyle(color: Color(COLOR_PRIMARY)),
                           ),
                           onTap: () async {
@@ -500,7 +499,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                         builder: (_) {
                           return AlertDialog(
                             content:
-                                Text("selectLocationMovePinToLocation").tr(),
+                                Text("selectLocationMovePinToLocation"),
                             actions: [
                               // FlatButton(
                               //   onPressed: () => Navigator.pop(
@@ -512,7 +511,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                                   hideProgress();
                                   Navigator.pop(context, true);
                                 }, // passing true
-                                child: Text('OK'.tr()),
+                                child: Text('OK'),
                               ),
                             ],
                           );
@@ -529,14 +528,14 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                     builder: (_) {
                       return AlertDialog(
                         content:
-                            Text("selectLocationMovePinToLocation").tr(),
+                            Text("selectLocationMovePinToLocation"),
                         actions: [
                           TextButton(
                             onPressed: () {
                               hideProgress();
                               Navigator.pop(context, true);
                             },
-                            child: Text('OK'.tr()),
+                            child: Text('OK'),
                           ),
                         ],
                       );
@@ -548,8 +547,8 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
           },
           child: Text(
             MyAppState.currentUser!.vendorID == ''
-                ? 'DONE'.tr()
-                : 'UPDATE'.tr(),
+                ? 'DONE'
+                : 'UPDATE',
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
@@ -569,7 +568,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
     // #endregion
     if (locationFormValid) {
       _formKey.currentState!.save();
-      await showProgress(context, 'Adding Restaurant...'.tr(), false);
+      await showProgress(context, 'Adding Restaurant...', false);
 
       try {
         // #region agent log
@@ -678,7 +677,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
           showDialog(
             context: context,
             builder: (ctx) => AlertDialog(
-              title: Text('Error'.tr()),
+              title: Text('Error'),
               content: SelectableText(
                 e.toString(),
                 style: TextStyle(color: Colors.red),
@@ -686,7 +685,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(ctx).pop(),
-                  child: Text('OK'.tr()),
+                  child: Text('OK'),
                 ),
               ],
             ),
@@ -709,7 +708,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
     // #endregion
     if (locationFormValid) {
       _formKey.currentState!.save();
-      await showProgress(context, 'Updating Restaurant...'.tr(), false);
+      await showProgress(context, 'Updating Restaurant...', false);
       query = mapName.text +
           "," +
           mapAddress.text +
@@ -816,8 +815,8 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
 
     // set up the AlertDialog
     AlertDialog alert = AlertDialog(
-      title: Text("Add Restaurant".tr()),
-      content: Text("Data is saved to database.".tr()),
+      title: Text("Add Restaurant"),
+      content: Text("Data is saved to database."),
       actions: [
         okButton,
       ],
@@ -842,7 +841,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
             ContainerScreen(
               user: MyAppState.currentUser!,
               currentWidget: OrdersScreen(),
-              appBarTitle: 'Orders'.tr(),
+              appBarTitle: 'Orders',
               drawerSelection: DrawerSelection.Orders,
             ),
             false);
@@ -851,8 +850,8 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
 
     // set up the AlertDialog
     AlertDialog alert = AlertDialog(
-      title: Text("Updating Restaurant".tr()),
-      content: Text("Data is updated in database.".tr()),
+      title: Text("Updating Restaurant"),
+      content: Text("Data is updated in database."),
       actions: [
         okButton,
       ],

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:brgy/model/HappyHourConfig.dart';
 import 'package:brgy/services/happy_hour_service.dart';
-import 'dart:async';
 
 class HappyHourSettingsPage extends StatefulWidget {
   const HappyHourSettingsPage({super.key});
@@ -116,50 +115,9 @@ class _HappyHourSettingsPageState extends State<HappyHourSettingsPage> {
                 ),
                 const SizedBox(height: 24),
 
-                // Send Notification Button
-                Card(
-                  elevation: 4,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Send Notification',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Notify all users that Happy Hour is live',
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: settings.enabled
-                                ? () => _handleSendNotification(context, settings)
-                                : null,
-                            icon: const Icon(Icons.notifications),
-                            label: const Text('Send Happy Hour Notification'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              disabledBackgroundColor: Colors.grey[300],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                // Automation Settings
+                _AutomationSettingsCard(settings: settings),
+
                 const SizedBox(height: 24),
 
                 // Configurations Header
@@ -378,337 +336,418 @@ class _HappyHourSettingsPageState extends State<HappyHourSettingsPage> {
     }
   }
 
-  Future<void> _handleSendNotification(
-      BuildContext context, HappyHourSettings settings) async {
-    // Show confirmation dialog
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Send Happy Hour Notification'),
-        content: const Text(
-            'This will notify all users that Happy Hour is live. Continue?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: Colors.orange),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true) {
-      return;
-    }
-
-    // Check if Happy Hour is enabled
-    if (!settings.enabled) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Happy Hour is currently disabled'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      return;
-    }
-
-    // Get active Happy Hour config
-    try {
-      final activeConfig = await HappyHourService.getActiveHappyHourConfig();
-
-      if (activeConfig == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No active Happy Hour window found'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-        return;
-      }
-
-      // Format notification body
-      final notificationBody =
-          HappyHourService.formatNotificationBody(activeConfig);
-      const notificationTitle = 'Happy Hour is Live!';
-
-      // Show loading indicator
-      VoidCallback? closeSendingDialog;
-      ValueNotifier<int>? elapsedSeconds;
-      ValueNotifier<String>? statusText;
-      ValueNotifier<int?>? sentCount;
-      ValueNotifier<int?>? failedCount;
-      ValueNotifier<int?>? totalUsers;
-      Timer? tick;
-      Stopwatch? stopwatch;
-
-      if (mounted) {
-        elapsedSeconds = ValueNotifier<int>(0);
-        statusText = ValueNotifier<String>('Sending...');
-        sentCount = ValueNotifier<int?>(null);
-        failedCount = ValueNotifier<int?>(null);
-        totalUsers = ValueNotifier<int?>(null);
-        bool isOpen = true;
-
-        closeSendingDialog = () {
-          if (!mounted || !isOpen) return;
-          isOpen = false;
-          tick?.cancel();
-          stopwatch?.stop();
-          Navigator.of(context, rootNavigator: true).pop();
-          elapsedSeconds?.dispose();
-          statusText?.dispose();
-          sentCount?.dispose();
-          failedCount?.dispose();
-          totalUsers?.dispose();
-        };
-
-        // ignore: unawaited_futures
-        showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => Center(
-            child: Material(
-              color: Colors.transparent,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Sending Happy Hour notification',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.only(top: 2),
-                            child: SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                ValueListenableBuilder<String>(
-                                  valueListenable: statusText!,
-                                  builder: (context, value, _) => Text(value),
-                                ),
-                                const SizedBox(height: 6),
-                                ValueListenableBuilder<int>(
-                                  valueListenable: elapsedSeconds!,
-                                  builder: (context, value, _) => Text(
-                                    'Elapsed: ${value}s',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey[700],
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 10),
-                                ValueListenableBuilder<int?>(
-                                  valueListenable: sentCount!,
-                                  builder: (context, sent, _) {
-                                    final failed = failedCount!.value;
-                                    final total = totalUsers!.value;
-                                    return Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Sent: ${sent ?? '-'}',
-                                          style: const TextStyle(fontSize: 12),
-                                        ),
-                                        Text(
-                                          'Failed: ${failed ?? '-'}',
-                                          style: const TextStyle(fontSize: 12),
-                                        ),
-                                        Text(
-                                          'Total: ${total ?? '-'}',
-                                          style: const TextStyle(fontSize: 12),
-                                        ),
-                                      ],
-                                    );
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-
-        stopwatch = Stopwatch()..start();
-        tick = Timer.periodic(const Duration(seconds: 1), (_) {
-          if (!isOpen) return;
-          elapsedSeconds!.value = stopwatch!.elapsed.inSeconds;
-        });
-      }
-
-      try {
-        // Get Firebase project ID
-        statusText?.value = 'Queued. Waiting for server...';
-
-        final jobRef =
-            FirebaseFirestore.instance.collection('notification_jobs').doc();
-        await jobRef.set({
-          'kind': 'happy_hour',
-          'payload': {
-            'title': notificationTitle,
-            'body': notificationBody,
-            'type': 'happy_hour',
-          },
-          'status': 'queued',
-          'sentCount': 0,
-          'errorCount': 0,
-          'processedCount': 0,
-          'totalUsers': 0,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-
-        final done = Completer<void>();
-        late final StreamSubscription<DocumentSnapshot<Map<String, dynamic>>> sub;
-        sub = jobRef.snapshots().listen((snap) async {
-          final data = snap.data();
-          if (data == null) return;
-          final status = (data['status'] ?? 'queued').toString();
-
-          final sent = (data['sentCount'] is num)
-              ? (data['sentCount'] as num).toInt()
-              : int.tryParse(data['sentCount']?.toString() ?? '') ?? 0;
-          final failed = (data['errorCount'] is num)
-              ? (data['errorCount'] as num).toInt()
-              : int.tryParse(data['errorCount']?.toString() ?? '') ?? 0;
-          final total = (data['totalUsers'] is num)
-              ? (data['totalUsers'] as num).toInt()
-              : int.tryParse(data['totalUsers']?.toString() ?? '') ?? 0;
-
-          statusText?.value = status.replaceAll('_', ' ');
-          sentCount?.value = sent;
-          failedCount?.value = failed;
-          totalUsers?.value = total;
-
-          if (status == 'completed') {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Notifications sent successfully! Sent to $sent/$total'
-                    ' users${failed > 0 ? ' ($failed failed)' : ''}',
-                  ),
-                  backgroundColor: Colors.green,
-                  duration: const Duration(seconds: 4),
-                ),
-              );
-            }
-            if (!done.isCompleted) done.complete();
-          }
-
-          if (status == 'failed') {
-            if (!done.isCompleted) done.complete();
-            final error = data['error'] ?? 'Unknown error';
-            if (mounted) {
-              await showDialog<void>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Failed to send notifications'),
-                  content: SelectableText(
-                    error.toString(),
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Close'),
-                    ),
-                  ],
-                ),
-              );
-            }
-          }
-        });
-
-        await done.future.timeout(const Duration(minutes: 10));
-        await sub.cancel();
-        await Future<void>.delayed(const Duration(milliseconds: 700));
-        closeSendingDialog?.call();
-      } catch (e) {
-        statusText?.value = 'Failed.';
-        closeSendingDialog?.call();
-
-        // Enhanced error logging
-        print('[HappyHourNotification] HTTP Error: $e');
-        print('[HappyHourNotification] Error type: ${e.runtimeType}');
-        
-        if (e is TimeoutException) {
-          print('[HappyHourNotification] Request timed out');
-        }
-
-        if (mounted) {
-          await showDialog<void>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Failed to send notifications'),
-              content: SelectableText(
-                e.toString(),
-                style: const TextStyle(color: Colors.red),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Close'),
-                ),
-              ],
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
   Future<void> _showAddEditDialog(
       BuildContext context, HappyHourConfig? existingConfig) async {
     await showDialog(
       context: context,
       builder: (context) => _HappyHourConfigDialog(config: existingConfig),
+    );
+  }
+}
+
+class _AutomationSettingsCard extends StatefulWidget {
+  const _AutomationSettingsCard({required this.settings});
+
+  final HappyHourSettings settings;
+
+  @override
+  State<_AutomationSettingsCard> createState() => _AutomationSettingsCardState();
+}
+
+class _AutomationSettingsCardState extends State<_AutomationSettingsCard> {
+  late TextEditingController _titleController;
+  late TextEditingController _bodyController;
+  late TextEditingController _imageUrlController;
+  late TextEditingController _deepLinkController;
+  String? _selectedConfigId;
+  bool _isSaving = false;
+  bool _isCreating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final t = widget.settings.notificationTemplate;
+    _titleController = TextEditingController(text: t.title);
+    _bodyController = TextEditingController(text: t.body);
+    _imageUrlController = TextEditingController(text: t.imageUrl ?? '');
+    _deepLinkController = TextEditingController(text: t.deepLink ?? '');
+    _selectedConfigId =
+        widget.settings.configs.isNotEmpty
+            ? widget.settings.configs.first.id
+            : null;
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _bodyController.dispose();
+    _imageUrlController.dispose();
+    _deepLinkController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveTemplate() async {
+    final template = NotificationTemplate(
+      title: _titleController.text.trim(),
+      body: _bodyController.text.trim(),
+      imageUrl: _imageUrlController.text.trim().isEmpty
+          ? null
+          : _imageUrlController.text.trim(),
+      deepLink: _deepLinkController.text.trim().isEmpty
+          ? null
+          : _deepLinkController.text.trim(),
+    );
+    if (!template.isValid) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Title and body are required'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+    setState(() => _isSaving = true);
+    try {
+      await HappyHourService.updateAutoCreateSettings(
+        widget.settings.autoCreateNotification,
+        template,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Template saved'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _onAutoCreateChanged(bool value) async {
+    final template = NotificationTemplate(
+      title: _titleController.text.trim(),
+      body: _bodyController.text.trim(),
+      imageUrl: _imageUrlController.text.trim().isEmpty
+          ? null
+          : _imageUrlController.text.trim(),
+      deepLink: _deepLinkController.text.trim().isEmpty
+          ? null
+          : _deepLinkController.text.trim(),
+    );
+    setState(() => _isSaving = true);
+    try {
+      await HappyHourService.updateAutoCreateSettings(value, template);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(value
+                ? 'Auto-create enabled'
+                : 'Auto-create disabled'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _createJobNow() async {
+    if (widget.settings.configs.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Add at least one Happy Hour configuration first'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+    final configId = _selectedConfigId;
+    if (configId == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please select a configuration'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+    final config = widget.settings.configs
+        .where((c) => c.id == configId)
+        .firstOrNull;
+    if (config == null) return;
+
+    final template = NotificationTemplate(
+      title: _titleController.text.trim(),
+      body: _bodyController.text.trim(),
+      imageUrl: _imageUrlController.text.trim().isEmpty
+          ? null
+          : _imageUrlController.text.trim(),
+      deepLink: _deepLinkController.text.trim().isEmpty
+          ? null
+          : _deepLinkController.text.trim(),
+    );
+    if (!template.isValid) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Title and body are required'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isCreating = true);
+    try {
+      await HappyHourService.createHappyHourNotificationJob(
+        config,
+        template,
+        triggeredBy: 'manual',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Notification job created. View progress in Notification '
+              'Management.',
+            ),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to create job: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isCreating = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final autoOn = widget.settings.autoCreateNotification;
+
+    return Card(
+      elevation: 4,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Automation Settings',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Automatically create notification when Happy Hour '
+                        'starts',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        autoOn
+                            ? 'A job will be created when a Happy Hour window '
+                                'starts'
+                            : 'Notifications must be created manually',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: autoOn,
+                  onChanged: _isSaving ? null : _onAutoCreateChanged,
+                  activeColor: Colors.orange,
+                ),
+              ],
+            ),
+            if (autoOn) ...[
+              const SizedBox(height: 20),
+              const Divider(),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _titleController,
+                decoration: const InputDecoration(
+                  labelText: 'Notification Title *',
+                  hintText: 'e.g., Happy Hour is Live!',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.title),
+                ),
+                maxLength: 100,
+                textCapitalization: TextCapitalization.sentences,
+                enabled: !_isSaving,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _bodyController,
+                decoration: const InputDecoration(
+                  labelText: 'Notification Body *',
+                  hintText: 'e.g., 20% OFF for a limited time',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.message),
+                  alignLabelWithHint: true,
+                ),
+                maxLength: 500,
+                maxLines: 3,
+                textCapitalization: TextCapitalization.sentences,
+                enabled: !_isSaving,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _imageUrlController,
+                decoration: const InputDecoration(
+                  labelText: 'Image URL (Optional)',
+                  hintText: 'https://example.com/image.jpg',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.image),
+                ),
+                keyboardType: TextInputType.url,
+                enabled: !_isSaving,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _deepLinkController,
+                decoration: const InputDecoration(
+                  labelText: 'Deep Link (Optional)',
+                  hintText: 'URL or screen identifier',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.link),
+                ),
+                enabled: !_isSaving,
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _isSaving ? null : _saveTemplate,
+                  icon: _isSaving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save),
+                  label: const Text('Save Template'),
+                ),
+              ),
+            ],
+            const SizedBox(height: 20),
+            const Divider(),
+            const SizedBox(height: 12),
+            const Text(
+              'Create Happy Hour Notification Now',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Manually create a notification job using the template above',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (widget.settings.configs.isNotEmpty)
+              DropdownButtonFormField<String>(
+                value: _selectedConfigId,
+                decoration: const InputDecoration(
+                  labelText: 'Select Config',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.local_offer),
+                ),
+                items: widget.settings.configs
+                    .map(
+                      (c) => DropdownMenuItem(
+                        value: c.id,
+                        child: Text('${c.name} (${c.startTime}-${c.endTime})'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedConfigId = v),
+              ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isCreating ||
+                        widget.settings.configs.isEmpty ||
+                        _selectedConfigId == null
+                    ? null
+                    : _createJobNow,
+                icon: _isCreating
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor:
+                              AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : const Icon(Icons.notifications_active),
+                label: const Text('Create Happy Hour Notification Now'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  disabledBackgroundColor: Colors.grey[300],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

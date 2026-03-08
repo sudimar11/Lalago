@@ -20,6 +20,7 @@ import 'package:foodie_customer/services/happy_hour_helper.dart';
 import 'package:foodie_customer/services/happy_hour_service.dart';
 import 'package:foodie_customer/services/network_safe_api.dart';
 import 'package:foodie_customer/services/restaurant_status_service.dart';
+import 'package:foodie_customer/services/gift_card_service.dart';
 
 class CheckoutScreen extends StatefulWidget {
   final String paymentOption, paymentType;
@@ -52,6 +53,15 @@ class CheckoutScreen extends StatefulWidget {
   // Referral wallet parameter
   final double? referralWalletAmountUsed;
 
+  // Gift card parameters
+  final double? giftCardAmountUsed;
+  final List<Map<String, dynamic>>? giftCardBreakdown;
+
+  // Loyalty free delivery
+  final double? loyaltyFreeDeliveryAmount;
+  final String? loyaltyFreeDeliveryRewardId;
+  final String? loyaltyFreeDeliveryCycle;
+
   const CheckoutScreen(
       {Key? key,
       required this.isPaymentDone,
@@ -78,7 +88,12 @@ class CheckoutScreen extends StatefulWidget {
       this.manualCouponId,
       this.manualCouponDiscountAmount,
       this.manualCouponImage,
-      this.referralWalletAmountUsed})
+      this.referralWalletAmountUsed,
+      this.giftCardAmountUsed,
+      this.giftCardBreakdown,
+      this.loyaltyFreeDeliveryAmount,
+      this.loyaltyFreeDeliveryRewardId,
+      this.loyaltyFreeDeliveryCycle})
       : super(key: key);
 
   @override
@@ -375,6 +390,32 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                     "(-${amountShow(amount: widget.manualCouponDiscountAmount.toString())})",
                                     style: TextStyle(
                                         fontSize: 16, color: Colors.green),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          // Gift Card Deduction
+                          if (widget.giftCardAmountUsed != null &&
+                              widget.giftCardAmountUsed! > 0)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16.0, vertical: 8.0),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    'Gift Card',
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.w500,
+                                        fontSize: 16,
+                                        color: Colors.orange.shade800),
+                                  ),
+                                  Text(
+                                    "(-${amountShow(amount: widget.giftCardAmountUsed.toString())})",
+                                    style: TextStyle(
+                                        fontSize: 16,
+                                        color: Colors.orange.shade800),
                                   ),
                                 ],
                               ),
@@ -846,6 +887,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         appliedDiscountAmount: appliedDiscountAmount,
         // Referral wallet usage
         referralWalletAmountUsed: widget.referralWalletAmountUsed,
+        // Gift card usage
+        giftCardAmountUsed: widget.giftCardAmountUsed,
+        giftCardBreakdown: widget.giftCardBreakdown,
       );
 
       statusNotifier.value = 'Placing your order...';
@@ -942,6 +986,71 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         } catch (e) {
           log("❌ Error deducting referral wallet: $e");
           // Don't block order placement if wallet deduction fails
+        }
+      }
+
+      // Redeem gift cards used in this order
+      if (widget.giftCardBreakdown != null &&
+          widget.giftCardBreakdown!.isNotEmpty &&
+          MyAppState.currentUser != null) {
+        final userId = MyAppState.currentUser!.userID;
+        for (final entry in widget.giftCardBreakdown!) {
+          final cardId = entry['cardId'] as String?;
+          final amount = (entry['amount'] as num?)?.toDouble();
+          if (cardId == null || amount == null || amount <= 0) continue;
+          try {
+            await GiftCardService.redeemGiftCard(
+              cardId: cardId,
+              amount: amount,
+              userId: userId,
+              orderId: placedOrder.id,
+            );
+            log("✅ Gift card redeemed: $cardId amount=$amount");
+          } catch (e) {
+            log("❌ Error redeeming gift card $cardId: $e");
+            // Order already placed; manual reconciliation may be needed
+          }
+        }
+      }
+
+      // Mark loyalty free delivery reward as used (only when actually applied)
+      if (widget.loyaltyFreeDeliveryAmount != null &&
+          widget.loyaltyFreeDeliveryAmount! > 0 &&
+          widget.loyaltyFreeDeliveryRewardId != null &&
+          widget.loyaltyFreeDeliveryCycle != null &&
+          MyAppState.currentUser != null) {
+        try {
+          final userRef = FirebaseFirestore.instance
+              .collection(USERS)
+              .doc(MyAppState.currentUser!.userID);
+          final userDoc = await userRef.get();
+          if (userDoc.exists) {
+            final data = userDoc.data() ?? {};
+            final loyalty = data['loyalty'] as Map<String, dynamic>?;
+            if (loyalty != null) {
+              final rewardsClaimed =
+                  List<Map<String, dynamic>>.from(
+                      loyalty['rewardsClaimed'] as List? ?? []);
+              for (int i = 0; i < rewardsClaimed.length; i++) {
+                final r = rewardsClaimed[i];
+                if (r['rewardId'] == widget.loyaltyFreeDeliveryRewardId &&
+                    r['cycle'] == widget.loyaltyFreeDeliveryCycle &&
+                    (r['orderId'] == null || r['orderId'] == '')) {
+                  rewardsClaimed[i] = {
+                    ...r,
+                    'orderId': placedOrder.id,
+                  };
+                  break;
+                }
+              }
+              await userRef.update({
+                'loyalty.rewardsClaimed': rewardsClaimed,
+              });
+              log("✅ Loyalty free delivery marked used for order ${placedOrder.id}");
+            }
+          }
+        } catch (e) {
+          log("❌ Error marking loyalty reward used: $e");
         }
       }
 

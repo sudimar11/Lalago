@@ -27,6 +27,8 @@ import 'package:brgy/inactive_customers_page.dart';
 import 'package:brgy/top_buyers_today_page.dart';
 import 'package:brgy/pages/customer_suggestions_page.dart';
 import 'package:brgy/pages/customer_feedback_page.dart';
+import 'package:brgy/pages/reviews_moderation_page.dart';
+import 'package:brgy/pages/reviews_analytics_page.dart';
 import 'package:brgy/confirmed_transactions.dart';
 import 'package:brgy/payout.dart';
 import 'package:brgy/confirmed_payouts.dart';
@@ -120,6 +122,8 @@ class FullOperationsPage extends StatelessWidget {
               _NavItem('Inactive customers', Icons.person_off, () => _push(context, const InactiveCustomersPage())),
               _NavItem('Suggestions', Icons.lightbulb_outline, () => _push(context, const CustomerSuggestionsPage())),
               _NavItem('Feedback', Icons.feedback, () => _push(context, const CustomerFeedbackPage())),
+              _NavItem('Reviews Moderation', Icons.star, () => _push(context, const ReviewsModerationPage())),
+              _NavItem('Reviews Analytics', Icons.analytics, () => _push(context, const ReviewsAnalyticsPage())),
             ],
           ),
           _buildSection(

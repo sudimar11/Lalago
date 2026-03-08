@@ -1,4 +1,3 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/services/helper.dart';
@@ -28,21 +27,21 @@ class AuthScreen extends StatelessWidget {
             padding:
                 const EdgeInsets.only(left: 16, top: 32, right: 16, bottom: 8),
             child: Text(
-              'Welcome to Restaurant Admin App'.tr(),
+              'Welcome to Restaurant Admin App',
               textAlign: TextAlign.center,
               style: TextStyle(
                   color: Color(COLOR_PRIMARY),
                   fontSize: 24.0,
                   fontWeight: FontWeight.bold),
-            ).tr(),
+            ),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
             child: Text(
-              'Accept orders and manage your store products.'.tr(),
+              'Accept orders and manage your store products.',
               style: TextStyle(fontSize: 18),
               textAlign: TextAlign.center,
-            ).tr(),
+            ),
           ),
           Padding(
             padding: const EdgeInsets.only(right: 40.0, left: 40.0, top: 40),
@@ -60,13 +59,13 @@ class AuthScreen extends StatelessWidget {
                   ),
                 ),
                 child: Text(
-                  'Log In'.tr(),
+                  'Log In',
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                   ),
-                ).tr(),
+                ),
                 onPressed: () {
                   push(context, new LoginPage());
                 },
@@ -89,12 +88,12 @@ class AuthScreen extends StatelessWidget {
                   ),
                 ),
                 child: Text(
-                  'Sign Up'.tr(),
+                  'Sign Up',
                   style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                       color: Color(COLOR_PRIMARY)),
-                ).tr(),
+                ),
                 onPressed: () {
                   push(context, new SignUpScreen());
                 },

@@ -127,6 +127,14 @@ class _CustomerInformationPageState extends State<CustomerInformationPage> {
                 _buildEngagementCard(userData),
                 const SizedBox(height: 16),
 
+                // Loyalty Card
+                _buildLoyaltyCard(userData),
+                const SizedBox(height: 16),
+
+                // Gift Cards Card
+                _buildGiftCardsCard(),
+                const SizedBox(height: 16),
+
                 // Order History Section
                 _buildOrderHistorySection(),
               ],
@@ -519,6 +527,186 @@ class _CustomerInformationPageState extends State<CustomerInformationPage> {
                     'Orders per month',
                     orderFrequency.toStringAsFixed(1),
                   ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _getLoyaltyTierColor(String tier) {
+    switch (tier.toLowerCase()) {
+      case 'bronze':
+        return Colors.brown;
+      case 'silver':
+        return Colors.grey;
+      case 'gold':
+        return Colors.amber;
+      case 'diamond':
+        return Colors.cyan;
+      default:
+        return Colors.blue;
+    }
+  }
+
+  Widget _buildGiftCardsCard() {
+    return FutureBuilder<QuerySnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('gift_cards')
+          .where('ownedBy', isEqualTo: widget.userId)
+          .get(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+        if (snap.hasError || !snap.hasData) return const SizedBox.shrink();
+        final docs = snap.data!.docs;
+        int activeCount = 0;
+        int expiredCount = 0;
+        double totalBalance = 0;
+        double totalPurchased = 0;
+        for (final doc in docs) {
+          final d = doc.data() as Map<String, dynamic>?;
+          if (d == null || d['code'] == null) continue;
+          final status = (d['status'] ?? '').toString();
+          final balance = (d['remainingBalance'] as num?)?.toDouble() ?? 0;
+          final original = (d['originalAmount'] as num?)?.toDouble() ?? 0;
+          totalPurchased += original;
+          if (status == 'active') {
+            activeCount++;
+            totalBalance += balance;
+          } else if (status == 'expired') {
+            expiredCount++;
+          }
+        }
+        if (activeCount == 0 && expiredCount == 0) {
+          return const SizedBox.shrink();
+        }
+        return Card(
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.card_giftcard, color: Colors.orange[700]),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Gift Cards',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 16,
+                  runSpacing: 8,
+                  children: [
+                    _buildMetric('Active cards', '$activeCount'),
+                    _buildMetric('Balance', '₱${totalBalance.toStringAsFixed(0)}'),
+                    _buildMetric('Expired', '$expiredCount'),
+                    _buildMetric('Total purchased', '₱${totalPurchased.toStringAsFixed(0)}'),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLoyaltyCard(Map<String, dynamic> userData) {
+    final loyalty = userData['loyalty'] as Map<String, dynamic>?;
+    if (loyalty == null || loyalty.isEmpty) return const SizedBox.shrink();
+
+    final currentTier = (loyalty['currentTier'] ?? 'bronze').toString();
+    final tokensThisCycle = (loyalty['tokensThisCycle'] is num)
+        ? (loyalty['tokensThisCycle'] as num).toInt()
+        : 0;
+    final lifetimeTokens = (loyalty['lifetimeTokens'] is num)
+        ? (loyalty['lifetimeTokens'] as num).toInt()
+        : 0;
+    final currentCycle = (loyalty['currentCycle'] ?? '').toString();
+    Timestamp? cycleStart = loyalty['cycleStartDate'] as Timestamp?;
+    Timestamp? cycleEnd = loyalty['cycleEndDate'] as Timestamp?;
+
+    String cycleText = currentCycle;
+    if (cycleStart != null && cycleEnd != null) {
+      cycleText = '${DateFormat('MMM d').format(cycleStart.toDate())} - '
+          '${DateFormat('MMM d, yyyy').format(cycleEnd.toDate())}';
+    }
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Loyalty Program',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _getLoyaltyTierColor(currentTier),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    currentTier[0].toUpperCase() + currentTier.substring(1),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  '$tokensThisCycle tokens this cycle',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                _buildMetric('Lifetime tokens', '$lifetimeTokens'),
+                if (currentCycle.isNotEmpty)
+                  _buildMetric('Current cycle', cycleText),
               ],
             ),
           ],

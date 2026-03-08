@@ -33,6 +33,7 @@ import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/performance_tier_helper.dart';
 import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/ui/profile/AttendanceHistoryScreen.dart';
+import 'package:foodie_driver/ui/reviews/RiderReviewsScreen.dart';
 import 'package:foodie_driver/widgets/shared_app_bar.dart';
 import 'package:foodie_driver/services/order_service.dart';
 
@@ -900,6 +901,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   leading: Icon(
                     CupertinoIcons.person_alt,
                     color: Colors.blue,
+                  ),
+                ),
+                ListTile(
+                  onTap: () {
+                    push(context, const RiderReviewsScreen());
+                  },
+                  title: Text(
+                    'View My Reviews',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  leading: Icon(
+                    CupertinoIcons.star,
+                    color: Colors.amber,
                   ),
                 ),
                 _WorkAreaCard(

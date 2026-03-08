@@ -78,7 +78,8 @@ service cloud.firestore {
     // progress; Cloud Function (Admin SDK) updates them. Allow auth users.
     match /notification_jobs/{jobId} {
       allow create, read: if request.auth != null;
-      allow update, delete: if false;
+      allow update: if request.auth != null;
+      allow delete: if false;
     }
 
     // Bundle Deals: read for all (Customer/Rider), write for authenticated (Admin)
@@ -296,6 +297,30 @@ service cloud.firestore {
     match /weekly_reports/{doc} {
       allow read: if request.auth != null;
       allow write: if false;
+    }
+
+    // Gift cards: templates (no code) readable by auth users; cards readable if owned
+    match /gift_cards/{cardId} {
+      allow read: if request.auth != null
+        && (
+            !('code' in resource.data)
+            || resource.data.ownedBy == request.auth.uid
+            || resource.data.purchasedBy == request.auth.uid
+        );
+      allow create, update, delete: if false;
+    }
+
+    // Gift card transactions: read own (userId); write via Cloud Functions only
+    match /gift_card_transactions/{txId} {
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    // Gift card config: read for authenticated, write for admin
+    match /settings/giftCardConfig {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
 
     // TODO: Replace with proper security rules before production deployment

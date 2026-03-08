@@ -158,6 +158,16 @@ class ZoneCapacityService {
       },
       'createdAt': FieldValue.serverTimestamp(),
       'status': 'queued',
+      'stats': {
+        'totalRecipients': 0,
+        'processedCount': 0,
+        'successfulDeliveries': 0,
+        'failedDeliveries': 0,
+        'currentBatchNumber': 0,
+        'totalBatches': 0,
+        'percentComplete': 0.0,
+        'lastUpdatedAt': FieldValue.serverTimestamp(),
+      },
     });
   }
 

@@ -156,6 +156,27 @@ class _CustomersPageState extends State<CustomersPage> {
                         ),
                       ),
                     ),
+                    DropdownMenuItem<String>(
+                      value: 'unknown',
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: UserSegmentService.getSegmentColor(
+                                'unknown',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            UserSegmentService.getSegmentDisplayName('unknown'),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                   onChanged: (value) {
                     if (value != null) {

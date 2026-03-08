@@ -23,9 +23,14 @@ import 'package:permission_handler/permission_handler.dart';
 class ReviewScreen extends StatefulWidget {
   final CartProduct product;
   final String? orderId;
+  final String? driverId;
 
-  const ReviewScreen({Key? key, required this.product, this.orderId})
-      : super(key: key);
+  const ReviewScreen({
+    Key? key,
+    required this.product,
+    this.orderId,
+    this.driverId,
+  }) : super(key: key);
 
   @override
   _ReviewScreenState createState() => _ReviewScreenState();
@@ -761,6 +766,10 @@ class _ReviewScreenState extends State<ReviewScreen>
 
                       vendorModel!.reviewsCount = vendorReviewCount + 1;
                       vendorModel!.reviewsSum = vendoReviewSum + ratings;
+                      final hasDriver = (widget.driverId != null &&
+                          widget.driverId!.isNotEmpty) ||
+                          (ratingModel!.driverId != null &&
+                              ratingModel!.driverId!.isNotEmpty);
                       RatingModel ratingproduct = RatingModel(
                           productId: ratingModel!.productId,
                           comment: comment.text,
@@ -770,11 +779,14 @@ class _ReviewScreenState extends State<ReviewScreen>
                           id: ratingModel!.id,
                           orderId: ratingModel!.orderId,
                           vendorId: ratingModel!.vendorId,
+                          driverId: ratingModel!.driverId ?? widget.driverId ?? '',
                           createdAt: Timestamp.now(),
                           uname: MyAppState.currentUser!.firstName +
                               MyAppState.currentUser!.lastName,
                           profile: MyAppState.currentUser!.profilePictureURL,
-                          reviewAttributes: reviewAttribute);
+                          reviewAttributes: reviewAttribute,
+                          reviewType: hasDriver ? 'rider' : 'product',
+                          status: 'approved');
                       await FireStoreUtils.updateReviewbyId(ratingproduct);
                       String? errorMessage =
                           await FireStoreUtils.firebaseCreateNewReview(
@@ -877,6 +889,7 @@ class _ReviewScreenState extends State<ReviewScreen>
 
       DocumentReference documentReference =
           FirebaseFirestore.instance.collection(Order_Rating).doc();
+      final hasDriver = widget.driverId != null && widget.driverId!.isNotEmpty;
       RatingModel rate = RatingModel(
           id: documentReference.id,
           productId: widget.product.id,
@@ -885,12 +898,15 @@ class _ReviewScreenState extends State<ReviewScreen>
           rating: ratings,
           orderId: widget.orderId.toString(),
           vendorId: widget.product.vendorID,
+          driverId: widget.driverId ?? '',
           customerId: MyAppState.currentUser!.userID,
           uname: MyAppState.currentUser!.firstName +
               MyAppState.currentUser!.lastName,
           profile: MyAppState.currentUser!.profilePictureURL,
           createdAt: Timestamp.now(),
-          reviewAttributes: reviewAttribute);
+          reviewAttributes: reviewAttribute,
+          reviewType: hasDriver ? 'rider' : 'product',
+          status: 'approved');
       String? errorMessage = await FireStoreUtils.firebaseCreateNewReview(rate);
       await FireStoreUtils.updateVendor(vendorModel!);
       var error = await FireStoreUtils.updateProduct(productModel!);

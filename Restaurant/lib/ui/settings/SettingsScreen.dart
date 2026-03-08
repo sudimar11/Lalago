@@ -1,5 +1,4 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/constants.dart';
@@ -119,7 +118,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       backgroundColor: isDarkMode(context) ? Color(DARK_VIEWBG_COLOR) : Colors.white,
       appBar: AppBar(
         title: Text(
-          'Settings'.tr(),
+          'Settings',
           style: TextStyle(
             color: isDarkMode(context) ? Color(0xFFFFFFFF) : Color(0Xff333333),
           ),
@@ -133,9 +132,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Padding(
                 padding: const EdgeInsets.only(right: 16.0, left: 16, top: 16, bottom: 8),
                 child: Text(
-                  'Push Notifications'.tr(),
+                  'Push Notifications',
                   style: TextStyle(color: isDarkMode(context) ? Colors.white54 : Colors.black54, fontSize: 18),
-                ).tr(),
+                ),
               ),
               Material(
                 elevation: 2,
@@ -147,12 +146,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                         activeColor: Color(COLOR_ACCENT),
                         title: Text(
-                          'Allow Push Notifications'.tr(),
+                          'Allow Push Notifications',
                           style: TextStyle(
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: pushNewMessages,
                         onChanged: (bool newValue) {
                           pushNewMessages = newValue;
@@ -161,12 +160,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                         activeColor: Color(COLOR_ACCENT),
                         title: Text(
-                          'Order Updates'.tr(),
+                          'Order Updates',
                           style: TextStyle(
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: orderUpdates,
                         onChanged: (bool newValue) {
                           orderUpdates = newValue;
@@ -182,7 +181,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ? Colors.white
                                 : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: newArrivals,
                         onChanged: (bool newValue) {
                           newArrivals = newValue;
@@ -197,7 +196,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ? Colors.white
                                 : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: newArrivals,
                         onChanged: (bool newValue) {
                           newArrivals = newValue;
@@ -206,12 +205,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                         activeColor: Color(COLOR_ACCENT),
                         title: Text(
-                          'Promotions'.tr(),
+                          'Promotions',
                           style: TextStyle(
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: promotions,
                         onChanged: (bool newValue) {
                           promotions = newValue;
@@ -220,12 +219,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                         activeColor: Color(COLOR_ACCENT),
                         title: Text(
-                          'Hide Photos'.tr(),
+                          'Hide Photos',
                           style: TextStyle(
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: photos,
                         onChanged: (bool newValue) {
                           photos = newValue;
@@ -234,7 +233,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Container(
                         padding: EdgeInsets.only(left: 20, right: 20, bottom: 20),
                         child: Text(
-                          "NOTE : Hides your photos from the photo section, without disturbing photos on the menu item listing.".tr(),
+                          "NOTE : Hides your photos from the photo section, without disturbing photos on the menu item listing.",
                           style: TextStyle(fontSize: 15),
                         )),
                     SwitchListTile.adaptive(
@@ -245,7 +244,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: reststatus,
                         onChanged: (bool newValue) {
                           reststatus = newValue;
@@ -305,7 +304,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Padding(
                 padding: const EdgeInsets.only(right: 16, left: 16, top: 24, bottom: 8),
                 child: Text(
-                  'Acceptance Settings'.tr(),
+                  'Acceptance Settings',
                   style: TextStyle(color: isDarkMode(context) ? Colors.white54 : Colors.black54, fontSize: 18),
                 ),
               ),
@@ -317,7 +316,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                       activeColor: Color(COLOR_ACCENT),
                       title: Text(
-                        'Sound Alerts'.tr(),
+                        'Sound Alerts',
                         style: TextStyle(
                           fontSize: 17,
                           color: isDarkMode(context) ? Colors.white : Colors.black,
@@ -364,7 +363,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                       activeColor: Color(COLOR_ACCENT),
                       title: Text(
-                        'Auto-Pause on Misses'.tr(),
+                        'Auto-Pause on Misses',
                         style: TextStyle(
                           fontSize: 17,
                           color: isDarkMode(context) ? Colors.white : Colors.black,
@@ -385,7 +384,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     ListTile(
                       title: Text(
-                        'Consecutive Misses'.tr(),
+                        'Consecutive Misses',
                         style: TextStyle(
                           fontSize: 17,
                           color: isDarkMode(context) ? Colors.white : Colors.black,
@@ -412,7 +411,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: CupertinoButton(
                       padding: const EdgeInsets.all(12.0),
                       onPressed: () async {
-                        showProgress(context, 'Saving changes...'.tr(), true);
+                        showProgress(context, 'Saving changes...', true);
                         user!.settings.pushNewMessages = pushNewMessages;
                         user!.settings.orderUpdates = orderUpdates;
                         user!.settings.newArrivals = newArrivals;
@@ -437,13 +436,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               content: Text(
                                 'Settings saved successfully',
                                 style: TextStyle(fontSize: 17),
-                              ).tr()));
+                              )));
                         }
                       },
                       child: Text(
                         'Save',
                         style: TextStyle(fontSize: 18, color: Color(COLOR_PRIMARY)),
-                      ).tr(),
+                      ),
                       color: isDarkMode(context) ? Colors.black12 : Colors.white,
                     ),
                   ),

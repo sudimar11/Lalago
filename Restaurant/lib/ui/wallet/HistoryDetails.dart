@@ -1,5 +1,5 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/model/withdrawHistoryModel.dart';
 import 'package:foodie_restaurant/services/helper.dart';
@@ -20,7 +20,7 @@ class _HistoryDetailsState extends State<HistoryDetails> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          'Withdrawal Details'.tr(),
+          'Withdrawal Details',
           style: TextStyle(
             color: isDarkMode(context) ? Color(0xFFFFFFFF) : Color(0Xff333333),
           ),
@@ -41,11 +41,11 @@ class _HistoryDetailsState extends State<HistoryDetails> {
             child: SingleChildScrollView(
               child: Column(
                 children: [
-                  getTextBuild('Amount'.tr(), '${amountShow(amount: widget.withdrawHistoryModel.amount.toString())}'),
-                  getTextBuild('Date'.tr(), "${DateFormat('MMM dd, yyyy, KK:mma').format(widget.withdrawHistoryModel.paidDate.toDate()).toUpperCase()}"),
-                  getTextBuild('Status'.tr(), "${widget.withdrawHistoryModel.paymentStatus}"),
-                  Visibility(visible: widget.withdrawHistoryModel.note.isNotEmpty, child: getTextBuild('Notes'.tr(), "${widget.withdrawHistoryModel.note}")),
-                  Visibility(visible: widget.withdrawHistoryModel.adminNote.isNotEmpty, child: getTextBuild('Admin Note'.tr(), "${widget.withdrawHistoryModel.adminNote}")),
+                  getTextBuild('Amount', '${amountShow(amount: widget.withdrawHistoryModel.amount.toString())}'),
+                  getTextBuild('Date', "${DateFormat('MMM dd, yyyy, KK:mma').format(widget.withdrawHistoryModel.paidDate.toDate()).toUpperCase()}"),
+                  getTextBuild('Status', "${widget.withdrawHistoryModel.paymentStatus}"),
+                  Visibility(visible: widget.withdrawHistoryModel.note.isNotEmpty, child: getTextBuild('Notes', "${widget.withdrawHistoryModel.note}")),
+                  Visibility(visible: widget.withdrawHistoryModel.adminNote.isNotEmpty, child: getTextBuild('Admin Note', "${widget.withdrawHistoryModel.adminNote}")),
                 ],
               ),
             ),

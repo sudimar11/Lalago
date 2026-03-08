@@ -1,5 +1,4 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
@@ -64,7 +63,7 @@ class _CreateTableState extends State<CreateTable> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          "Please click plus icon to create new table".tr(),
+                          "Please click plus icon to create new table",
                           style: const TextStyle(
                             fontSize: 16,
                           ),
@@ -96,7 +95,7 @@ class _CreateTableState extends State<CreateTable> {
                             padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
                             child: UnderLineTextFormFieldWidget(
                               controller: controllerList[index],
-                              hintText: 'Enter table name'.tr(),
+                              hintText: 'Enter table name',
                               // initialValue: bookTableList[index].tableName,
                               suffix: IconButton(
                                 icon: Icon(
@@ -106,7 +105,7 @@ class _CreateTableState extends State<CreateTable> {
                                 onPressed: () async {
                                   print("index--->>$index");
                                   print("LIST--->>${bookTableList[index].tableName}");
-                                  await showProgress(context, 'removing table...'.tr(), false);
+                                  await showProgress(context, 'removing table...', false);
                                   FireStoreUtils.removeTable(bookTableList[index], vendorModel!);
                                   controllerList.removeAt(index);
                                   bookTableList.removeAt(index);
@@ -139,7 +138,7 @@ class _CreateTableState extends State<CreateTable> {
               ),
               onPressed: () async {
                 if (formKey.currentState!.validate()) {
-                  await showProgress(context, 'Adding table...'.tr(), false);
+                  await showProgress(context, 'Adding table...', false);
                   for (int i = 0; i < bookTableList.length; i++) {
                     FireStoreUtils.addTable(bookTableList[i], vendorModel!);
                   }
@@ -148,7 +147,7 @@ class _CreateTableState extends State<CreateTable> {
                 }
               },
               child: Text(
-                'SUBMIT'.tr(),
+                'SUBMIT',
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
               )),
         ),

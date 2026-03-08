@@ -1,6 +1,9 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-const { updateUserSegment } = require('./userSegmentation');
+const {
+  updateUserSegment,
+  getUserSegmentDebug,
+} = require('./userSegmentation');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -126,8 +129,8 @@ exports.manualUpdateUserSegments = functions
     }
 
     const db = getDb();
-    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 50;
-    const effectiveLimit = Math.min(limit, 50);
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 500;
+    const effectiveLimit = Math.min(limit, 1000);
 
     const startTime = Date.now();
     console.log(
@@ -217,38 +220,42 @@ exports.manualUpdateUserSegments = functions
   });
 
 /**
- * One-time migration function to process ALL users in batches.
- * Call this to fix all existing users.
- * Protected by secret key for security.
+ * Callable migration - use from Flutter to avoid HTTP client timeouts.
+ * Processes users in batches, supports continuation via skip.
  */
-exports.migrateAllUserSegments = functions
+exports.runUserSegmentMigration = functions
+  .runWith({ timeoutSeconds: 540, memory: '512MB' })
   .region('us-central1')
-  .https.onRequest(async (req, res) => {
-    const secret = req.query.secret;
-    if (secret !== 'lalago-migration-2026') {
-      return res.status(403).json({ error: 'Invalid secret' });
-    }
-
+  .https.onCall(async (data, context) => {
+    const skip = Math.max(0, parseInt(data?.skip || 0, 10));
+    const maxUsers = Math.min(
+      parseInt(data?.max || 200, 10) || 200,
+      500,
+    );
     const db = getDb();
-    const BATCH_SIZE = 300;
+    const BATCH_SIZE = 100;
     let processedCount = 0;
     let errorCount = 0;
     let lastDoc = null;
+
+    if (skip > 0) {
+      const skipSnap = await db
+        .collection('users')
+        .where('role', '==', 'customer')
+        .where('active', '==', true)
+        .orderBy('__name__')
+        .limit(skip)
+        .get();
+      if (!skipSnap.empty) {
+        lastDoc = skipSnap.docs[skipSnap.docs.length - 1];
+      }
+    }
+
     let hasMore = true;
     let batchNumber = 1;
 
-    const startTime = Date.now();
-
-    res.json({
-      success: true,
-      message: 'Migration started in background',
-      total_users_estimate: 6923,
-    });
-
-    console.log('MIGRATION: Starting full user segment migration...');
-
     try {
-      while (hasMore) {
+      while (hasMore && processedCount < maxUsers) {
         let query = db
           .collection('users')
           .where('role', '==', 'customer')
@@ -261,7 +268,102 @@ exports.migrateAllUserSegments = functions
         }
 
         const snapshot = await query.get();
+        if (snapshot.empty) break;
 
+        for (const doc of snapshot.docs) {
+          if (processedCount >= maxUsers) break;
+          try {
+            const userData = doc.data();
+            await updateUserSegment(doc.id, userData, db);
+            processedCount++;
+          } catch (error) {
+            errorCount++;
+          }
+        }
+
+        lastDoc = snapshot.docs[snapshot.docs.length - 1];
+        await new Promise((r) => setTimeout(r, 300));
+        batchNumber++;
+        hasMore = snapshot.size === BATCH_SIZE;
+      }
+
+      return {
+        success: true,
+        processed: processedCount,
+        errors: errorCount,
+        nextSkip: skip + processedCount,
+        hint:
+          processedCount >= maxUsers
+            ? `Call again with skip=${skip + processedCount}`
+            : null,
+      };
+    } catch (error) {
+      console.error('runUserSegmentMigration error:', error);
+      throw new functions.https.HttpsError(
+        'internal',
+        error.message,
+      );
+    }
+  });
+
+/**
+ * One-time migration function to process ALL users in batches.
+ * Call this to fix all existing users.
+ * Protected by secret key for security.
+ */
+exports.migrateAllUserSegments = functions
+  .runWith({ timeoutSeconds: 540, memory: '512MB' })
+  .region('us-central1')
+  .https.onRequest(async (req, res) => {
+    const secret = req.query.secret;
+    if (secret !== 'lalago-migration-2026') {
+      return res.status(403).json({ error: 'Invalid secret' });
+    }
+
+    const skip = Math.max(0, parseInt(req.query.skip || '0', 10));
+    const maxUsers = Math.min(
+      parseInt(req.query.max || '2000', 10) || 2000,
+      3000,
+    );
+    const db = getDb();
+    const BATCH_SIZE = 100;
+    let processedCount = 0;
+    let errorCount = 0;
+    let lastDoc = null;
+
+    if (skip > 0) {
+      const skipSnap = await db
+        .collection('users')
+        .where('role', '==', 'customer')
+        .where('active', '==', true)
+        .orderBy('__name__')
+        .limit(skip)
+        .get();
+      if (!skipSnap.empty) {
+        lastDoc = skipSnap.docs[skipSnap.docs.length - 1];
+      }
+    }
+
+    let hasMore = true;
+    let batchNumber = 1;
+
+    const startTime = Date.now();
+    console.log(`MIGRATION: Starting (skip=${skip}, max=${maxUsers})...`);
+
+    try {
+      while (hasMore && processedCount < maxUsers) {
+        let query = db
+          .collection('users')
+          .where('role', '==', 'customer')
+          .where('active', '==', true)
+          .orderBy('__name__')
+          .limit(BATCH_SIZE);
+
+        if (lastDoc) {
+          query = query.startAfter(lastDoc);
+        }
+
+        const snapshot = await query.get();
         if (snapshot.empty) {
           hasMore = false;
           break;
@@ -272,15 +374,14 @@ exports.migrateAllUserSegments = functions
         );
 
         for (const doc of snapshot.docs) {
+          if (processedCount >= maxUsers) break;
           try {
             const userData = doc.data();
             await updateUserSegment(doc.id, userData, db);
             processedCount++;
 
-            if (processedCount % 500 === 0) {
-              console.log(
-                `Migration progress: ${processedCount} users processed`,
-              );
+            if (processedCount % 200 === 0) {
+              console.log(`Migration progress: ${processedCount} users`);
             }
           } catch (error) {
             console.error(
@@ -292,7 +393,7 @@ exports.migrateAllUserSegments = functions
         }
 
         lastDoc = snapshot.docs[snapshot.docs.length - 1];
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 300));
         batchNumber++;
         hasMore = snapshot.size === BATCH_SIZE;
       }
@@ -305,14 +406,151 @@ exports.migrateAllUserSegments = functions
       console.log(`Processed: ${processedCount} users`);
       console.log(`Errors: ${errorCount}`);
       console.log(`Total time: ${totalTime} minutes`);
+
+      res.json({
+        success: true,
+        processed: processedCount,
+        errors: errorCount,
+        totalTimeMinutes: parseFloat(totalTime),
+        nextSkip: skip + processedCount,
+        hint:
+          processedCount >= maxUsers
+            ? `Call again with ?skip=${skip + processedCount} to continue`
+            : null,
+      });
     } catch (error) {
       console.error('Fatal migration error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message,
+      });
     }
   });
 
 /**
  * Debug function to check if users have segment fields.
  */
+/**
+ * Debug segmentation: returns full computation details for sample users (no DB write).
+ * ?limit=5 or ?userId=xxx
+ */
+exports.debugUserSegmentation = functions
+  .region('us-central1')
+  .https.onRequest(async (req, res) => {
+    const db = getDb();
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 5;
+    const userId = req.query.userId;
+
+    try {
+      let docs = [];
+      if (userId) {
+        const doc = await db.collection('users').doc(userId).get();
+        if (doc.exists) docs = [doc];
+      } else {
+        const snap = await db
+          .collection('users')
+          .where('role', '==', 'customer')
+          .where('active', '==', true)
+          .limit(Math.min(limit, 20))
+          .get();
+        docs = snap.docs;
+      }
+
+      if (docs.length === 0) {
+        return res.json({ error: 'No users found' });
+      }
+
+      const results = [];
+      for (const doc of docs) {
+        const userData = doc.data();
+        const pref = userData.preferenceProfile || {};
+        const debug = await getUserSegmentDebug(doc.id, userData, db);
+        results.push({
+          userId: doc.id,
+          email: userData.email || null,
+          prefTotalOrders: pref.totalCompletedOrders ?? null,
+          prefLastOrderedAt: pref.lastOrderedAt
+            ? String(pref.lastOrderedAt)
+            : null,
+          ...debug,
+        });
+      }
+
+      res.json({
+        sessionId: 'c03aec',
+        count: results.length,
+        results,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  });
+
+/**
+ * Find one user with no segment, run updateUserSegment, return full diagnostic.
+ * Use to verify the write pipeline works.
+ */
+exports.fixSingleUnknownUser = functions
+  .region('us-central1')
+  .https.onRequest(async (req, res) => {
+    const db = getDb();
+    try {
+      const snap = await db
+        .collection('users')
+        .where('role', '==', 'customer')
+        .where('active', '==', true)
+        .limit(500)
+        .get();
+
+      let targetDoc = null;
+      for (const doc of snap.docs) {
+        const seg = doc.data().segment;
+        if (seg == null || seg === '' || String(seg).trim() === '') {
+          targetDoc = doc;
+          break;
+        }
+      }
+
+      if (!targetDoc) {
+        return res.json({
+          found: false,
+          message:
+            'No user without segment in first 500. All may already have segments.',
+        });
+      }
+
+      const userId = targetDoc.id;
+      const userData = targetDoc.data();
+      const beforeSegment = userData.segment;
+
+      const debug = await getUserSegmentDebug(userId, userData, db);
+
+      await updateUserSegment(userId, userData, db);
+
+      const afterDoc = await db.collection('users').doc(userId).get();
+      const afterSegment = afterDoc.exists ? afterDoc.data().segment : null;
+
+      res.json({
+        found: true,
+        userId,
+        email: userData.email || null,
+        beforeSegment,
+        computedSegment: debug.segment,
+        afterSegment,
+        writeVerified: afterSegment === debug.segment,
+        debug,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  });
+
 exports.checkSegmentFields = functions
   .region('us-central1')
   .https.onRequest(async (req, res) => {
@@ -539,30 +777,11 @@ exports.testSegmentationNoNotifications = functions
 
       for (const doc of snapshot.docs) {
         const userData = doc.data();
-        const pref = userData.preferenceProfile || {};
-        const totalOrders = pref.totalCompletedOrders || 0;
-
-        let segment = 'new';
-        if (totalOrders > 0) {
-          if (totalOrders >= 10) segment = 'power_user';
-          else if (totalOrders >= 5) segment = 'regular';
-          else segment = 'active';
-        }
-
-        await db
-          .collection('users')
-          .doc(doc.id)
-          .update({
-            segment,
-            segmentUpdatedAt:
-              admin.firestore.FieldValue.serverTimestamp(),
-            debug_run_at: new Date().toISOString(),
-          });
+        const segment = await updateUserSegment(doc.id, userData, db);
 
         results.push({
           id: doc.id,
           email: userData.email,
-          orders: totalOrders,
           assignedSegment: segment,
         });
       }

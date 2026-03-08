@@ -24,6 +24,7 @@ import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/home/HomeScreen.dart';
+import 'package:foodie_customer/ui/loyalty/LoyaltyScreen.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/OrderDetailsScreen.dart';
 import 'package:foodie_customer/ui/order_recovery/order_recovery_screen.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
@@ -421,6 +422,8 @@ class NotificationService {
         _navigateToOrderDetails(data);
       } else if (data['type'] == 'happy_hour') {
         _navigateToHome();
+      } else if (data['type'] == 'loyalty_tier_up') {
+        _navigateToLoyalty();
       }
     } catch (e) {
       log('Error handling notification tap: $e');
@@ -502,6 +505,28 @@ class NotificationService {
       );
     } catch (e) {
       log('Error navigating to home: $e');
+    }
+  }
+
+  Future<void> _navigateToLoyalty() async {
+    try {
+      BuildContext? context = navigatorKey.currentContext;
+      if (context == null) {
+        await Future.delayed(const Duration(seconds: 1));
+        context = navigatorKey.currentContext;
+      }
+      if (context == null) {
+        log('No context available for loyalty navigation');
+        return;
+      }
+      final userId = MyAppState.currentUser?.userID;
+      if (userId == null || userId.isEmpty) {
+        log('No current user for loyalty navigation');
+        return;
+      }
+      push(context, LoyaltyScreen(userId: userId));
+    } catch (e) {
+      log('Error navigating to loyalty: $e');
     }
   }
 

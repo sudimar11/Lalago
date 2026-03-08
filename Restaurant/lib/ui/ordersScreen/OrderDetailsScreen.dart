@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:esc_pos_utils/esc_pos_utils.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/constants/quick_messages.dart';
@@ -42,7 +42,8 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
   var tipAmount = "0.0";
 
-  @override
+  List<Map<String, dynamic>> _internalNotes = [];
+
   @override
   void initState() {
     super.initState();
@@ -87,6 +88,172 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
     // 6. Deduct commission
     total = totalAmount - adminComm;
+    _internalNotes = List<Map<String, dynamic>>.from(
+      widget.orderModel.internalNotes ?? [],
+    );
+  }
+
+  Future<void> _addInternalNote() async {
+    final controller = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Internal Note'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'Enter note...',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 3,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (result == true && controller.text.trim().isNotEmpty && mounted) {
+      await FireStoreUtils.addOrderNote(widget.orderModel.id, controller.text.trim());
+      final updated = await FireStoreUtils.getOrderById(widget.orderModel.id);
+      if (mounted && updated != null) {
+        setState(() => _internalNotes = List.from(updated.internalNotes ?? []));
+      }
+    }
+  }
+
+  Future<void> _editInternalNote(String noteId, String currentNote) async {
+    final controller = TextEditingController(text: currentNote);
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Internal Note'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'Enter note...',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 3,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == true && mounted) {
+      await FireStoreUtils.updateOrderInternalNote(
+        widget.orderModel.id,
+        noteId,
+        controller.text.trim(),
+      );
+      final updated = await FireStoreUtils.getOrderById(widget.orderModel.id);
+      if (mounted && updated != null) {
+        setState(() => _internalNotes = List.from(updated.internalNotes ?? []));
+      }
+    }
+  }
+
+  Widget _buildInternalNotesSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Internal Notes',
+              style: TextStyle(
+                fontFamily: 'Poppinsm',
+                fontSize: 17,
+                letterSpacing: 0.5,
+                color: isDarkMode(context)
+                    ? Colors.grey.shade300
+                    : const Color(0xff9091A4),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _addInternalNote,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add Note'),
+            ),
+          ],
+        ),
+        if (_internalNotes.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'No internal notes',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          )
+        else
+          ..._internalNotes.map((n) {
+            final id = n['id'] as String? ?? '';
+            final note = n['note'] as String? ?? '';
+            final createdAt = n['createdAt'];
+            String dateStr = '';
+            if (createdAt != null && createdAt is Timestamp) {
+              dateStr = '${createdAt.toDate().toIso8601String().substring(0, 16)}';
+            }
+            return Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          note,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDarkMode(context)
+                                ? Colors.white70
+                                : Colors.black87,
+                          ),
+                        ),
+                        if (dateStr.isNotEmpty)
+                          Text(
+                            dateStr,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit, size: 18),
+                    onPressed: () => _editInternalNote(id, note),
+                  ),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
   }
 
   @override
@@ -537,7 +704,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                 title: Text(
-                  'Subtotal'.tr(),
+                  'Subtotal',
                   style: TextStyle(
                     fontFamily: 'Poppinsm',
                     fontSize: 16,
@@ -566,7 +733,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                   title: Text(
-                    'Special Discount'.tr() +
+                    'Special Discount' +
                         "(${specialDiscount['special_discount_label'] ?? ''}${specialDiscount['specialType'] == "amount" ? currencyModel!.symbol : "%"})",
                     style: TextStyle(
                       fontFamily: 'Poppinsm',
@@ -591,7 +758,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                 title: Text(
-                  'Discount'.tr(),
+                  'Discount',
                   style: TextStyle(
                     fontFamily: 'Poppinsm',
                     fontSize: 16,
@@ -659,7 +826,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 0, vertical: 0),
                       title: Text(
-                        "Remarks".tr(),
+                        "Customer Notes",
                         style: TextStyle(
                           fontFamily: 'Poppinsm',
                           fontSize: 17,
@@ -669,34 +836,63 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                               : const Color(0xff9091A4),
                         ),
                       ),
-                      trailing: InkWell(
-                        onTap: () {
-                          showModalBottomSheet(
-                              isScrollControlled: true,
-                              isDismissible: true,
-                              context: context,
-                              backgroundColor: Colors.transparent,
-                              enableDrag: true,
-                              builder: (BuildContext context) =>
-                                  viewNotesheet(widget.orderModel.notes!));
-                        },
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 4),
                         child: Text(
-                          "View".tr(),
+                          widget.orderModel.notes!,
                           style: TextStyle(
-                              fontSize: 18,
-                              color: Color(COLOR_PRIMARY),
-                              letterSpacing: 0.5,
-                              fontFamily: 'Poppinsm'),
+                            fontFamily: 'Poppinsm',
+                            fontSize: 14,
+                            color: isDarkMode(context)
+                                ? Colors.white70
+                                : Colors.black87,
+                          ),
                         ),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.copy, size: 20),
+                            onPressed: () {
+                              Clipboard.setData(
+                                ClipboardData(text: widget.orderModel.notes!),
+                              );
+                            },
+                          ),
+                          InkWell(
+                            onTap: () {
+                              showModalBottomSheet(
+                                isScrollControlled: true,
+                                isDismissible: true,
+                                context: context,
+                                backgroundColor: Colors.transparent,
+                                enableDrag: true,
+                                builder: (ctx) =>
+                                    viewNotesheet(widget.orderModel.notes!),
+                              );
+                            },
+                            child: Text(
+                              "View",
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Color(COLOR_PRIMARY),
+                                letterSpacing: 0.5,
+                                fontFamily: 'Poppinsm',
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     )
                   : Container(),
+              _buildInternalNotesSection(),
               widget.orderModel.couponCode!.trim().isNotEmpty
                   ? ListTile(
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 0, vertical: 0),
                       title: Text(
-                        'Coupon Code'.tr(),
+                        'Coupon Code',
                         style: TextStyle(
                           fontFamily: 'Poppinsm',
                           fontSize: 16,
@@ -723,7 +919,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                 title: Text(
-                  'Order Total'.tr(),
+                  'Order Total',
                   style: TextStyle(
                     fontFamily: 'Poppinsm',
                     letterSpacing: 0.5,
@@ -764,7 +960,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                 width: 0.8, color: Color(COLOR_PRIMARY))),
                         child: Center(
                           child: Text(
-                            'Print Invoice'.tr(),
+                            'Print Invoice',
                             style: TextStyle(
                                 color: isDarkMode(context)
                                     ? const Color(0xffFFFFFF)
@@ -890,7 +1086,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
       barrierDismissible: false,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Connect Bluetooth Device').tr(),
+          title: const Text('Connect Bluetooth Device'),
           content: SizedBox(
             width: double.maxFinite,
             child: availableBluetoothDevices.isEmpty
@@ -899,12 +1095,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                     children: [
                       const CircularProgressIndicator(),
                       const SizedBox(height: 16),
-                      const Text("Searching for devices...").tr(),
+                      const Text("Searching for devices..."),
                       const SizedBox(height: 8),
                       const Text(
                         "If no devices are found, please pair your printer in Bluetooth settings.",
                         textAlign: TextAlign.center,
-                      ).tr(),
+                      ),
                     ],
                   )
                 : ListView.builder(
@@ -924,7 +1120,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                         title: Text(deviceName.isNotEmpty
                             ? deviceName
                             : "Unknown Device"),
-                        subtitle: Text("MAC: $mac").tr(),
+                        subtitle: Text("MAC: $mac"),
                       );
                     },
                   ),
@@ -932,7 +1128,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text("Cancel").tr(),
+              child: const Text("Cancel"),
             ),
           ],
         );
@@ -1027,7 +1223,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                   Container(
                       padding: const EdgeInsets.only(top: 20),
                       child: Text(
-                        'Remark'.tr(),
+                        'Remark',
                         style: TextStyle(
                             fontFamily: 'Poppinssb',
                             color: isDarkMode(context)

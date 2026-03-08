@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart' as easyLocal;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
@@ -182,13 +181,13 @@ class _SignUpState extends State<SignUpScreen> {
 
         style: TextStyle(fontSize: 15.0),
 
-      ).tr(),
+      ),
 
       actions: <Widget>[
 
         CupertinoActionSheetAction(
 
-          child: Text('Choose from gallery').tr(),
+          child: Text('Choose from gallery'),
 
           isDefaultAction: false,
 
@@ -216,7 +215,7 @@ class _SignUpState extends State<SignUpScreen> {
 
         CupertinoActionSheetAction(
 
-          child: Text('Take a picture').tr(),
+          child: Text('Take a picture'),
 
           isDestructiveAction: false,
 
@@ -244,7 +243,7 @@ class _SignUpState extends State<SignUpScreen> {
 
         CupertinoActionSheetAction(
 
-          child: Text('Remove picture').tr(),
+          child: Text('Remove picture'),
 
           isDestructiveAction: true,
 
@@ -267,7 +266,7 @@ class _SignUpState extends State<SignUpScreen> {
 
       cancelButton: CupertinoActionSheetAction(
 
-        child: Text('Cancel').tr(),
+        child: Text('Cancel'),
 
         onPressed: () {
 
@@ -301,7 +300,7 @@ class _SignUpState extends State<SignUpScreen> {
 
             child: Text(
 
-              'Create new account'.tr(),
+              'Create new account',
 
               style: TextStyle(
 
@@ -311,7 +310,7 @@ class _SignUpState extends State<SignUpScreen> {
 
                   fontSize: 25.0),
 
-            ).tr()),
+            )),
 
 
         Padding(
@@ -431,7 +430,7 @@ class _SignUpState extends State<SignUpScreen> {
 
                 fillColor: Colors.white,
 
-                hintText: 'First Name'.tr(),
+                hintText: 'First Name',
 
                 focusedBorder: OutlineInputBorder(
 
@@ -510,7 +509,7 @@ class _SignUpState extends State<SignUpScreen> {
 
                 fillColor: Colors.white,
 
-                hintText: 'Last Name'.tr(),
+                hintText: 'Last Name',
 
                 focusedBorder: OutlineInputBorder(
 
@@ -571,7 +570,7 @@ class _SignUpState extends State<SignUpScreen> {
               ignoreBlank: true,
               autoValidateMode: AutovalidateMode.onUserInteraction,
               inputDecoration: InputDecoration(
-                hintText: 'phoneNumber'.tr(),
+                hintText: 'phoneNumber',
                 border: const OutlineInputBorder(
                   borderSide: BorderSide.none,
                 ),
@@ -630,7 +629,7 @@ class _SignUpState extends State<SignUpScreen> {
 
                 fillColor: Colors.white,
 
-                hintText: 'Email Address'.tr(),
+                hintText: 'Email Address',
 
                 focusedBorder: OutlineInputBorder(
 
@@ -723,7 +722,7 @@ class _SignUpState extends State<SignUpScreen> {
 
                 fillColor: Colors.white,
 
-                hintText: 'Password'.tr(),
+                hintText: 'Password',
 
                 suffixIcon: IconButton(
 
@@ -842,7 +841,7 @@ class _SignUpState extends State<SignUpScreen> {
 
                 fillColor: Colors.white,
 
-                hintText: 'Confirm Password'.tr(),
+                hintText: 'Confirm Password',
 
                 suffixIcon: IconButton(
 
@@ -951,7 +950,7 @@ class _SignUpState extends State<SignUpScreen> {
 
               child: Text(
 
-                'Sign Up'.tr(),
+                'Sign Up',
 
                 style: TextStyle(
 
@@ -993,7 +992,7 @@ class _SignUpState extends State<SignUpScreen> {
         //          color: isDarkMode(context) ? Colors.white : Colors.black),
 
 
-        //    ).tr(),
+        //    ),
 
 
         //  ),
@@ -1017,7 +1016,7 @@ class _SignUpState extends State<SignUpScreen> {
         //  child: /*Text(
 
 
-        //    'Sign up with phone number'.tr(),
+        //    'Sign up with phone number',
 
 
         //    style: TextStyle(
@@ -1095,7 +1094,7 @@ class _SignUpState extends State<SignUpScreen> {
         //          Text(
 
 
-        //            'Sign up with phone number'.tr(),
+        //            'Sign up with phone number',
 
 
         //            style: TextStyle(
@@ -1181,7 +1180,7 @@ class _SignUpState extends State<SignUpScreen> {
 
       await showProgress(
 
-          context, 'Creating new account, Please wait...'.tr(), false);
+          context, 'Creating new account, Please wait...', false);
 
 
       try {
@@ -1269,11 +1268,11 @@ class _SignUpState extends State<SignUpScreen> {
 
               context,
 
-              'Signup Pending'.tr(),
+              'Signup Pending',
 
               "Thank you for signing up. Your application is under approval. Please wait for approval."
 
-                  .tr(),
+                  ,
 
               true,
 
@@ -1285,13 +1284,13 @@ class _SignUpState extends State<SignUpScreen> {
 
         } else if (result is String) {
 
-          showAlertDialog(context, 'Signup Failed'.tr(), result, true);
+          showAlertDialog(context, 'Signup Failed', result, true);
 
         } else {
 
-          showAlertDialog(context, 'Signup Failed'.tr(),
+          showAlertDialog(context, 'Signup Failed',
 
-              "An unexpected error occurred during signup.".tr(), true);
+              "An unexpected error occurred during signup.", true);
 
         }
 
@@ -1303,7 +1302,7 @@ class _SignUpState extends State<SignUpScreen> {
         print("Signup Error: $e"); // Log error
 
 
-        showAlertDialog(context, 'Signup Error'.tr(), e.toString().tr(), true);
+        showAlertDialog(context, 'Signup Error', e.toString(), true);
 
       }
 

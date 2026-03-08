@@ -3,8 +3,7 @@
 //
 // import 'package:cached_network_image/cached_network_image.dart';
 // import 'package:cloud_firestore/cloud_firestore.dart';
-// import 'package:easy_localization/easy_localization.dart' as easyLocal;
-// import 'package:flutter/cupertino.dart';
+// // import 'package:flutter/cupertino.dart';
 // import 'package:flutter/material.dart';
 // import 'package:flutter_sound/flutter_sound.dart';
 // import 'package:foodie_restaurant/constants.dart';
@@ -43,7 +42,7 @@
 //   final FireStoreUtils _fireStoreUtils = FireStoreUtils();
 //   RecordingState currentRecordingState = RecordingState.HIDDEN;
 //   late Timer audioMessageTimer;
-//   String audioMessageTime = 'Start recording'.tr();
+//   String audioMessageTime = 'Start recording';
 //   FlutterSoundRecorder? _myRecorder = FlutterSoundRecorder();
 //
 //   late String tempPathForAudioMessages;
@@ -89,7 +88,7 @@
 //                     color: isDarkMode(context) ? Colors.grey.shade200 : Colors.black,
 //                   ),
 //                   title: Text(
-//                     'Settings'.tr(),
+//                     'Settings',
 //                     style: TextStyle(fontSize: 18),
 //                   ),
 //                 ))
@@ -145,7 +144,7 @@
 //                           if (snapshot.hasData && (snapshot.data?.message.isEmpty ?? true)) {
 //                             return Padding(
 //                               padding: const EdgeInsets.all(8.0),
-//                               child: Center(child: showEmptyState('No Messages Yet'.tr(), "SendNewMessageShowHere".tr())),
+//                               child: Center(child: showEmptyState('No Messages Yet', "SendNewMessageShowHere")),
 //                             );
 //                           } else {
 //                             return ListView.builder(
@@ -207,7 +206,7 @@
 //                                       decoration: InputDecoration(
 //                                         isDense: true,
 //                                         contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-//                                         hintText: 'Start typing'.tr(),
+//                                         hintText: 'Start typing',
 //                                         hintStyle: TextStyle(color: Colors.grey.shade400),
 //                                         focusedBorder: OutlineInputBorder(
 //                                             borderRadius: BorderRadius.all(
@@ -285,7 +284,7 @@
 //                             child: Text(
 //                               'Send',
 //                               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-//                             ).tr(),
+//                             ),
 //                             onPressed: () => _onSendRecord(),
 //                           ),
 //                         ),
@@ -306,7 +305,7 @@
 //                             child: Text(
 //                               'Cancel',
 //                               style: TextStyle(fontSize: 20, color: Colors.white, fontWeight: FontWeight.bold),
-//                             ).tr(),
+//                             ),
 //                             onPressed: () => _onCancelRecording(),
 //                           ),
 //                         ),
@@ -329,7 +328,7 @@
 //                         child: Text(
 //                           'Record',
 //                           style: TextStyle(fontSize: 20, color: Colors.white, fontWeight: FontWeight.bold),
-//                         ).tr(),
+//                         ),
 //                         onPressed: () => _onStartRecording(innerContext),
 //                       ),
 //                     ),
@@ -345,7 +344,7 @@
 //   }
 //
 //   Widget buildSubTitle(User friend) {
-//     String text = friend.active ? 'Active now'.tr() : 'Last seen on {}'.tr(args: ['${setLastSeen(friend.lastOnlineTimestamp.seconds)}']);
+//     String text = friend.active ? 'Active now' : 'Last seen on {}'.tr(args: ['${setLastSeen(friend.lastOnlineTimestamp.seconds)}']);
 //     return Text(text, style: TextStyle(color: Colors.grey.shade200));
 //   }
 //
@@ -354,10 +353,10 @@
 //       message: Text(
 //         'Send media',
 //         style: TextStyle(fontSize: 15.0),
-//       ).tr(),
+//       ),
 //       actions: <Widget>[
 //         CupertinoActionSheetAction(
-//           child: Text('Choose image from gallery').tr(),
+//           child: Text('Choose image from gallery'),
 //           isDefaultAction: false,
 //           onPressed: () async {
 //             Navigator.pop(context);
@@ -369,7 +368,7 @@
 //           },
 //         ),
 //         CupertinoActionSheetAction(
-//           child: Text('Choose video from gallery').tr(),
+//           child: Text('Choose video from gallery'),
 //           isDefaultAction: false,
 //           onPressed: () async {
 //             Navigator.pop(context);
@@ -381,7 +380,7 @@
 //           },
 //         ),
 //         CupertinoActionSheetAction(
-//           child: Text('Take a picture').tr(),
+//           child: Text('Take a picture'),
 //           isDestructiveAction: false,
 //           onPressed: () async {
 //             Navigator.pop(context);
@@ -393,7 +392,7 @@
 //           },
 //         ),
 //         CupertinoActionSheetAction(
-//           child: Text('Record video').tr(),
+//           child: Text('Record video'),
 //           isDestructiveAction: false,
 //           onPressed: () async {
 //             Navigator.pop(context);
@@ -408,7 +407,7 @@
 //       cancelButton: CupertinoActionSheetAction(
 //         child: Text(
 //           'Cancel',
-//         ).tr(),
+//         ),
 //         onPressed: () {
 //           Navigator.pop(context);
 //         },
@@ -820,7 +819,7 @@
 //
 //       await _fireStoreUtils.updateChannel(homeConversationModel.conversationModel!);
 //     } else {
-//       showAlertDialog(context, 'An error occurred'.tr(), 'Failed to send message'.tr(), true);
+//       showAlertDialog(context, 'An error occurred', 'Failed to send message', true);
 //     }
 //   }
 //
@@ -837,35 +836,35 @@
 //       message: Text(
 //         'Chat settings',
 //         style: TextStyle(fontSize: 15.0),
-//       ).tr(),
+//       ),
 //       actions: <Widget>[
 //         CupertinoActionSheetAction(
-//           child: Text('Block user').tr(),
+//           child: Text('Block user'),
 //           onPressed: () async {
 //             Navigator.pop(context);
-//             showProgress(context, 'Blocking user...'.tr(), false);
+//             showProgress(context, 'Blocking user...', false);
 //             bool isSuccessful = await _fireStoreUtils.blockUser(homeConversationModel.members.first, 'block');
 //             hideProgress();
 //             if (isSuccessful) {
 //               Navigator.pop(context);
-//               _showAlertDialog(context, 'Block'.tr(), '{} has been blocked.'.tr(args: ['${homeConversationModel.members.first.fullName()}']));
+//               _showAlertDialog(context, 'Block', '{} has been blocked.'.tr(args: ['${homeConversationModel.members.first.fullName()}']));
 //             } else {
-//               _showAlertDialog(context, 'Block'.tr(), "notBlock {}".tr(args: ['${homeConversationModel.members.first.fullName()}']));
+//               _showAlertDialog(context, 'Block', "notBlock {}".tr(args: ['${homeConversationModel.members.first.fullName()}']));
 //             }
 //           },
 //         ),
 //         CupertinoActionSheetAction(
-//           child: Text('Report user').tr(),
+//           child: Text('Report user'),
 //           onPressed: () async {
 //             Navigator.pop(context);
-//             showProgress(context, 'Reporting user...'.tr(), false);
+//             showProgress(context, 'Reporting user...', false);
 //             bool isSuccessful = await _fireStoreUtils.blockUser(homeConversationModel.members.first, 'report');
 //             hideProgress();
 //             if (isSuccessful) {
 //               Navigator.pop(context);
-//               _showAlertDialog(context, 'Report'.tr(), '{} has been blocked and reported.'.tr(args: ['${homeConversationModel.members.first.fullName()}']));
+//               _showAlertDialog(context, 'Report', '{} has been blocked and reported.'.tr(args: ['${homeConversationModel.members.first.fullName()}']));
 //             } else {
-//               _showAlertDialog(context, 'Report'.tr(), "NotReportBlock {}".tr(args: ['${homeConversationModel.members.first.fullName()}']));
+//               _showAlertDialog(context, 'Report', "NotReportBlock {}".tr(args: ['${homeConversationModel.members.first.fullName()}']));
 //             }
 //           },
 //         ),
@@ -873,7 +872,7 @@
 //       cancelButton: CupertinoActionSheetAction(
 //         child: Text(
 //           'Cancel',
-//         ).tr(),
+//         ),
 //         onPressed: () {
 //           Navigator.pop(context);
 //         },
@@ -912,7 +911,7 @@
 //     await _myRecorder!.stopRecorder();
 //     audioMessageTimer.cancel();
 //     setState(() {
-//       audioMessageTime = 'Start recording'.tr();
+//       audioMessageTime = 'Start recording';
 //       currentRecordingState = RecordingState.HIDDEN;
 //     });
 //     Url url = await _fireStoreUtils.uploadAudioFile(File(tempPathForAudioMessages), context);
@@ -923,7 +922,7 @@
 //     await _myRecorder!.stopRecorder();
 //     audioMessageTimer.cancel();
 //     setState(() {
-//       audioMessageTime = 'Start Recording'.tr();
+//       audioMessageTime = 'Start Recording';
 //       currentRecordingState = RecordingState.VISIBLE;
 //     });
 //   }

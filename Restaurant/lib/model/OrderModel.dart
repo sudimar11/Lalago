@@ -28,6 +28,8 @@ class OrderModel {
   num? discount;
   String? couponCode;
   String? couponId, notes;
+  /// Internal notes (restaurant-only). Each map: {id, note, createdAt}.
+  List<Map<String, dynamic>>? internalNotes;
   String? tipValue;
   String? adminCommission;
   String? adminCommissionType;
@@ -58,6 +60,7 @@ class OrderModel {
       this.couponCode = '',
       this.couponId = '',
       this.notes = '',
+      this.internalNotes,
       vendor,
       /*this.extras = const [], this.extra_size,*/ this.tipValue,
       this.adminCommission,
@@ -79,6 +82,30 @@ class OrderModel {
         this.author = author ?? User(),
         this.createdAt = createdAt ?? Timestamp.now(),
         this.vendor = vendor ?? VendorModel();
+
+  static String? vendorIdFromVendorMap(dynamic v) {
+    if (v == null || v is! Map<String, dynamic>) return null;
+    return (v['id'] ?? v['vendorId'] ?? v['vendorID'])?.toString();
+  }
+
+  static String? _toStr(dynamic v) {
+    if (v == null) return null;
+    if (v is String) return v;
+    return v.toString();
+  }
+
+  static VendorModel parseVendor(Map<String, dynamic> parsedJson) {
+    if (!parsedJson.containsKey('vendor')) return VendorModel();
+    final v = parsedJson['vendor'];
+    if (v == null || v is! Map<String, dynamic>) return VendorModel();
+    try {
+      return VendorModel.fromJson(v);
+    } catch (_) {
+      final id = vendorIdFromVendorMap(v) ?? '';
+      final title = (v['title'] ?? v['authorName'] ?? '') as String? ?? '';
+      return VendorModel(id: id, title: title);
+    }
+  }
 
   factory OrderModel.fromJson(Map<String, dynamic> parsedJson) {
     List<OrderProductModel> products = parsedJson.containsKey('products')
@@ -116,10 +143,10 @@ class OrderModel {
               parsedJson["notes"].toString().isNotEmpty)
           ? parsedJson["notes"]
           : "",
-      vendor: parsedJson.containsKey('vendor')
-          ? VendorModel.fromJson(parsedJson['vendor'])
-          : VendorModel(),
-      vendorID: parsedJson['vendorID'] ?? '',
+      vendor: parseVendor(parsedJson),
+      vendorID: parsedJson['vendorID'] ??
+          vendorIdFromVendorMap(parsedJson['vendor']) ??
+          '',
       adminCommission: parsedJson["adminCommission"] != null
           ? (parsedJson["adminCommission"] is num
               ? parsedJson["adminCommission"].toString()
@@ -140,7 +167,7 @@ class OrderModel {
       takeAway: parsedJson["takeAway"] != null ? parsedJson["takeAway"] : false,
       //extras: parsedJson["extras"]!=null?parsedJson["extras"]:[],
       // extra_size: parsedJson["extras_price"]!=null?parsedJson["extras_price"]:"",
-      deliveryCharge: parsedJson["deliveryCharge"],
+      deliveryCharge: _toStr(parsedJson["deliveryCharge"]),
       paymentMethod: parsedJson["payment_method"] ?? '',
       estimatedTimeToPrepare: parsedJson["estimatedTimeToPrepare"] ?? '',
       scheduleTime: parsedJson["scheduleTime"],
@@ -152,6 +179,11 @@ class OrderModel {
       shippedAt: parsedJson["shippedAt"],
       coordination: parsedJson["coordination"] as Map<String, dynamic>?,
       taxModel: taxList,
+      internalNotes: parsedJson["internalNotes"] != null
+          ? List<Map<String, dynamic>>.from(
+              (parsedJson["internalNotes"] as List<dynamic>)
+                  .map((e) => Map<String, dynamic>.from(e as Map)))
+          : null,
     );
   }
 
@@ -188,6 +220,7 @@ class OrderModel {
       "readyAt": this.readyAt,
       "shippedAt": this.shippedAt,
       "coordination": this.coordination,
+      "internalNotes": this.internalNotes,
     };
   }
 

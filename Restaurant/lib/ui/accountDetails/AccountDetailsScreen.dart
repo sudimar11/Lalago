@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -77,7 +76,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
         backgroundColor: isDarkMode(context) ? Color(DARK_VIEWBG_COLOR) : Colors.white,
         appBar: AppBar(
           title: Text(
-            'Account Details'.tr(),
+            'Account Details',
             style: TextStyle(
               color: isDarkMode(context) ? Color(0xFFFFFFFF) : Color(0Xff333333),
             ),
@@ -104,7 +103,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                           child: Text(
                             'PUBLIC INFO',
                             style: TextStyle(fontSize: 16, color: Colors.grey),
-                          ).tr(),
+                          ),
                         ),
                         Material(
                             elevation: 2,
@@ -115,11 +114,11 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                                 children: ListTile.divideTiles(context: buildContext, tiles: [
                                   ListTile(
                                     title: Text(
-                                      'firstName'.tr(),
+                                      'firstName',
                                       style: TextStyle(
                                         color: isDarkMode(context) ? Colors.white : Colors.black,
                                       ),
-                                    ).tr(),
+                                    ),
                                     trailing: ConstrainedBox(
                                       constraints: const BoxConstraints(maxWidth: 100),
                                       child: TextFormField(
@@ -131,15 +130,15 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                                         cursorColor: const Color(COLOR_ACCENT),
                                         textCapitalization: TextCapitalization.words,
                                         keyboardType: TextInputType.text,
-                                        decoration: InputDecoration(border: InputBorder.none, hintText: 'firstName'.tr(), contentPadding: const EdgeInsets.symmetric(vertical: 5)),
+                                        decoration: InputDecoration(border: InputBorder.none, hintText: 'firstName', contentPadding: const EdgeInsets.symmetric(vertical: 5)),
                                       ),
                                     ),
                                   ),
                                   ListTile(
                                     title: Text(
-                                      'lastName'.tr(),
+                                      'lastName',
                                       style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black),
-                                    ).tr(),
+                                    ),
                                     trailing: ConstrainedBox(
                                       constraints: const BoxConstraints(maxWidth: 100),
                                       child: TextFormField(
@@ -151,7 +150,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                                         cursorColor: const Color(COLOR_ACCENT),
                                         textCapitalization: TextCapitalization.words,
                                         keyboardType: TextInputType.text,
-                                        decoration: InputDecoration(border: InputBorder.none, hintText: 'lastName'.tr(), contentPadding: const EdgeInsets.symmetric(vertical: 5)),
+                                        decoration: InputDecoration(border: InputBorder.none, hintText: 'lastName', contentPadding: const EdgeInsets.symmetric(vertical: 5)),
                                       ),
                                     ),
                                   ),
@@ -161,7 +160,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                           child: Text(
                             'PRIVATE DETAILS',
                             style: TextStyle(fontSize: 16, color: Colors.grey),
-                          ).tr(),
+                          ),
                         ),
                         Material(
                           elevation: 2,
@@ -174,9 +173,9 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                                 tiles: [
                                   ListTile(
                                     title: Text(
-                                      'emailAddress'.tr(),
+                                      'emailAddress',
                                       style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black),
-                                    ).tr(),
+                                    ),
                                     trailing: ConstrainedBox(
                                       constraints: const BoxConstraints(maxWidth: 200),
                                       child: TextFormField(
@@ -187,15 +186,15 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                                         style: TextStyle(fontSize: 18, color: isDarkMode(context) ? Colors.white : Colors.black),
                                         cursorColor: const Color(COLOR_ACCENT),
                                         keyboardType: TextInputType.emailAddress,
-                                        decoration: InputDecoration(border: InputBorder.none, hintText: 'emailAddress'.tr(), contentPadding: const EdgeInsets.symmetric(vertical: 5)),
+                                        decoration: InputDecoration(border: InputBorder.none, hintText: 'emailAddress', contentPadding: const EdgeInsets.symmetric(vertical: 5)),
                                       ),
                                     ),
                                   ),
                                   ListTile(
                                     title: Text(
-                                      'phoneNumber'.tr(),
+                                      'phoneNumber',
                                       style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black),
-                                    ).tr(),
+                                    ),
                                     trailing: InkWell(
                                       onTap: () {
                                         showMobileAlertDialog(context);
@@ -211,7 +210,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                           child: Text(
                             'ADD RESTAURANT PHOTOS',
                             style: TextStyle(fontSize: 16, color: Colors.grey),
-                          ).tr(),
+                          ),
                         ),
                         ConstrainedBox(
                             constraints: const BoxConstraints(minWidth: double.infinity),
@@ -244,7 +243,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                                   child: Text(
                                     'Save',
                                     style: TextStyle(fontSize: 18, color: Color(COLOR_PRIMARY)),
-                                  ).tr(),
+                                  ),
                                 ),
                               ),
                             )),
@@ -259,13 +258,13 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
   showMobileAlertDialog(BuildContext context) {
     // set up the buttons
     Widget cancelButton = TextButton(
-      child: const Text("Cancel").tr(),
+      child: const Text("Cancel"),
       onPressed: () {
         Navigator.pop(context);
       },
     );
     Widget continueButton = TextButton(
-      child: const Text("continue").tr(),
+      child: const Text("continue"),
       onPressed: () {
         if (_isPhoneValid) {
           setState(() {
@@ -279,7 +278,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
 
     // set up the AlertDialog
     AlertDialog alert = AlertDialog(
-      title: const Text("Change Phone Number").tr(),
+      title: const Text("Change Phone Number"),
       content: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), shape: BoxShape.rectangle, border: Border.all(color: Colors.grey.shade200)),
@@ -291,7 +290,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
           ignoreBlank: true,
           autoValidateMode: AutovalidateMode.onUserInteraction,
           inputDecoration: InputDecoration(
-            hintText: 'Phone Number'.tr(),
+            hintText: 'Phone Number',
             border: const OutlineInputBorder(
               borderSide: BorderSide.none,
             ),
@@ -375,7 +374,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
             _mediaFiles.add(null);
             setState(() {});
           },
-          child: Text('Remove picture').tr(),
+          child: Text('Remove picture'),
           isDestructiveAction: true,
         ),
         CupertinoActionSheetAction(
@@ -384,11 +383,11 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
             push(context, image is File ? FullScreenImageViewer(imageFile: image) : FullScreenImageViewer(imageUrl: image));
           },
           isDefaultAction: true,
-          child: Text('View picture').tr(),
+          child: Text('View picture'),
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel').tr(),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -402,10 +401,10 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
       message: Text(
         'Add Picture',
         style: TextStyle(fontSize: 15.0),
-      ).tr(),
+      ),
       actions: <Widget>[
         CupertinoActionSheetAction(
-          child: Text('Choose image from gallery').tr(),
+          child: Text('Choose image from gallery'),
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -419,7 +418,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text('Take a picture').tr(),
+          child: Text('Take a picture'),
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -434,7 +433,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel').tr(),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -470,13 +469,13 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                       "changeToEmailEnterPassword",
                       style: TextStyle(color: Colors.red, fontSize: 17),
                       textAlign: TextAlign.start,
-                    ).tr(),
+                    ),
                     Padding(
                       padding: const EdgeInsets.only(top: 8.0),
                       child: TextField(
                         controller: _passwordController,
                         obscureText: true,
-                        decoration: InputDecoration(hintText: 'Password'.tr()),
+                        decoration: InputDecoration(hintText: 'Password'),
                       ),
                     ),
                     Padding(
@@ -492,26 +491,26 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                         ),
                         onPressed: () async {
                           if (_passwordController.text.isEmpty) {
-                            showAlertDialog(context, 'Empty Password'.tr(), 'Password is required to update email'.tr(), true);
+                            showAlertDialog(context, 'Empty Password', 'Password is required to update email', true);
                           } else {
                             Navigator.pop(context);
-                            showProgress(context, 'Verifying...'.tr(), false);
+                            showProgress(context, 'Verifying...', false);
                             auth.UserCredential? result = await FireStoreUtils.reAuthUser(AuthProviders.PASSWORD, email: user!.email, password: _passwordController.text);
                             if (result == null) {
                               hideProgress();
-                              showAlertDialog(context, "notVerify".tr(), 'Please double check the password and try again.'.tr(), true);
+                              showAlertDialog(context, "notVerify", 'Please double check the password and try again.', true);
                             } else {
                               _passwordController.dispose();
                               if (result.user != null) {
                                 await result.user?.updateEmail(email.text);
-                                updateProgress('Saving details...'.tr());
+                                updateProgress('Saving details...');
                                 await _updateUser(buildContext);
                                 hideProgress();
                               } else {
                                 hideProgress();
                                 ScaffoldMessenger.of(buildContext).showSnackBar(SnackBar(
                                     content: Text(
-                                  "notVerifyTryAgain".tr(),
+                                  "notVerifyTryAgain",
                                   style: TextStyle(fontSize: 17),
                                 )));
                               }
@@ -521,7 +520,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                         child: Text(
                           'Verify',
                           style: TextStyle(color: isDarkMode(context) ? Colors.black : Colors.white),
-                        ).tr(),
+                        ),
                       ),
                     )
                   ],
@@ -530,12 +529,12 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
             ),
           );
         } else {
-          showProgress(context, 'Saving details...'.tr(), false);
+          showProgress(context, 'Saving details...', false);
           await _updateUser(buildContext);
           hideProgress();
         }
       } else {
-        showProgress(context, 'Saving details...'.tr(), false);
+        showProgress(context, 'Saving details...', false);
         await _updateUser(buildContext);
         hideProgress();
       }
@@ -551,20 +550,16 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
     List<File> imagesToUpload = _mediaFiles.where((element) => element is File).toList().cast<File>();
     if (imagesToUpload.isNotEmpty) {
       updateProgress(
-        'Uploading Restaurant Images {} of {}'.tr(args: ['1', '${imagesToUpload.length}']),
+        'Uploading Restaurant Images 1 of ${imagesToUpload.length}',
       );
       for (int i = 0; i < imagesToUpload.length; i++) {
         if (i != 0)
           updateProgress(
-            'Uploading Restaurant Images {} of {}'.tr(
-              args: ['${i + 1}', '${imagesToUpload.length}'],
-            ),
+            'Uploading Restaurant Images ${i + 1} of ${imagesToUpload.length}',
           );
         String url = await fireStoreUtils.uploadProductImage(
           imagesToUpload[i],
-          'Uploading Restaurant Images {} of {}'.tr(
-            args: ['${i + 1}', '${imagesToUpload.length}'],
-          ),
+          'Uploading Restaurant Images ${i + 1} of ${imagesToUpload.length}',
         );
         mediaFilesURLs.add(url);
       }
@@ -582,13 +577,13 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
           content: Text(
         'Details saved successfully',
         style: TextStyle(fontSize: 17),
-      ).tr()));
+      )));
     } else {
       ScaffoldMessenger.of(buildContext).showSnackBar(SnackBar(
           content: Text(
         "notSaveDetailsTryAgain",
         style: TextStyle(fontSize: 17),
-      ).tr()));
+      )));
     }
   }
 }

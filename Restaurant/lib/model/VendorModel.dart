@@ -61,6 +61,8 @@ class VendorModel {
 
   bool specialDiscountEnable;
 
+  String? chainId;
+
   VendorModel(
       {this.author = '',
       this.hidePhotos = false,
@@ -84,6 +86,7 @@ class VendorModel {
       this.restaurantMenuPhotos = const [],
       this.specialDiscount = const [],
       this.specialDiscountEnable = false,
+      this.chainId,
       this.location = '',
       this.reviewsCount = 0,
       this.reviewsSum = 0,
@@ -183,7 +186,8 @@ class VendorModel {
         coordinates: parsedJson['coordinates'] ?? GeoPoint(0.0, 0.0),
         restStatus: parsedJson['reststatus'] ?? false,
         enabledDiveInFuture: parsedJson['enabledDiveInFuture'] ?? false,
-        specialDiscountEnable: parsedJson['specialDiscountEnable'] ?? false);
+        specialDiscountEnable: parsedJson['specialDiscountEnable'] ?? false,
+        chainId: parsedJson['chainId']?.toString());
   }
 
   Map<String, dynamic> toJson() {

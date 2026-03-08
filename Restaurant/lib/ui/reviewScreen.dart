@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
@@ -133,7 +132,7 @@ class _ReviewScreenState extends State<ReviewScreen> with TickerProviderStateMix
               color: Color(COLOR_PRIMARY),
             ),
           ),
-          title: Text("View Review", style: TextStyle(fontFamily: 'Poppinssb', color: isDarkMode(context) ? Colors.white : Colors.black)).tr(),
+          title: Text("View Review", style: TextStyle(fontFamily: 'Poppinssb', color: isDarkMode(context) ? Colors.white : Colors.black)),
         ),
         body: SingleChildScrollView(
             child: Container(
@@ -155,7 +154,7 @@ class _ReviewScreenState extends State<ReviewScreen> with TickerProviderStateMix
                                           alignment: Alignment.center,
                                           padding: const EdgeInsets.only(top: 15),
                                           child: Text(
-                                            "Rate For".tr(),
+                                            "Rate For",
                                             style: const TextStyle(color: Color(0XFF7C848E), fontFamily: 'Poppinsr', fontSize: 17),
                                           )),
                                       Container(
@@ -274,7 +273,7 @@ class _ReviewScreenState extends State<ReviewScreen> with TickerProviderStateMix
                                               textInputAction: TextInputAction.next,
                                               enabled: false,
                                               decoration: InputDecoration(
-                                                  hintText: 'Type comment....'.tr(), hintStyle: const TextStyle(color: Color(0XFF8A8989), fontFamily: 'Poppinsr'), border: InputBorder.none),
+                                                  hintText: 'Type comment....', hintStyle: const TextStyle(color: Color(0XFF8A8989), fontFamily: 'Poppinsr'), border: InputBorder.none),
                                               maxLines: null,
                                             )),
                                       ),
@@ -295,7 +294,7 @@ class _ReviewScreenState extends State<ReviewScreen> with TickerProviderStateMix
                                           alignment: Alignment.center,
                                           padding: const EdgeInsets.only(top: 15),
                                           child: Text(
-                                            "Rate For".tr(),
+                                            "Rate For",
                                             style: const TextStyle(color: Color(0XFF7C848E), fontFamily: 'Poppinsr', fontSize: 17),
                                           )),
                                       Container(
@@ -404,7 +403,7 @@ class _ReviewScreenState extends State<ReviewScreen> with TickerProviderStateMix
                                               controller: comment,
                                               textInputAction: TextInputAction.send,
                                               decoration: InputDecoration(
-                                                  hintText: 'Type comment....'.tr(), hintStyle: const TextStyle(color: Color(0XFF8A8989), fontFamily: 'Poppinsr'), border: InputBorder.none),
+                                                  hintText: 'Type comment....', hintStyle: const TextStyle(color: Color(0XFF8A8989), fontFamily: 'Poppinsr'), border: InputBorder.none),
                                               maxLines: null,
                                             )),
                                       ),
@@ -422,7 +421,7 @@ class _ReviewScreenState extends State<ReviewScreen> with TickerProviderStateMix
     Widget? okButton;
     if (addOkButton) {
       okButton = TextButton(
-        child: const Text('OK').tr(),
+        child: const Text('OK'),
         onPressed: () {
           Navigator.pop(context);
         },

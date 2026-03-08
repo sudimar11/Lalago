@@ -22,7 +22,12 @@ class UserSegmentService {
         .get();
     final counts = <String, int>{};
     for (final doc in snap.docs) {
-      final seg = (doc.data()['segment'] as String?) ?? 'unknown';
+      final raw = doc.data()['segment'] as String?;
+      String seg = 'unknown';
+      if (raw != null && raw.trim().isNotEmpty) {
+        final normalized = raw.trim().toLowerCase();
+        seg = segments.contains(normalized) ? normalized : 'unknown';
+      }
       counts[seg] = (counts[seg] ?? 0) + 1;
     }
     return counts;
@@ -72,8 +77,32 @@ class UserSegmentService {
         return 'Inactive';
       case 'churned':
         return 'Churned';
+      case 'unknown':
+        return 'Unknown';
       default:
         return segment;
+    }
+  }
+
+  /// Criteria used for segmentation (matches backend logic).
+  static String getSegmentDescription(String segment) {
+    switch (segment) {
+      case 'power_user':
+        return '10+ orders, last order ≤30 days ago, ≥50% notification open rate';
+      case 'regular':
+        return '5+ orders, last order ≤30 days ago';
+      case 'active':
+        return '1–4 orders, last order ≤30 days ago';
+      case 'new':
+        return 'No completed orders yet';
+      case 'inactive':
+        return 'Last order 31–90 days ago';
+      case 'churned':
+        return 'Last order >90 days ago';
+      case 'unknown':
+        return 'Segment not yet calculated';
+      default:
+        return '';
     }
   }
 }

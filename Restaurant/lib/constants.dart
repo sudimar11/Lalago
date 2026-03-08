@@ -34,6 +34,11 @@ const emailTemplates = 'email_templates';
 const VENDOR_ATTRIBUTES = "vendor_attributes";
 const PRODUCTS = 'vendor_products';
 const ORDERS = 'restaurant_orders';
+const FORECAST_AGGREGATES = 'forecast_aggregates';
+const DEMAND_FORECASTS = 'demand_forecasts';
+const DRIVER_PERFORMANCE_HISTORY = 'driver_performance_history';
+const DRIVER_INCENTIVES = 'driver_incentives';
+const INCENTIVE_RULES = 'incentive_rules';
 const COUPONS = "coupons";
 const ORDERS_TABLE = 'booked_table';
 const CONTACT_US = 'ContactUs';
@@ -54,6 +59,8 @@ const ORDER_STATUS_IN_TRANSIT = 'In Transit';
 const ORDER_STATUS_COMPLETED = 'Order Completed';
 
 const USER_ROLE_VENDOR = 'vendor';
+const USER_ROLE_CHAIN_ADMIN = 'chain_admin';
+const CHAINS = 'chains';
 const STORY = 'story';
 
 const scheduleOrder = "schedule_order";

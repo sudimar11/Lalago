@@ -6,7 +6,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -36,9 +35,11 @@ import 'package:foodie_restaurant/model/story_model.dart';
 import 'package:foodie_restaurant/model/topupTranHistory.dart';
 import 'package:foodie_restaurant/model/withdrawHistoryModel.dart';
 import 'package:foodie_restaurant/services/helper.dart';
+import 'package:foodie_restaurant/utils/analytics_helper.dart';
 import 'package:foodie_restaurant/ui/DineIn/BookTableModel.dart';
 import 'package:foodie_restaurant/ui/offer/offer_model/offer_model.dart';
 import 'package:foodie_restaurant/ui/reauthScreen/reauth_user_screen.dart';
+import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
 import 'package:path_provider/path_provider.dart';
@@ -238,6 +239,68 @@ class FireStoreUtils {
       }
     }
     return ratingproduct;
+  }
+
+  Stream<List<RatingModel>> getReviewsByVendor(String vendorId) {
+    return firestore
+        .collection(Order_Rating)
+        .where('VendorId', isEqualTo: vendorId)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((doc) => RatingModel.fromJson({
+                  ...doc.data(),
+                  'Id': doc.id,
+                  'id': doc.id,
+                }))
+            .toList());
+  }
+
+  Future<void> addReviewReply(
+    String reviewId,
+    String text, {
+    required String userId,
+    required String userType,
+    required String userName,
+  }) async {
+    final reply = {
+      'userId': userId,
+      'userType': userType,
+      'userName': userName,
+      'text': text,
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    await firestore.collection(Order_Rating).doc(reviewId).update({
+      'replies': FieldValue.arrayUnion([reply]),
+    });
+  }
+
+  Future<void> flagReview(
+    String reviewId, {
+    required String userId,
+    required String reason,
+  }) async {
+    final flagEntry = {
+      'userId': userId,
+      'reason': reason,
+      'timestamp': FieldValue.serverTimestamp(),
+    };
+    final ref = firestore.collection(Order_Rating).doc(reviewId);
+    final doc = await ref.get();
+    if (!doc.exists) return;
+    final data = doc.data() ?? {};
+    final flaggedBy = List<Map<String, dynamic>>.from(
+      (data['flaggedBy'] as List?)?.map((e) => Map<String, dynamic>.from(
+            e is Map ? e as Map : <String, dynamic>{},
+          )) ?? [],
+    );
+    final updates = <String, dynamic>{
+      'flaggedBy': FieldValue.arrayUnion([flagEntry]),
+    };
+    if (flaggedBy.isEmpty) {
+      updates['status'] = 'flagged';
+    }
+    await ref.update(updates);
   }
 
   Future<ReviewAttributeModel?> getVendorReviewAttribute(
@@ -909,71 +972,93 @@ class FireStoreUtils {
 
   Stream<List<OrderModel>> watchCompletedOrdersForDate(
       String vendorID, DateTime selectedDate) async* {
-    // broadcast so multiple listeners can share it
     final controller = StreamController<List<OrderModel>>.broadcast();
-
-    // Create start and end of the selected date
     final startOfDay =
         DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
-    final endOfDay = startOfDay.add(Duration(days: 1));
+    final endOfDay = startOfDay.add(const Duration(days: 1));
 
-    print(
-        '=== DEBUG: Looking for ALL completed orders for vendorID: $vendorID ===');
-    print(
-        '=== DEBUG: Excluding statuses: Order Placed, Driver Assigned, Order Accepted, Driver Accepted ===');
+    const excludedStatuses = [
+      'Order Placed',
+      'Driver Assigned',
+      'Order Accepted',
+      'Driver Accepted',
+    ];
 
-    // Show all completed orders regardless of date
     firestore
         .collection(ORDERS)
         .where('vendorID', isEqualTo: vendorID)
-        .where('status', whereNotIn: [
-          'Order Placed',
-          'Driver Assigned',
-          'Order Accepted',
-          'Driver Accepted',
-        ])
+        .where('createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('createdAt', isLessThan: Timestamp.fromDate(endOfDay))
         .orderBy('createdAt', descending: true)
         .snapshots()
         .listen((snapshot) {
-          print(
-              '=== DEBUG: Firestore query returned ${snapshot.docs.length} documents ===');
           final orders = <OrderModel>[];
           for (final doc in snapshot.docs) {
             try {
-              final orderData = doc.data();
+              final orderData = Map<String, dynamic>.from(doc.data());
+              orderData['id'] = doc.id;
               final status = orderData['status'] as String?;
-              final createdAt = orderData['createdAt'] as Timestamp?;
-              final orderVendorID = orderData['vendorID'] as String?;
-
-              print('=== DEBUG: Order ${doc.id} ===');
-              print('  Status: "$status"');
-              print('  CreatedAt: $createdAt');
-              print('  VendorID: $orderVendorID');
-              print('  Expected VendorID: $vendorID');
-
-              // Check if status is in the exclusion list
-              final excludedStatuses = [
-                'Order Placed',
-                'Driver Assigned',
-                'Order Accepted',
-                'Driver Accepted',
-              ];
               if (status != null && excludedStatuses.contains(status)) {
-                print('  ❌ EXCLUDED: Status "$status" is in exclusion list');
                 continue;
               }
-
-              if (status != null && createdAt != null) {
-                final orderDate = createdAt.toDate();
-                print('  ✅ INCLUDED - Status: $status, Date: $orderDate');
-                orders.add(OrderModel.fromJson(orderData));
-              } else {
-                print('  ❌ FILTERED OUT - Missing status or createdAt');
-                print('    Status: $status');
-                print('    CreatedAt: $createdAt');
-              }
+              orders.add(OrderModel.fromJson(orderData));
             } catch (e, s) {
-              print('parse error on ${doc.id}: $e\n$s');
+              developer.log('parse error on ${doc.id}: $e\n$s');
+            }
+          }
+          controller.add(orders);
+        });
+
+    yield* controller.stream;
+  }
+
+  static Future<List<OrderModel>> getOrdersInDateRange(
+      String vendorID, DateTime start, DateTime end) async {
+    final snapshot = await firestore
+        .collection(ORDERS)
+        .where('vendorID', isEqualTo: vendorID)
+        .where('createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('createdAt', isLessThan: Timestamp.fromDate(end))
+        .orderBy('createdAt', descending: true)
+        .get();
+
+    final orders = <OrderModel>[];
+    for (final doc in snapshot.docs) {
+      try {
+        final data = Map<String, dynamic>.from(doc.data());
+        data['id'] = doc.id;
+        orders.add(OrderModel.fromJson(data));
+      } catch (e, s) {
+        developer.log('getOrdersInDateRange parse error ${doc.id}: $e\n$s');
+      }
+    }
+    return orders;
+  }
+
+  Stream<List<OrderModel>> watchOrdersInDateRange(
+      String vendorID, DateTime start, DateTime end) async* {
+    final controller = StreamController<List<OrderModel>>.broadcast();
+
+    firestore
+        .collection(ORDERS)
+        .where('vendorID', isEqualTo: vendorID)
+        .where('createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('createdAt', isLessThan: Timestamp.fromDate(end))
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .listen((snapshot) {
+          final orders = <OrderModel>[];
+          for (final doc in snapshot.docs) {
+            try {
+              final data = Map<String, dynamic>.from(doc.data());
+              data['id'] = doc.id;
+              orders.add(OrderModel.fromJson(data));
+            } catch (e, s) {
+              developer.log(
+                  'watchOrdersInDateRange parse error ${doc.id}: $e\n$s');
             }
           }
           controller.add(orders);
@@ -1042,6 +1127,183 @@ class FireStoreUtils {
         .collection(ORDERS)
         .doc(orderModel.id)
         .set(orderModel.toJson(), SetOptions(merge: true));
+  }
+
+  /// Fetches orders for a specific customer at a vendor.
+  static Future<List<OrderModel>> getCustomerOrders(
+    String customerId,
+    String vendorID, {
+    int limit = 50,
+    DocumentSnapshot? startAfter,
+  }) async {
+    Query<Map<String, dynamic>> query = firestore
+        .collection(ORDERS)
+        .where('vendorID', isEqualTo: vendorID)
+        .where('authorID', isEqualTo: customerId)
+        .orderBy('createdAt', descending: true)
+        .limit(limit);
+
+    if (startAfter != null) {
+      query = query.startAfterDocument(startAfter);
+    }
+
+    final snapshot = await query.get();
+    final orders = <OrderModel>[];
+    for (final doc in snapshot.docs) {
+      try {
+        final data = Map<String, dynamic>.from(doc.data());
+        data['id'] = doc.id;
+        orders.add(OrderModel.fromJson(data));
+      } catch (e, s) {
+        developer.log('getCustomerOrders parse error ${doc.id}: $e\n$s');
+      }
+    }
+    return orders;
+  }
+
+  /// Fetches recent orders and filters by customer name/phone in memory.
+  static Future<List<OrderModel>> searchOrdersByCustomerName(
+    String vendorID,
+    String searchTerm, {
+    int limit = 100,
+  }) async {
+    final now = DateTime.now();
+    final start =
+        DateTime(now.year, now.month, now.day).subtract(const Duration(days: 90));
+    final end = now.add(const Duration(days: 1));
+    final orders =
+        await getOrdersInDateRange(vendorID, start, end);
+
+    final term = searchTerm.toLowerCase().trim();
+    final phoneDigits = searchTerm.replaceAll(RegExp(r'\D'), '');
+    final filtered = orders.where((o) {
+      final name =
+          '${o.author.firstName} ${o.author.lastName}'.toLowerCase();
+      final phone = o.author.phoneNumber.replaceAll(RegExp(r'\D'), '');
+      return o.id.toLowerCase().contains(term) ||
+          name.contains(term) ||
+          (phoneDigits.isNotEmpty && phone.contains(phoneDigits));
+    }).take(limit).toList();
+
+    return filtered;
+  }
+
+  /// Returns (orders, lastDocumentSnapshot) for pagination.
+  static Future<(List<OrderModel>, DocumentSnapshot?)> getOrdersPaginated(
+    String vendorID, {
+    int limit = 20,
+    DocumentSnapshot? startAfter,
+  }) async {
+    Query<Map<String, dynamic>> query = firestore
+        .collection(ORDERS)
+        .where('vendorID', isEqualTo: vendorID)
+        .orderBy('createdAt', descending: true)
+        .limit(limit);
+
+    if (startAfter != null) {
+      query = query.startAfterDocument(startAfter);
+    }
+
+    final snapshot = await query.get();
+    final orders = <OrderModel>[];
+    for (final doc in snapshot.docs) {
+      try {
+        final data = Map<String, dynamic>.from(doc.data());
+        data['id'] = doc.id;
+        orders.add(OrderModel.fromJson(data));
+      } catch (e, s) {
+        developer.log('getOrdersPaginated parse error ${doc.id}: $e\n$s');
+      }
+    }
+    final lastDoc =
+        snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+    return (orders, lastDoc);
+  }
+
+  static Future<void> addOrderNote(String orderId, String note) async {
+    final noteMap = {
+      'id': Uuid().v4(),
+      'note': note,
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    await firestore.collection(ORDERS).doc(orderId).update({
+      'internalNotes': FieldValue.arrayUnion([noteMap]),
+    });
+  }
+
+  /// Exports orders to CSV string. Uses AnalyticsHelper for net totals.
+  static Future<String> exportOrdersToCsv(List<OrderModel> orders) async {
+    final sb = StringBuffer();
+    sb.writeln(
+      'Order ID,Date,Customer Name,Customer Phone,Status,Items,'
+      'Subtotal,Discount,Tax,Delivery Charge,Total,Payment Method',
+    );
+
+    for (final o in orders) {
+      final netTotal = await AnalyticsHelper.calculateOrderNetTotal(o);
+      double subtotal = 0.0;
+      for (final p in o.products) {
+        final price = double.tryParse(p.price) ?? 0.0;
+        final extras = double.tryParse(p.extrasPrice ?? '0') ?? 0.0;
+        subtotal += p.quantity * (price + extras);
+      }
+      final discount =
+          double.tryParse(o.discount?.toString() ?? '0') ?? 0.0;
+      final specialDisc = double.tryParse(
+            o.specialDiscount?['special_discount']?.toString() ?? '0') ?? 0.0;
+      double taxTotal = 0.0;
+      for (final t in o.taxModel ?? []) {
+        taxTotal += calculateTax(
+          amount: (subtotal - discount - specialDisc).toString(),
+          taxModel: t,
+        );
+      }
+      final delCharge = double.tryParse(o.deliveryCharge ?? '0') ?? 0.0;
+      final itemsStr = o.products
+          .map((p) => '${p.name} x${p.quantity}')
+          .join('; ')
+          .replaceAll(',', ' ');
+      final row = [
+        o.id,
+        DateFormat('yyyy-MM-dd HH:mm')
+            .format(o.createdAt.toDate()),
+        '"${"${o.author.firstName} ${o.author.lastName}".replaceAll('"', '""')}"',
+        o.author.phoneNumber,
+        o.status,
+        '"${itemsStr.replaceAll('"', '""')}"',
+        subtotal.toStringAsFixed(2),
+        (discount + specialDisc).toStringAsFixed(2),
+        taxTotal.toStringAsFixed(2),
+        delCharge.toStringAsFixed(2),
+        netTotal.toStringAsFixed(2),
+        o.paymentMethod,
+      ].join(',');
+      sb.writeln(row);
+    }
+    return sb.toString();
+  }
+
+  static Future<void> updateOrderInternalNote(
+    String orderId,
+    String noteId,
+    String updatedNote,
+  ) async {
+    final docRef = firestore.collection(ORDERS).doc(orderId);
+    final doc = await docRef.get();
+    if (!doc.exists || doc.data() == null) return;
+
+    final data = doc.data()!;
+    final list = data['internalNotes'] as List<dynamic>? ?? [];
+    final updated = list.map<Map<String, dynamic>>((e) {
+      final m = Map<String, dynamic>.from(e as Map);
+      if (m['id'] == noteId) {
+        m['note'] = updatedNote;
+        m['updatedAt'] = FieldValue.serverTimestamp();
+      }
+      return m;
+    }).toList();
+
+    await docRef.update({'internalNotes': updated});
   }
 
   static Future updateDineInOrder(BookTableModel orderModel) async {
@@ -1124,11 +1386,7 @@ class FireStoreUtils {
     final metadata = SettableMetadata(contentType: 'image/png');
     UploadTask uploadTask = upload.putFile(compressedImage, metadata);
     uploadTask.snapshotEvents.listen((event) {
-      updateProgress('{} \n{} / {}KB'.tr(args: [
-        progress,
-        '${(event.bytesTransferred.toDouble() / 1000).toStringAsFixed(2)}',
-        '${(event.totalBytes.toDouble() / 1000).toStringAsFixed(2)} '
-      ]));
+      updateProgress('$progress \n${(event.bytesTransferred.toDouble() / 1000).toStringAsFixed(2)} / ${(event.totalBytes.toDouble() / 1000).toStringAsFixed(2)} KB');
     });
     uploadTask.whenComplete(() {});
     var storageRef = (await uploadTask.whenComplete(() {})).ref;
@@ -1194,6 +1452,71 @@ class FireStoreUtils {
 
   deleteProduct(String productID) async {
     await firestore.collection(PRODUCTS).doc(productID).delete();
+  }
+
+  Future<void> updateProductStock(String productId, int newQuantity) async {
+    await firestore.collection(PRODUCTS).doc(productId).update({
+      'quantity': newQuantity,
+      'lastStockUpdated': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> bulkUpdateProductsCategory(
+      List<String> productIds, String newCategoryId) async {
+    final batch = firestore.batch();
+    for (final id in productIds) {
+      batch.update(
+        firestore.collection(PRODUCTS).doc(id),
+        {'categoryID': newCategoryId},
+      );
+    }
+    await batch.commit();
+  }
+
+  Future<void> bulkUpdateProductsPublishStatus(
+      List<String> productIds, bool newStatus) async {
+    final batch = firestore.batch();
+    for (final id in productIds) {
+      batch.update(
+        firestore.collection(PRODUCTS).doc(id),
+        {'publish': newStatus},
+      );
+    }
+    await batch.commit();
+  }
+
+  Future<void> bulkDeleteProducts(List<String> productIds) async {
+    final batch = firestore.batch();
+    for (final id in productIds) {
+      batch.delete(firestore.collection(PRODUCTS).doc(id));
+    }
+    await batch.commit();
+  }
+
+  Future<void> bulkUpdateProductsStock(List<String> productIds, int value,
+      {String operation = 'set'}) async {
+    final batch = firestore.batch();
+    for (final id in productIds) {
+      if (operation == 'set') {
+        batch.update(
+          firestore.collection(PRODUCTS).doc(id),
+          {
+            'quantity': value,
+            'lastStockUpdated': FieldValue.serverTimestamp(),
+          },
+        );
+      } else {
+        batch.update(
+          firestore.collection(PRODUCTS).doc(id),
+          {
+            'quantity': FieldValue.increment(
+                operation == 'increment' ? value : -value),
+            'lastStockUpdated': FieldValue.serverTimestamp(),
+          },
+        );
+      }
+    }
+    await batch.commit();
   }
 
   /// compress image file to make it load faster but with lower quality,
@@ -1321,7 +1644,7 @@ class FireStoreUtils {
           requestedScopes: [apple.Scope.email, apple.Scope.fullName])
     ]);
     if (appleCredential.error != null) {
-      return "notLoginApple.".tr();
+      return "notLoginApple.";
     }
 
     if (appleCredential.status == apple.AuthorizationStatus.authorized) {
@@ -1334,7 +1657,7 @@ class FireStoreUtils {
       );
       return await handleAppleLogin(credential, appleCredential.credential!);
     } else {
-      return "notLoginApple.".tr();
+      return "notLoginApple.";
     }
   }
 
@@ -1646,7 +1969,7 @@ class FireStoreUtils {
       if (errorMessage == null) {
         return user;
       } else {
-        return "notCreateUserThisPhone".tr();
+        return "notCreateUserThisPhone";
       }
     }
   }
@@ -1668,7 +1991,7 @@ class FireStoreUtils {
         final uid = result.user?.uid ?? '';
         developer.log('[REST_SIGNUP] Image upload start - uid=$uid '
             'path=${image.path}');
-        updateProgress('Uploading image, Please wait...'.tr());
+        updateProgress('Uploading image, Please wait...');
         try {
           profilePicUrl =
               await uploadUserImageToFireStorage(image, uid);
@@ -1703,7 +2026,7 @@ class FireStoreUtils {
       }
     } on auth.FirebaseAuthException catch (error) {
       print(error.toString() + '${error.stackTrace}');
-      String message = "notSignUp".tr();
+      String message = "notSignUp";
       switch (error.code) {
         case 'email-already-in-use':
           message = 'Email already in use, Please pick another email!';
@@ -1724,7 +2047,7 @@ class FireStoreUtils {
       return message;
     } catch (e, st) {
       developer.log('[REST_SIGNUP] Signup error: $e', error: e, stackTrace: st);
-      return "notSignUp".tr();
+      return "notSignUp";
     }
   }
 
