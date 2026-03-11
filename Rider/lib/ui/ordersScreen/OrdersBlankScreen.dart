@@ -6,19 +6,20 @@ import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/widgets/refreshable_order_list.dart';
 import 'package:foodie_driver/ui/home/orderdetails.dart';
 import 'package:foodie_driver/main.dart';
-import 'package:foodie_driver/ui/group_chat/GroupChatScreen.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/performance_tier_helper.dart';
 import 'package:foodie_driver/userPrefrence.dart';
 import 'package:intl/intl.dart';
-import 'package:foodie_driver/ui/chat_screen/admin_driver_inbox_screen.dart';
+import 'package:foodie_driver/ui/communication/unified_communication_hub_screen.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/services/group_chat_service.dart';
+import 'package:foodie_driver/services/unified_inbox_service.dart';
 import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
 import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/services/food_ready_highlight_service.dart';
+import 'package:foodie_driver/services/user_listener_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -184,15 +185,12 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
               }))
           .catchError((e) => http.Response('', 500));
       // #endregion
-      // Only show offline dialog if user cannot receive orders
-      // User can receive orders only if: checked in today AND not checked out AND online
-      final isCheckedInToday =
-          (MyAppState.currentUser! as dynamic).checkedInToday == true;
-      final isCheckedOutToday =
-          (MyAppState.currentUser! as dynamic).checkedOutToday == true;
+      // Only show offline dialog if user cannot receive orders.
       final canReceiveOrders =
-          (isCheckedInToday && !isCheckedOutToday) &&
-              (MyAppState.currentUser!.isOnline == true);
+          MyAppState.currentUser!.isOnline == true &&
+              (MyAppState.currentUser!.riderAvailability == 'available' ||
+                  MyAppState.currentUser!.riderAvailability ==
+                      'on_delivery');
 
       // Slider card is shown in body when !canReceiveOrders; no dialog.
       if (mounted &&
@@ -345,13 +343,10 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       final timeString = DateFormat('h:mm a').format(now);
       final todayString = DateFormat('yyyy-MM-dd').format(now);
 
-      MyAppState.currentUser!.checkedInToday = true;
       MyAppState.currentUser!.isOnline = true;
       MyAppState.currentUser!.isActive = true;
       MyAppState.currentUser!.active = true;
-      MyAppState.currentUser!.todayCheckInTime = timeString;
-      MyAppState.currentUser!.checkedOutToday = false;
-      MyAppState.currentUser!.todayCheckOutTime = '';
+      UserListenerService.instance.markLocalMutation();
 
       try {
         final absentDaysMarked =
@@ -398,7 +393,7 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Successfully went online at $timeString!'),
+            content: const Text('Successfully went online!'),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 3),
           ),
@@ -1247,6 +1242,59 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
               );
             },
           ),
+          StreamBuilder<int>(
+            stream: UnifiedInboxService.getTotalUnreadCountStream(
+              currentUserId,
+            ),
+            builder: (context, snapshot) {
+              final totalUnread = snapshot.data ?? 0;
+              return Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    IconButton(
+                      tooltip: 'Messages',
+                      icon: const Icon(Icons.chat_bubble_outline),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                const UnifiedCommunicationHubScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    if (totalUnread > 0)
+                      Positioned(
+                        right: 4,
+                        top: 4,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Text(
+                            totalUnread > 99 ? '99+' : '$totalUnread',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
           StreamBuilder<QuerySnapshot>(
             stream: firestore
                 .collection('chat_admin_driver')
@@ -1274,7 +1322,9 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                       onPressed: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => const AdminDriverInboxScreen(),
+                            builder: (_) => const UnifiedCommunicationHubScreen(
+                              initialTab: UnifiedCommunicationTab.support,
+                            ),
                           ),
                         );
                       },
@@ -1326,18 +1376,12 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                     stream: _ordersStream!,
                     builder: (context, snapshot) {
                       // #region agent log
-                      final rawCheckedIn =
-                          (MyAppState.currentUser as dynamic)?.checkedInToday;
-                      final rawCheckedOut =
-                          (MyAppState.currentUser as dynamic)?.checkedOutToday;
                       final rawOnline = MyAppState.currentUser?.isOnline;
                       final canReceiveOrders =
                           MyAppState.currentUser?.riderAvailability ==
                               'available' ||
                           MyAppState.currentUser?.riderAvailability ==
                               'on_delivery';
-                      final isCheckedInToday = rawCheckedIn == true;
-                      final isCheckedOutToday = rawCheckedOut == true;
                       final branch = remittanceService.isBlockedByRemittance
                           ? 'remittance'
                           : (MyAppState.currentUser?.suspended == true)
@@ -1385,8 +1429,8 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                                 'suspended':
                                     MyAppState.currentUser?.suspended,
                                 'canReceiveOrders': canReceiveOrders,
-                                'isCheckedInToday': isCheckedInToday,
-                                'isCheckedOutToday': isCheckedOutToday,
+                                'availability':
+                                    MyAppState.currentUser?.riderAvailability,
                                 'isOnline': MyAppState.currentUser?.isOnline,
                                 'branch': branch,
                                 'docsLength':
@@ -1424,8 +1468,8 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                                   'message': 'Build - checking offline status',
                                   'data': {
                                     'isOnline': user.isOnline,
-                                    'checkedInToday':
-                                        (user as dynamic).checkedInToday,
+                                    'riderAvailability':
+                                        user.riderAvailability,
                                     'suspended': user.suspended
                                   },
                                   'timestamp':
@@ -1443,7 +1487,7 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                       if (!canReceiveOrders) {
                         // #region agent log
                         debugPrint(
-                            '[DEBUG LOG] Build - displaying offline card: isOnline=${MyAppState.currentUser!.isOnline}, checkedInToday=$isCheckedInToday, checkedOutToday=$isCheckedOutToday');
+                            '[DEBUG LOG] Build - displaying offline card: isOnline=${MyAppState.currentUser!.isOnline}, riderAvailability=${MyAppState.currentUser!.riderAvailability}');
                         http
                             .post(
                                 Uri.parse(
@@ -1455,8 +1499,9 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                                   'data': {
                                     'isOnline':
                                         MyAppState.currentUser!.isOnline,
-                                    'checkedInToday': isCheckedInToday,
-                                    'checkedOutToday': isCheckedOutToday,
+                                    'riderAvailability':
+                                        MyAppState.currentUser!
+                                            .riderAvailability,
                                     'canReceiveOrders': canReceiveOrders
                                   },
                                   'timestamp':
@@ -1572,7 +1617,10 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => const GroupChatScreen(),
+                            builder: (context) =>
+                                const UnifiedCommunicationHubScreen(
+                              initialTab: UnifiedCommunicationTab.community,
+                            ),
                           ),
                         );
                       },

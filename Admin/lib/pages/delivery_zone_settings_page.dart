@@ -21,11 +21,11 @@ Future<BitmapDescriptor> _createOrangeMarkerIcon() async {
 }
 
 Future<BitmapDescriptor> _createOrangeMarkerIconImpl() async {
-  const size = 64.0;
+  const size = 42.0;
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder);
-  const center = Offset(32, 32);
-  const radius = 30.0;
+  const center = Offset(21, 21);
+  const radius = 19.0;
   canvas.drawCircle(
     center,
     radius,
@@ -207,7 +207,18 @@ class _ServiceAreaEditPageState extends State<_ServiceAreaEditPage> {
   late Set<String> _selectedDriverIds;
   bool _saving = false;
 
-  static const _radiusOptions = [3.0, 4.0, 5.0, 10.0, 15.0, 20.0];
+  static const _radiusOptions = [
+    1.0,
+    1.5,
+    2.0,
+    2.5,
+    3.0,
+    4.0,
+    5.0,
+    10.0,
+    15.0,
+    20.0,
+  ];
   static const _defaultCenter = LatLng(14.5995, 120.9842); // Manila
 
   @override
@@ -688,87 +699,160 @@ class _ServiceAreaEditPageState extends State<_ServiceAreaEditPage> {
                                 .collection('vendors')
                                 .snapshots(),
                             builder: (context, vendorsSnap) {
-                              final allMarkers = <Marker>{};
-                              if (_centerLat != null && _centerLng != null) {
-                                allMarkers.add(
-                                  Marker(
-                                    markerId: const MarkerId('center'),
-                                    position: LatLng(
-                                        _centerLat!, _centerLng!),
-                                    infoWindow: InfoWindow(
-                                      title: 'Center',
-                                      snippet:
-                                          '${_centerLat!.toStringAsFixed(5)}, '
-                                          '${_centerLng!.toStringAsFixed(5)}',
-                                    ),
-                                  ),
-                                );
-                              }
-                              final vendors =
-                                  vendorsSnap.data?.docs ?? [];
-                              for (final doc in vendors) {
-                            final d = doc.data() as Map<String, dynamic>?;
-                            if (d == null) continue;
-                            double? lat = _asDouble(d['latitude']);
-                            double? lng = _asDouble(d['longitude']);
-                            if (lat == null || lng == null) {
-                              final coords = d['coordinates'];
-                              if (coords is GeoPoint) {
-                                lat = coords.latitude;
-                                lng = coords.longitude;
-                              }
-                            }
-                            if (lat != null &&
-                                lng != null &&
-                                (lat != 0 || lng != 0)) {
-                              final title =
-                                  (d['title'] ?? d['authorName'] ?? 'Restaurant')
-                                      .toString();
-                              allMarkers.add(
-                                Marker(
-                                  markerId: MarkerId('rest_${doc.id}'),
-                                  position: LatLng(lat, lng),
-                                  icon: orangeIcon ??
-                                      BitmapDescriptor.defaultMarkerWithHue(
-                                        BitmapDescriptor.hueOrange,
+                              return StreamBuilder<List<ServiceArea>>(
+                                stream: _service.streamServiceAreas(),
+                                builder: (context, areasSnap) {
+                                  final allMarkers = <Marker>{};
+                                  final allCircles = <Circle>{};
+
+                                  if (_centerLat != null && _centerLng != null) {
+                                    allMarkers.add(
+                                      Marker(
+                                        markerId: const MarkerId('center'),
+                                        position: LatLng(
+                                          _centerLat!,
+                                          _centerLng!,
+                                        ),
+                                        infoWindow: InfoWindow(
+                                          title: 'Center',
+                                          snippet:
+                                              '${_centerLat!.toStringAsFixed(5)}, '
+                                              '${_centerLng!.toStringAsFixed(5)}',
+                                        ),
                                       ),
-                                  infoWindow: InfoWindow(
-                                    title: title.isEmpty ? 'Restaurant' : title,
-                                  ),
-                                ),
+                                    );
+                                  }
+
+                                  final showExistingAreas = widget.initial == null;
+                                  if (showExistingAreas) {
+                                    final existingAreas = areasSnap.data ?? [];
+                                    for (final area in existingAreas) {
+                                      if (area.boundaryType != 'radius') {
+                                        continue;
+                                      }
+                                      final lat = area.centerLat;
+                                      final lng = area.centerLng;
+                                      final radiusKm = area.radiusKm;
+                                      if (lat == null ||
+                                          lng == null ||
+                                          radiusKm == null) {
+                                        continue;
+                                      }
+
+                                      allMarkers.add(
+                                        Marker(
+                                          markerId: MarkerId(
+                                            'existing_area_${area.id}',
+                                          ),
+                                          position: LatLng(lat, lng),
+                                          icon:
+                                              BitmapDescriptor.defaultMarkerWithHue(
+                                                BitmapDescriptor.hueAzure,
+                                              ),
+                                          infoWindow: InfoWindow(
+                                            title: area.name,
+                                            snippet:
+                                                'Existing area • ${radiusKm % 1 == 0 ? radiusKm.toStringAsFixed(0) : radiusKm.toStringAsFixed(1)} km',
+                                          ),
+                                        ),
+                                      );
+
+                                      allCircles.add(
+                                        Circle(
+                                          circleId: CircleId(
+                                            'existing_radius_${area.id}',
+                                          ),
+                                          center: LatLng(lat, lng),
+                                          radius: radiusKm * 1000,
+                                          fillColor: Colors.blue.withValues(
+                                            alpha: 0.08,
+                                          ),
+                                          strokeColor: Colors.blue,
+                                          strokeWidth: 1,
+                                        ),
+                                      );
+                                    }
+                                  }
+
+                                  final vendors = vendorsSnap.data?.docs ?? [];
+                                  for (final doc in vendors) {
+                                    final d =
+                                        doc.data() as Map<String, dynamic>?;
+                                    if (d == null) continue;
+                                    double? lat = _asDouble(d['latitude']);
+                                    double? lng = _asDouble(d['longitude']);
+                                    if (lat == null || lng == null) {
+                                      final coords = d['coordinates'];
+                                      if (coords is GeoPoint) {
+                                        lat = coords.latitude;
+                                        lng = coords.longitude;
+                                      }
+                                    }
+                                    if (lat != null &&
+                                        lng != null &&
+                                        (lat != 0 || lng != 0)) {
+                                      final title = (d['title'] ??
+                                              d['authorName'] ??
+                                              'Restaurant')
+                                          .toString();
+                                      allMarkers.add(
+                                        Marker(
+                                          markerId: MarkerId('rest_${doc.id}'),
+                                          position: LatLng(lat, lng),
+                                          icon: orangeIcon ??
+                                              BitmapDescriptor.defaultMarkerWithHue(
+                                                BitmapDescriptor.hueOrange,
+                                              ),
+                                          infoWindow: InfoWindow(
+                                            title:
+                                                title.isEmpty ? 'Restaurant' : title,
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  }
+
+                                  if (_centerLat != null &&
+                                      _centerLng != null &&
+                                      _radiusKm != null) {
+                                    allCircles.add(
+                                      Circle(
+                                        circleId: const CircleId('radius'),
+                                        center: LatLng(
+                                          _centerLat!,
+                                          _centerLng!,
+                                        ),
+                                        radius: (_radiusKm ?? 5) * 1000,
+                                        fillColor: Colors.orange.withValues(
+                                          alpha: 0.2,
+                                        ),
+                                        strokeColor: Colors.orange,
+                                        strokeWidth: 2,
+                                      ),
+                                    );
+                                  }
+
+                                  return GoogleMap(
+                                    initialCameraPosition: CameraPosition(
+                                      target:
+                                          _centerLat != null && _centerLng != null
+                                              ? LatLng(_centerLat!, _centerLng!)
+                                              : _defaultCenter,
+                                      zoom:
+                                          _centerLat != null && _centerLng != null
+                                              ? 14
+                                              : 10,
+                                    ),
+                                    onTap: _onMapTap,
+                                    onMapCreated: (c) =>
+                                        _mapControllerCompleter.complete(c),
+                                    markers: allMarkers,
+                                    circles: allCircles,
+                                    zoomControlsEnabled: true,
+                                    myLocationEnabled: false,
+                                  );
+                                },
                               );
-                            }
-                          }
-                          return GoogleMap(
-                            initialCameraPosition: CameraPosition(
-                              target: _centerLat != null && _centerLng != null
-                                  ? LatLng(_centerLat!, _centerLng!)
-                                  : _defaultCenter,
-                              zoom: _centerLat != null && _centerLng != null
-                                  ? 14
-                                  : 10,
-                            ),
-                            onTap: _onMapTap,
-                            onMapCreated: (c) =>
-                                _mapControllerCompleter.complete(c),
-                            markers: allMarkers,
-                            circles: _centerLat != null &&
-                            _centerLng != null &&
-                            _radiusKm != null
-                        ? {
-                            Circle(
-                              circleId: const CircleId('radius'),
-                              center: LatLng(_centerLat!, _centerLng!),
-                              radius: (_radiusKm ?? 5) * 1000,
-                              fillColor: Colors.orange.withValues(alpha: 0.2),
-                              strokeColor: Colors.orange,
-                              strokeWidth: 2,
-                            ),
-                          }
-                        : {},
-                            zoomControlsEnabled: true,
-                            myLocationEnabled: false,
-                          );
                             },
                           );
                         },
@@ -787,7 +871,9 @@ class _ServiceAreaEditPageState extends State<_ServiceAreaEditPage> {
                     children: _radiusOptions.map((r) {
                       final sel = (_radiusKm ?? 5) == r;
                       return FilterChip(
-                        label: Text('${r.toInt()} km'),
+                        label: Text(
+                          r % 1 == 0 ? '${r.toInt()} km' : '$r km',
+                        ),
                         selected: sel,
                         onSelected: (_) => setState(() => _radiusKm = r),
                         shape: RoundedRectangleBorder(

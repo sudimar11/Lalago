@@ -10,6 +10,8 @@ class ConversationModel {
   String? videoThumbnail;
   Url? url;
   Timestamp? createdAt;
+  bool? isRead;
+  Map<String, dynamic>? readBy;
 
   ConversationModel({
     this.id,
@@ -21,6 +23,8 @@ class ConversationModel {
     this.videoThumbnail,
     this.url,
     this.createdAt,
+    this.isRead,
+    this.readBy,
   });
 
   factory ConversationModel.fromJson(Map<String, dynamic> parsedJson) {
@@ -38,6 +42,10 @@ class ConversationModel {
               : null
           : Url(),
       createdAt: parsedJson['createdAt'] ?? Timestamp.now(),
+      isRead: parsedJson['isRead'] ?? false,
+      readBy: parsedJson.containsKey('readBy')
+          ? Map<String, dynamic>.from(parsedJson['readBy'] ?? {})
+          : <String, dynamic>{},
     );
   }
 
@@ -52,6 +60,8 @@ class ConversationModel {
       'videoThumbnail': this.videoThumbnail,
       'url': url == null ? null : this.url!.toJson(),
       'createdAt': this.createdAt,
+      'isRead': this.isRead ?? false,
+      'readBy': this.readBy ?? <String, dynamic>{},
     };
   }
 }

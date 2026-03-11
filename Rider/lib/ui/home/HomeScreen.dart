@@ -1565,15 +1565,16 @@ class HomeScreenState extends State<HomeScreen> {
     final remittanceOk = await _guardRemittance();
     if (!remittanceOk) return;
 
-    if (_driverModel!.checkedInToday != true ||
-        _driverModel!.todayCheckInTime == null ||
-        _driverModel!.todayCheckInTime!.isEmpty) {
+    final canAccept = _driverModel!.isOnline == true &&
+        _driverModel!.riderAvailability != 'offline' &&
+        _driverModel!.riderAvailability != 'on_break';
+    if (!canAccept) {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Check In Required'),
+          title: const Text('Go Online Required'),
           content: const Text(
-            'You must check in today to accept orders.',
+            'Please go online to accept orders.',
           ),
           actions: [
             TextButton(

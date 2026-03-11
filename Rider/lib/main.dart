@@ -530,11 +530,6 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
         if (MyAppState.currentUser != null) {
           MyAppState.currentUser!.lastOnlineTimestamp = Timestamp.now();
           try {
-            await AttendanceService.touchLastActiveDate(
-              MyAppState.currentUser!,
-            );
-          } catch (_) {}
-          try {
             await FireStoreUtils.touchLastActivity(
               MyAppState.currentUser!.userID,
             );

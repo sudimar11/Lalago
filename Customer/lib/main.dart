@@ -20,6 +20,7 @@ import 'package:foodie_customer/firebase_options.dart';
 import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/mail_setting.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/cart_state_notifier.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
@@ -300,7 +301,13 @@ void main() async {
       providers: [
         Provider<CartDatabase>(
           create: (_) => CartDatabase(),
-        )
+        ),
+        ChangeNotifierProxyProvider<CartDatabase, CartStateNotifier>(
+          create: (context) =>
+              CartStateNotifier(context.read<CartDatabase>()),
+          update: (context, cartDb, previous) =>
+              previous ?? CartStateNotifier(cartDb),
+        ),
       ],
       child: MyApp(),
     ),

@@ -17,8 +17,9 @@ class RestaurantPerformanceSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pm = vendorModel.publicMetrics;
-    final badge = vendorModel.performanceBadge?.toLowerCase();
-    final isNew = badge == 'new' || pm == null;
+    // Only show "just joined" when we have no publicMetrics. When metrics exist
+    // (even with badge 'new'), show the actual data so users see real numbers.
+    final isNew = pm == null;
 
     if (isNew) {
       return Padding(

@@ -15,6 +15,8 @@ import 'package:foodie_restaurant/services/eta_service.dart';
 import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
+import 'package:foodie_restaurant/services/order_communication_service.dart';
+import 'package:foodie_restaurant/ui/communication/order_communication_screen.dart';
 import 'package:foodie_restaurant/utils/order_ready_time_helper.dart';
 import 'package:foodie_restaurant/ui/ordersScreen/print.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
@@ -43,6 +45,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   var tipAmount = "0.0";
 
   List<Map<String, dynamic>> _internalNotes = [];
+  bool _feedbackPromptShown = false;
 
   @override
   void initState() {
@@ -91,6 +94,105 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
     _internalNotes = List<Map<String, dynamic>>.from(
       widget.orderModel.internalNotes ?? [],
     );
+    _bootstrapCommunication();
+  }
+
+  Future<void> _bootstrapCommunication() async {
+    final riderId = widget.orderModel.driverID ?? '';
+    if (riderId.isEmpty) return;
+    await OrderCommunicationService.ensureCommunicationDoc(
+      orderId: widget.orderModel.id,
+      riderId: riderId,
+      vendorId: widget.orderModel.vendorID,
+      customerId: widget.orderModel.authorID,
+    );
+    _listenForClosedIssueFeedback();
+  }
+
+  void _listenForClosedIssueFeedback() {
+    FirebaseFirestore.instance
+        .collection('order_communications')
+        .doc(widget.orderModel.id)
+        .collection('issues')
+        .where('state', isEqualTo: 'closed')
+        .snapshots()
+        .listen((snapshot) async {
+      if (!mounted || _feedbackPromptShown || snapshot.docs.isEmpty) return;
+      final issueDoc = snapshot.docs.first;
+      final data = issueDoc.data();
+      final feedback =
+          Map<String, dynamic>.from(data['restaurantFeedback'] ?? {});
+      if (feedback.isNotEmpty) return;
+      _feedbackPromptShown = true;
+      await _showRestaurantSatisfactionPrompt(issueDoc.id);
+    });
+  }
+
+  Future<void> _showRestaurantSatisfactionPrompt(String issueId) async {
+    int rating = 5;
+    final commentController = TextEditingController();
+    final submit = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocalState) {
+          return AlertDialog(
+            title: const Text('Issue Resolution Feedback'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('How satisfied were you with this issue handling?'),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(
+                    5,
+                    (index) => IconButton(
+                      onPressed: () => setLocalState(() => rating = index + 1),
+                      icon: Icon(
+                        index < rating ? Icons.star : Icons.star_border,
+                        color: Colors.amber,
+                      ),
+                    ),
+                  ),
+                ),
+                TextField(
+                  controller: commentController,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    hintText: 'Optional comment',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Skip'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Submit'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (submit != true) return;
+    await FirebaseFirestore.instance
+        .collection('order_communications')
+        .doc(widget.orderModel.id)
+        .collection('issues')
+        .doc(issueId)
+        .set({
+      'restaurantFeedback': {
+        'rating': rating,
+        'comment': commentController.text.trim(),
+        'submittedAt': FieldValue.serverTimestamp(),
+      },
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<void> _addInternalNote() async {
@@ -290,6 +392,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                 (widget.orderModel.status == ORDER_STATUS_DRIVER_ACCEPTED ||
                     widget.orderModel.status == ORDER_STATUS_SHIPPED))
               _buildOrderMessagesCard(widget.orderModel),
+            if (widget.orderModel.driverID != null)
+              _buildCommunicationPanel(),
+            _buildIssueResolutionPanel(),
             Card(
               color: isDarkMode(context)
                   ? const Color(DARK_CARD_BG_COLOR)
@@ -387,6 +492,334 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                       ),
                     ),
                   ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _sendRestaurantAction({
+    required String actionKey,
+    required String actionText,
+    required String eventType,
+    bool markReady = false,
+    bool confirmPickup = false,
+  }) async {
+    final vendorUserId = MyAppState.currentUser?.userID ?? '';
+    final riderId = widget.orderModel.driverID ?? '';
+    if (vendorUserId.isEmpty || riderId.isEmpty) return;
+
+    if (markReady) {
+      await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(widget.orderModel.id)
+          .update({
+        'status': ORDER_STATUS_SHIPPED,
+        'shippedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    if (confirmPickup) {
+      await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(widget.orderModel.id)
+          .update({
+        'status': ORDER_STATUS_IN_TRANSIT,
+        'pickedUpAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    final legacyRef = FirebaseFirestore.instance
+        .collection('order_messages')
+        .doc(widget.orderModel.id)
+        .collection('messages')
+        .doc();
+    await legacyRef.set({
+      'senderId': vendorUserId,
+      'senderType': 'restaurant',
+      'messageType': 'quick',
+      'messageKey': actionKey,
+      'messageText': actionText,
+      'isRead': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    await OrderCommunicationService.sendQuickAction(
+      orderId: widget.orderModel.id,
+      senderId: vendorUserId,
+      receiverId: riderId,
+      senderRole: 'restaurant',
+      receiverRole: 'rider',
+      actionKey: actionKey,
+      actionText: actionText,
+      eventType: eventType,
+      eventPayload: {
+        'orderId': widget.orderModel.id,
+        'status': confirmPickup
+            ? ORDER_STATUS_IN_TRANSIT
+            : (markReady ? ORDER_STATUS_SHIPPED : widget.orderModel.status),
+      },
+      legacyMessageId: legacyRef.id,
+    );
+  }
+
+  Widget _buildCommunicationPanel() {
+    final riderId = widget.orderModel.driverID ?? '';
+    if (riderId.isEmpty) return const SizedBox.shrink();
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Driver Communication',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream:
+                  OrderCommunicationService.watchEvents(widget.orderModel.id),
+              builder: (context, snapshot) {
+                final docs = snapshot.data?.docs ?? [];
+                if (docs.isEmpty) {
+                  return Text(
+                    'No driver actions yet',
+                    style: TextStyle(color: Colors.grey.shade600),
+                  );
+                }
+                return Column(
+                  children: docs.take(5).map((doc) {
+                    final data = doc.data();
+                    final eventType =
+                        (data['eventType'] ?? 'update').toString();
+                    final actorRole =
+                        (data['actorRole'] ?? '').toString();
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        actorRole == 'rider'
+                            ? Icons.local_shipping
+                            : Icons.storefront,
+                        size: 18,
+                      ),
+                      title: Text(eventType.replaceAll('_', ' ')),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _RestaurantActionChip(
+                  icon: Icons.check_circle,
+                  label: 'Order Ready',
+                  onTap: () => _sendRestaurantAction(
+                    actionKey: 'order_ready',
+                    actionText: 'Order is ready for pickup',
+                    eventType: 'ready',
+                    markReady: true,
+                  ),
+                ),
+                _RestaurantActionChip(
+                  icon: Icons.inventory_2,
+                  label: 'Confirm Pickup',
+                  onTap: () => _sendRestaurantAction(
+                    actionKey: 'confirm_pickup',
+                    actionText: 'Restaurant confirmed pickup',
+                    eventType: 'pickup_confirmed',
+                    confirmPickup: true,
+                  ),
+                ),
+                _RestaurantActionChip(
+                  icon: Icons.chat_bubble_outline,
+                  label: 'Open Chat',
+                  onTap: () {
+                    push(
+                      context,
+                      OrderCommunicationScreen(
+                        orderId: widget.orderModel.id,
+                        riderId: riderId,
+                        vendorId: widget.orderModel.vendorID,
+                        customerId: widget.orderModel.authorID,
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _transitionIssueState({
+    required String issueId,
+    required String currentState,
+    required String nextState,
+    String? resolutionAction,
+  }) async {
+    await FirebaseFirestore.instance
+        .collection('order_communications')
+        .doc(widget.orderModel.id)
+        .collection('issues')
+        .doc(issueId)
+        .set({
+      'state': nextState,
+      'lastActorRole': 'restaurant',
+      'lastActorId': MyAppState.currentUser?.userID ?? '',
+      'resolutionAction': resolutionAction,
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (nextState == 'resolved') 'resolvedAt': FieldValue.serverTimestamp(),
+      if (nextState == 'confirmed') 'confirmedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Widget _buildIssueResolutionPanel() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('order_communications')
+          .doc(widget.orderModel.id)
+          .collection('issues')
+          .orderBy('createdAt', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? [];
+        if (docs.isEmpty) return const SizedBox.shrink();
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.report_problem, color: Colors.orange),
+                    SizedBox(width: 6),
+                    Text(
+                      'Issue Resolution',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ...docs.take(3).map((doc) {
+                  final d = doc.data();
+                  final issueId = doc.id;
+                  final state = (d['state'] ?? 'opened').toString();
+                  final label =
+                      (d['issueLabel'] ?? d['issueType'] ?? 'Issue').toString();
+                  final details = (d['details'] ?? '').toString();
+                  final attachments =
+                      List<Map<String, dynamic>>.from(d['attachments'] ?? []);
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.withOpacity(0.2)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$label (${state.toUpperCase()})',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        if (details.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(details),
+                        ],
+                        if (attachments.isNotEmpty &&
+                            (attachments.first['url'] ?? '').toString().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: Image.network(
+                                attachments.first['url'].toString(),
+                                height: 80,
+                                width: 80,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) =>
+                                    const Icon(Icons.broken_image),
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            if (state == 'opened')
+                              OutlinedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'acknowledged',
+                                ),
+                                child: const Text('Acknowledge'),
+                              ),
+                            if (state == 'acknowledged' || state == 'opened')
+                              ElevatedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'resolved',
+                                  resolutionAction: 'items_added',
+                                ),
+                                child: const Text('Items Added'),
+                              ),
+                            if (state == 'acknowledged' || state == 'opened')
+                              ElevatedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'resolved',
+                                  resolutionAction: 'order_replaced',
+                                ),
+                                child: const Text('Order Replaced'),
+                              ),
+                            if (state == 'acknowledged' || state == 'opened')
+                              ElevatedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'resolved',
+                                  resolutionAction: 'refund_issued',
+                                ),
+                                child: const Text('Refund Issued'),
+                              ),
+                            if (state != 'closed' && state != 'escalated')
+                              OutlinedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'escalated',
+                                ),
+                                child: const Text('Escalate'),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
               ],
             ),
           ),
@@ -503,18 +936,35 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
     if (key != null && mounted) {
       final message = QuickMessages.getMessage(key, 'restaurant');
       final uid = MyAppState.currentUser?.userID;
-      await FirebaseFirestore.instance
+      final riderId = widget.orderModel.driverID ?? '';
+      final legacyRef = FirebaseFirestore.instance
           .collection('order_messages')
           .doc(orderId)
           .collection('messages')
-          .add({
+          .doc();
+      await legacyRef.set({
         'senderId': uid ?? '',
         'senderType': 'restaurant',
         'messageType': 'quick',
         'messageKey': key,
         'messageText': message,
+        'isRead': false,
         'createdAt': FieldValue.serverTimestamp(),
       });
+      if (riderId.isNotEmpty && uid != null && uid.isNotEmpty) {
+        await OrderCommunicationService.sendQuickAction(
+          orderId: orderId,
+          senderId: uid,
+          receiverId: riderId,
+          senderRole: 'restaurant',
+          receiverRole: 'rider',
+          actionKey: key,
+          actionText: message,
+          eventType: 'quick_message',
+          eventPayload: {'orderId': orderId, 'messageKey': key},
+          legacyMessageId: legacyRef.id,
+        );
+      }
     }
   }
 
@@ -1288,4 +1738,47 @@ Widget _buildChip(String label, int attributesOptionIndex) {
       ),
     ),
   );
+}
+
+class _RestaurantActionChip extends StatelessWidget {
+  const _RestaurantActionChip({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Color(COLOR_PRIMARY).withOpacity(0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Color(COLOR_PRIMARY).withOpacity(0.3)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: Color(COLOR_PRIMARY)),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: Color(COLOR_PRIMARY),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

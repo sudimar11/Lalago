@@ -48,6 +48,8 @@ const MINUTE_MILLIS = 60 * SECOND_MILLIS;
 const HOUR_MILLIS = 60 * MINUTE_MILLIS;
 const SERVER_KEY = 'Replace with your Server key';
 String GOOGLE_API_KEY = 'AIzaSyBmG1Ci-LNdBQgDvmHnhJTejSCcyimZPbE';
+/// Separate key for Gemini AI (Ash). Never overwritten by Maps key.
+String GEMINI_API_KEY = 'AIzaSyBmG1Ci-LNdBQgDvmHnhJTejSCcyimZPbE';
 
 const ORDER_STATUS_PLACED = 'Order Placed';
 const ORDER_STATUS_ACCEPTED = 'Order Accepted';

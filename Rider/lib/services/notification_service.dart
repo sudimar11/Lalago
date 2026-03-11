@@ -32,6 +32,9 @@ class NotificationService {
 
   /// Called when user taps a PAUTOS assignment notification.
   static void Function(String orderId)? onPautosAssignmentTap;
+  static void Function(String orderId)? onOpenOrderCommunication;
+  static void Function(String initialTab, String orderId)?
+      onOpenUnifiedCommunicationHub;
 
   static Future<bool> isNotificationPermissionGranted() async {
     if (Platform.isAndroid) {
@@ -292,6 +295,19 @@ class NotificationService {
                 onPautosAssignmentTap?.call(orderId);
               }
             }
+            final compatOrderId = _normalizedCommunicationOrderId(data);
+            if (compatOrderId != null) {
+              onOpenUnifiedCommunicationHub?.call('restaurants', compatOrderId);
+              onOpenOrderCommunication?.call(compatOrderId);
+              return;
+            }
+            final chatTarget = _normalizedUnifiedHubTarget(data);
+            if (chatTarget != null) {
+              onOpenUnifiedCommunicationHub?.call(
+                chatTarget.$1,
+                chatTarget.$2,
+              );
+            }
           } catch (_) {}
         }
       },
@@ -420,8 +436,40 @@ class NotificationService {
     final type = data['type']?.toString() ?? '';
     final messageType = data['messageType']?.toString() ?? '';
     return type == 'chat_message' ||
+        type == 'order_communication' ||
+        type == 'order_message' ||
         type == 'admin_driver_chat' ||
         messageType == 'chat';
+  }
+
+  static String? _normalizedCommunicationOrderId(
+    Map<String, dynamic>? data,
+  ) {
+    if (data == null) return null;
+    final type = data['type']?.toString() ?? '';
+    if (type != 'order_communication' && type != 'order_message') {
+      return null;
+    }
+    final orderId = data['orderId']?.toString() ?? '';
+    return orderId.isNotEmpty ? orderId : null;
+  }
+
+  static (String, String)? _normalizedUnifiedHubTarget(
+    Map<String, dynamic>? data,
+  ) {
+    if (data == null) return null;
+    final type = data['type']?.toString() ?? '';
+    final orderId = data['orderId']?.toString() ?? '';
+    if (type == 'order_communication' || type == 'order_message') {
+      return ('restaurants', orderId);
+    }
+    if (type == 'admin_driver_chat') {
+      return ('support', orderId);
+    }
+    if (type == 'chat_message') {
+      return ('customers', orderId);
+    }
+    return null;
   }
 
   Future<void> setupInteractedMessage() async {
@@ -493,6 +541,23 @@ class NotificationService {
     if (type == 'pautos_assignment' && orderId != null && orderId.isNotEmpty) {
       AudioService.instance.playNewOrderSound(orderId: orderId);
       onPautosAssignmentTap?.call(orderId);
+      return;
+    }
+    final communicationOrderId = _normalizedCommunicationOrderId(message.data);
+    if (communicationOrderId != null) {
+      onOpenUnifiedCommunicationHub?.call(
+        'restaurants',
+        communicationOrderId,
+      );
+      onOpenOrderCommunication?.call(communicationOrderId);
+      return;
+    }
+    final chatTarget = _normalizedUnifiedHubTarget(message.data);
+    if (chatTarget != null) {
+      onOpenUnifiedCommunicationHub?.call(
+        chatTarget.$1,
+        chatTarget.$2,
+      );
       return;
     }
     display(message);

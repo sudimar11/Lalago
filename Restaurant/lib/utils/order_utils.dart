@@ -43,95 +43,23 @@ Future<Map<String, String?>> fetchDriverDetails(String driverID) async {
 Future<Map<String, String?>> assignOrderToDriver(
     BuildContext context, OrderModel orderModel) async {
   try {
-    List<Map<String, dynamic>> drivers = [];
-    String? nearestDriverId;
-    double? nearestDistance;
-    String? driverName;
-    String? driverPhoto;
-
-    double calcDist(double lat1, double lon1, double lat2, double lon2) {
-      const R = 6371;
-      final dLat = (lat2 - lat1) * (pi / 180);
-      final dLon = (lon2 - lon1) * (pi / 180);
-      final a = sin(dLat / 2) * sin(dLat / 2) +
-          cos(lat1 * (pi / 180)) *
-              cos(lat2 * (pi / 180)) *
-              sin(dLon / 2) *
-              sin(dLon / 2);
-      final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-      return R * c;
-    }
-
-    Future<void> fetchDrivers() async {
-      final q = await FirebaseFirestore.instance
-          .collection("users")
-          .where("role", isEqualTo: "driver")
-          .where("isActive", isEqualTo: true)
-          .get();
-      drivers = q.docs.map((doc) {
-        final d = doc.data();
-        final dist = calcDist(
-          orderModel.vendor.latitude,
-          orderModel.vendor.longitude,
-          d['location']?['latitude'] ?? 0.0,
-          d['location']?['longitude'] ?? 0.0,
-        );
-        return {"id": doc.id, "data": d, "distance": dist};
-      }).toList();
-      drivers.sort((a, b) =>
-          (a["distance"] as double).compareTo(b["distance"] as double));
-      if (drivers.isNotEmpty) {
-        final n = drivers.first;
-        nearestDriverId = n["id"] as String;
-        nearestDistance = n["distance"] as double;
-        final dd = n["data"] as Map;
-        driverName = "${dd['firstName']} ${dd['lastName']}";
-        driverPhoto = dd['profilePictureURL'] as String?;
-      }
-    }
-
-    Future<void> assignDriver() async {
-      await fetchDrivers();
-      if (nearestDriverId == null) {
-        await Future.delayed(const Duration(seconds: 10));
-        return assignDriver();
-      }
-      final userSnap = await FirebaseFirestore.instance
-          .collection("users")
-          .doc(nearestDriverId)
-          .get();
-      if (!((userSnap.data()?['isActive'] ?? false) as bool)) {
-        drivers.removeWhere((d) => d["id"] == nearestDriverId);
-        nearestDriverId = null;
-        return assignDriver();
-      }
-      await FirebaseFirestore.instance
-          .collection("restaurant_orders")
-          .doc(orderModel.id)
-          .update({
-        "status": "Driver Assigned",
-        "driverID": nearestDriverId,
-        "driverDistance": nearestDistance,
-      });
-      await FirebaseFirestore.instance
-          .collection("users")
-          .doc(nearestDriverId)
-          .update({
-        "isActive": false,
-        "inProgressOrderID": FieldValue.arrayUnion([orderModel.id]),
-      });
-    }
-
-    await assignDriver();
+    await FirebaseFirestore.instance
+        .collection("restaurant_orders")
+        .doc(orderModel.id)
+        .update({
+      "status": "Order Accepted",
+      "dispatch.lock": false,
+      "dispatch.lastRetriggerAt": FieldValue.serverTimestamp(),
+    });
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Order successfully assigned to the nearest driver!'),
+          content: Text('Order queued for automatic rider dispatch.'),
           backgroundColor: Colors.green,
         ),
       );
     }
-    return {"driverName": driverName, "driverPhoto": driverPhoto};
+    return {};
   } catch (e, st) {
     print("Error in assignOrderToDriver: $e\n$st");
     if (context.mounted) {

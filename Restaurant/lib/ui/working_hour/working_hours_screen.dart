@@ -4,7 +4,7 @@ import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/services/helper.dart';
 import 'package:foodie_restaurant/ui/container/ContainerScreen.dart';
-import 'package:foodie_restaurant/ui/ordersScreen/OrdersScreen.dart';
+import 'package:foodie_restaurant/ui/ordersScreen/UnifiedOrdersScreen.dart';
 
 import '../../model/VendorModel.dart';
 import '../../model/WorkingHoursModel.dart';
@@ -583,7 +583,7 @@ class _WorkingHoursScreenState extends State<WorkingHoursScreen> {
           MaterialPageRoute(
             builder: (context) => ContainerScreen(
               appBarTitle: 'Orders',
-              currentWidget: OrdersScreen(),
+              currentWidget: UnifiedOrdersScreen(),
               drawerSelection: DrawerSelection.Orders,
             ),
           ),

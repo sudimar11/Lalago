@@ -203,15 +203,18 @@ class DispatchPrecheckService {
 
       print('[PRECHECK] Rider $id: '
           'role=${d['role']}, '
-          'checkedOut=${d['checkedOutToday']}, '
+          'isOnline=${d['isOnline']}, '
+          'availability=${d['riderAvailability']}, '
           'location='
           '${d['location'] != null ? "yes" : "null"}, '
           'locAge=$locAge, '
           'orders=$currentOrders/$maxPerRider');
 
-      // ── Filter 1: checkedOutToday ──
-      if (d['checkedOutToday'] == true) {
-        print('[PRECHECK]   -> SKIP: checkedOutToday=true');
+      // ── Filter 1: canonical online/availability ──
+      final isOnline = d['isOnline'] == true;
+      final avail = (d['riderAvailability'] ?? 'offline').toString();
+      if (!isOnline || avail != 'available') {
+        print('[PRECHECK]   -> SKIP: not dispatch-available');
         continue;
       }
 
@@ -246,14 +249,20 @@ class DispatchPrecheckService {
       }
 
       // ── Filter 4: order capacity ──
-      if (currentOrders >= maxPerRider) {
+      final riderMaxOrders = (d['maxOrders'] is num)
+          ? (d['maxOrders'] as num).toInt()
+          : maxPerRider;
+      final effectiveMax = riderMaxOrders > 0
+          ? riderMaxOrders
+          : maxPerRider;
+      if (currentOrders >= effectiveMax) {
         print('[PRECHECK]   -> SKIP: at capacity '
-            '($currentOrders >= $maxPerRider)');
+            '($currentOrders >= $effectiveMax)');
         continue;
       }
 
       print('[PRECHECK]   -> COUNTED as active '
-          '(orders=$currentOrders/$maxPerRider, '
+          '(orders=$currentOrders/$effectiveMax, '
           'locAge=${locAgeMins}m)');
       count++;
     }

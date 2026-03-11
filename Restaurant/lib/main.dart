@@ -113,6 +113,20 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
     try {
       final snap = await FirebaseFirestore.instance
           .collection(Setting)
+          .doc('geminiApiKey')
+          .get();
+      final key = snap.data()?['key']?.toString();
+      if (key != null && key.isNotEmpty) {
+        GEMINI_API_KEY = key;
+        log('🔹 GEMINI_API_KEY loaded');
+      }
+    } catch (e) {
+      log('❗ geminiApiKey load error: $e');
+    }
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection(Setting)
           .doc('emailSetting')
           .get();
       final data = snap.data();

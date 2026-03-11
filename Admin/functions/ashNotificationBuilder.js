@@ -301,6 +301,90 @@ class AshNotificationBuilder {
   }
 
   /**
+   * Get window-specific Smart Hunger content (lunch, snack, dinner).
+   * Randomly selects from available templates for variety and A/B testing.
+   * Personalizes with firstName and restaurantName when available.
+   */
+  static getSmartHungerContent(window, userData = {}, contextData = {}) {
+    const firstName =
+      userData?.firstName || userData?.displayName || null;
+    const restaurantName =
+      contextData?.restaurantName || contextData?.vendorName || null;
+    const customMessage =
+      (contextData?.customMessage || '').toString().trim();
+
+    const SMART_HUNGER_TEMPLATES = {
+      lunch: [
+        {
+          title: 'Lunch time! Let LalaGO bring your meal today.',
+          body: 'Lunch time! Let LalaGO bring your meal today.',
+        },
+        {
+          title: 'Hungry? Restaurants near you are ready to deliver.',
+          body: 'Hungry? Restaurants near you are ready to deliver.',
+        },
+        {
+          title: 'Take a break from cooking. Order lunch now.',
+          body: 'Take a break from cooking. Order lunch now.',
+        },
+      ],
+      snack: [
+        {
+          title: 'Afternoon snack? Drinks, desserts, and more.',
+          body: 'Afternoon snack? Drinks, desserts, and more.',
+        },
+        {
+          title: 'Energy boost? Coffee and snacks delivered fast.',
+          body: 'Energy boost? Coffee and snacks delivered fast.',
+        },
+        {
+          title: 'Midday craving? Treat yourself.',
+          body: 'Midday craving? Treat yourself.',
+        },
+      ],
+      dinner: [
+        {
+          title: 'Too tired to cook? LalaGO delivers dinner fast.',
+          body: 'Too tired to cook? LalaGO delivers dinner fast.',
+        },
+        {
+          title: 'Dinner time! Your favorites are just a tap away.',
+          body: 'Dinner time! Your favorites are just a tap away.',
+        },
+        {
+          title: 'End the day with a great meal. Order now.',
+          body: 'End the day with a great meal. Order now.',
+        },
+      ],
+    };
+
+    const templates = SMART_HUNGER_TEMPLATES[window];
+    if (!templates || templates.length === 0) {
+      return {
+        title: 'Time to eat?',
+        body: 'Browse restaurants near you.',
+      };
+    }
+
+    const idx = Math.floor(Math.random() * templates.length);
+    let { title, body } = templates[idx];
+
+    if (firstName) {
+      const windowLabel =
+        window === 'lunch' ? 'lunch' : window === 'snack' ? 'snack' : 'dinner';
+      title = `It's ${firstName}'s ${windowLabel} time!`;
+    }
+
+    if (customMessage) {
+      body = customMessage;
+    } else if (restaurantName) {
+      body = `Ready to order from ${restaurantName}?`;
+    }
+
+    return { title, body };
+  }
+
+  /**
    * Add Ash's voice to an existing notification
    */
   static enhanceWithAsh(originalNotification, userData) {

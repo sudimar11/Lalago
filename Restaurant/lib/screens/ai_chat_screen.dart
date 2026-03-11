@@ -1,7 +1,7 @@
 import 'dart:async';
 
+import 'package:firebase_ai/firebase_ai.dart';
 import 'package:flutter/material.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/services/ai_tool_declarations.dart';
@@ -76,15 +76,16 @@ You can help with:
 Answer concisely. Use tool results to give specific, actionable answers.
 Identify yourself as Ash when appropriate.
 ''';
-    final model = GenerativeModel(
-      model: 'gemini-1.5-flash',
-      apiKey: GOOGLE_API_KEY,
+    final model = FirebaseAI.googleAI().generativeModel(
+      model: 'gemini-2.5-flash-lite',
+      tools: [Tool.functionDeclarations(restaurantAiToolDeclarations)],
       systemInstruction: Content.system(systemPrompt),
-      tools: [
-        Tool(functionDeclarations: restaurantAiToolDeclarations),
-      ],
     );
     _chat = model.startChat();
+  }
+
+  Map<String, dynamic> _toDynamicMap(Map<String, Object?> args) {
+    return Map<String, dynamic>.from(args);
   }
 
   String _getIntro() {
@@ -133,10 +134,8 @@ Identify yourself as Ash when appropriate.
       while (response.functionCalls.isNotEmpty && loopCount < 10) {
         loopCount++;
         for (final fc in response.functionCalls) {
-          final result = await _toolHandler.executeTool(
-            fc.name,
-            Map<String, dynamic>.from(fc.args),
-          );
+          final argsMap = _toDynamicMap(fc.args);
+          final result = await _toolHandler.executeTool(fc.name, argsMap);
           lastResult = result;
           response = await _chat.sendMessage(
             Content.functionResponse(fc.name, result),

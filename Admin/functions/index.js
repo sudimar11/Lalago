@@ -16,6 +16,7 @@ const AshNotificationBuilder = require('./ashNotificationBuilder');
 const { trackNotificationAction } = require('./notificationActionAnalytics');
 const loyaltyHelpers = require('./loyaltyHelpers');
 const giftCardFunctions = require('./giftCardFunctions');
+const migrateRiderStatusSchemaV2 = require('./migrations/migrateRiderStatusSchemaV2');
 
 exports.trackNotificationAction = trackNotificationAction;
 exports.createGiftCard = giftCardFunctions.createGiftCard;
@@ -25,6 +26,7 @@ exports.claimGiftCard = giftCardFunctions.claimGiftCard;
 exports.migrateLegacyGiftCards = giftCardFunctions.migrateLegacyGiftCards;
 exports.processExpiredGiftCards = giftCardFunctions.processExpiredGiftCards;
 exports.refundGiftCard = giftCardFunctions.refundGiftCard;
+exports.migrateRiderStatusSchemaV2 = migrateRiderStatusSchemaV2;
 
 // Lazy initialization functions - only called inside Cloud Functions
 function initializeAdmin() {
@@ -41,6 +43,19 @@ function getDb() {
 function getMessaging() {
   initializeAdmin();
   return admin.messaging();
+}
+
+function _log(hypothesisId, message, data = {}) {
+  try {
+    console.log(
+      `[DBG] ${JSON.stringify({
+        hypothesisId,
+        message,
+        data,
+        timestamp: Date.now(),
+      })}`
+    );
+  } catch (_) {}
 }
 
 function parsePreparationMinutes(prepTimeStr) {
@@ -124,6 +139,21 @@ async function _getUserFcmTokens(db, userId) {
   return [];
 }
 
+function _extractUserFcmTokensFromData(data) {
+  if (!data || typeof data !== 'object') return [];
+  const arr = data.fcmTokens;
+  if (Array.isArray(arr) && arr.length > 0) {
+    return arr
+      .filter((t) => typeof t === 'string' && t.trim().length > 0)
+      .map((t) => t.trim());
+  }
+  const single = data.fcmToken;
+  if (single && typeof single === 'string' && single.trim().length > 0) {
+    return [single.trim()];
+  }
+  return [];
+}
+
 /**
  * Returns array of FCM tokens for a vendor. Prefers fcmTokens array,
  * falls back to single fcmToken.
@@ -143,15 +173,48 @@ async function _getVendorFcmTokens(db, vendorId) {
   return [];
 }
 
+function _sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function _sendMulticastWithSingleRetry(multicastMessage, contextLabel) {
+  const first = await getMessaging().sendEachForMulticast(multicastMessage);
+  const failedTokens = [];
+  first.responses.forEach((response, index) => {
+    if (!response.success) {
+      failedTokens.push(multicastMessage.tokens[index]);
+    }
+  });
+
+  if (failedTokens.length === 0) {
+    return first;
+  }
+
+  console.warn(
+    `[${contextLabel}] first attempt had ${failedTokens.length} failures; retrying`
+  );
+  await _sleep(800);
+  const retry = await getMessaging().sendEachForMulticast({
+    ...multicastMessage,
+    tokens: failedTokens,
+  });
+  console.log(
+    `[${contextLabel}] retry success=${retry.successCount}/${failedTokens.length}`
+  );
+  return first;
+}
+
 /**
  * Firestore Trigger: Notify recipient when rider/restaurant sends quick message.
  * Triggered on order_messages/{orderId}/messages/{messageId} document create.
  */
 exports.notifyOnOrderMessage = functions
   .region('us-central1')
+  .runWith({ memory: '512MB', timeoutSeconds: 60 })
   .firestore.document('order_messages/{orderId}/messages/{messageId}')
   .onCreate(async (snap, context) => {
     const orderId = context.params.orderId;
+    const messageId = context.params.messageId;
     const msg = snap.data() || {};
     const senderType = String(msg.senderType || '');
     const messageText = String(msg.messageText || 'New message');
@@ -159,34 +222,157 @@ exports.notifyOnOrderMessage = functions
     try {
       const db = getDb();
       const orderSnap = await db.collection('restaurant_orders').doc(orderId).get();
-      if (!orderSnap.exists) return null;
+      if (!orderSnap.exists) {
+        console.warn(
+          `[notifyOnOrderMessage] order not found orderId=${orderId}`
+        );
+        return null;
+      }
 
       const order = orderSnap.data() || {};
       const vendorID = order.vendorID || order.vendor?.id || '';
       const driverID = order.driverID || '';
+      const vendorName =
+        String(order.vendor?.title || order.vendor?.name || '').trim();
 
       let tokens = [];
       let title = 'Order Message';
+      let bodyPrefix = '';
 
       if (senderType === 'rider') {
         tokens = await _getVendorFcmTokens(db, vendorID);
         title = 'Rider Message';
+        bodyPrefix = 'Rider: ';
       } else if (senderType === 'restaurant') {
+        if (!driverID || String(driverID).trim().isEmpty) {
+          console.warn(
+            `[notifyOnOrderMessage] missing driverID orderId=${orderId}, messageId=${messageId}`
+          );
+          return null;
+        }
         tokens = await _getUserFcmTokens(db, driverID);
-        title = 'Restaurant Message';
+        title = vendorName ? `${vendorName} sent a message` : 'Restaurant Message';
+        bodyPrefix = vendorName ? `${vendorName}: ` : 'Restaurant: ';
       }
 
-      if (tokens.length === 0) return null;
+      if (tokens.length === 0) {
+        console.warn(
+          `[notifyOnOrderMessage] no tokens senderType=${senderType} orderId=${orderId}`
+        );
+        return null;
+      }
 
-      const body = messageText.length > 100 ? messageText.substring(0, 97) + '...' : messageText;
+      const messagePreview =
+        messageText.length > 100 ? messageText.substring(0, 97) + '...' : messageText;
+      const body = `${bodyPrefix}${messagePreview}`.trim();
       const messagePayload = {
         notification: { title, body },
-        data: { type: 'order_message', orderId: String(orderId) },
+        data: {
+          type: 'order_communication',
+          orderId: String(orderId),
+          messageId: String(messageId),
+          target: 'communicationPanel',
+        },
+        android: {
+          priority: 'high',
+        },
+        apns: {
+          headers: { 'apns-priority': '10' },
+        },
       };
       const multicastMessage = { ...messagePayload, tokens };
-      await getMessaging().sendEachForMulticast(multicastMessage);
+      await _sendMulticastWithSingleRetry(
+        multicastMessage,
+        'notifyOnOrderMessage'
+      );
     } catch (e) {
       console.error('[notifyOnOrderMessage] Error:', e);
+    }
+    return null;
+  });
+
+/**
+ * Temporary transition bridge:
+ * Mirror canonical read state to legacy order_messages read state.
+ * Remove after full migration to order_communications.
+ */
+exports.syncLegacyReadReceiptFromCanonical = functions
+  .region('us-central1')
+  .runWith({ memory: '512MB', timeoutSeconds: 60 })
+  .firestore.document('order_communications/{orderId}/messages/{messageId}')
+  .onUpdate(async (change, context) => {
+    const beforeData = change.before.data() || {};
+    const afterData = change.after.data() || {};
+    const orderId = context.params.orderId;
+    const becameRead = beforeData.isRead !== true && afterData.isRead === true;
+    if (!becameRead) return null;
+
+    const db = getDb();
+    const legacyParent = db.collection('order_messages').doc(orderId);
+    const legacyRefId = String(afterData.legacyMessageId || '');
+    const senderRole = String(afterData.senderRole || '');
+    const senderType = senderRole === 'restaurant' ? 'restaurant' : 'rider';
+
+    try {
+      if (legacyRefId) {
+        await legacyParent.collection('messages').doc(legacyRefId).set(
+          {
+            isRead: true,
+            readAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        return null;
+      }
+
+      const text = String(afterData.text || afterData.messageText || '').trim();
+      const messageKey = String(afterData.messageKey || '').trim();
+      const createdAt = afterData.createdAt;
+      const fallbackSnap = await legacyParent
+        .collection('messages')
+        .where('senderType', '==', senderType)
+        .where('isRead', '==', false)
+        .orderBy('createdAt', 'desc')
+        .limit(20)
+        .get();
+
+      const targetMillis = createdAt && createdAt.toDate
+        ? createdAt.toDate().getTime()
+        : null;
+
+      let matchedRef = null;
+      fallbackSnap.docs.forEach((doc) => {
+        if (matchedRef) return;
+        const d = doc.data() || {};
+        const legacyText = String(d.messageText || '').trim();
+        const legacyKey = String(d.messageKey || '').trim();
+        const legacyTs = d.createdAt && d.createdAt.toDate
+          ? d.createdAt.toDate().getTime()
+          : null;
+        const textMatch = text && legacyText && text === legacyText;
+        const keyMatch = messageKey && legacyKey && messageKey === legacyKey;
+        const timeMatch = targetMillis != null && legacyTs != null
+          ? Math.abs(targetMillis - legacyTs) <= 120000
+          : true;
+        if ((textMatch || keyMatch) && timeMatch) {
+          matchedRef = doc.ref;
+        }
+      });
+
+      if (matchedRef) {
+        await matchedRef.set(
+          {
+            isRead: true,
+            readAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+    } catch (e) {
+      console.error(
+        `[syncLegacyReadReceiptFromCanonical] order=${orderId} error`,
+        e
+      );
     }
     return null;
   });
@@ -708,7 +894,6 @@ exports.autoDispatcher = functions.firestore
         // 2. Find available drivers
         const driversSnapshot = await getDb().collection('users')
           .where('role', '==', 'driver')
-          .where('riderAvailability', '==', 'available')
           .get();
 
         if (driversSnapshot.empty) {
@@ -761,6 +946,7 @@ exports.autoDispatcher = functions.firestore
         for (const driverDoc of driversSnapshot.docs) {
           const driver = { id: driverDoc.id, ...driverDoc.data() };
           if (excludedIds.has(driver.id)) continue;
+          if (!_isDriverEligibleBase(driver)) continue;
           
           const driverLocation = _extractDriverLocation(driver);
           if (!driverLocation.lat && !driverLocation.lng) continue;
@@ -1038,6 +1224,365 @@ exports.autoDispatcher = functions.firestore
   });
 
 // =========================
+// placeOrderWithDispatch - Unified order placement with atomic driver check
+// =========================
+
+const IDEMPOTENCY_TTL_HOURS = 24;
+
+/**
+ * Check if a restaurant is open based on working hours and reststatus.
+ * Replicates Customer app restaurant_processing logic.
+ */
+function _checkRestaurantOpen(vendorData) {
+  if (!vendorData || vendorData.reststatus !== true) return false;
+  const workingHours = vendorData.workingHours || [];
+  const now = new Date();
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const day = dayNames[now.getDay()];
+  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '-');
+  const dateDDMM = `${String(now.getDate()).padStart(2, '0')}-${String(now.getMonth() + 1).padStart(2, '0')}-${now.getFullYear()}`;
+
+  for (const wh of workingHours) {
+    if (String(wh.day || '').trim() !== day) continue;
+    const timeslots = wh.timeslot || [];
+    for (const slot of timeslots) {
+      const fromStr = (slot.from || slot.from || '00:00').toString().trim();
+      const toStr = (slot.to || slot.to || '23:59').toString().trim();
+      try {
+        const [fromH, fromM] = fromStr.split(':').map(Number);
+        const [toH, toM] = toStr.split(':').map(Number);
+        const start = new Date(now);
+        start.setHours(fromH || 0, fromM || 0, 0, 0);
+        const end = new Date(now);
+        end.setHours(toH || 23, toM || 59, 59, 999);
+        if (now >= start && now <= end) return true;
+      } catch (_) { /* skip invalid slot */ }
+    }
+  }
+  return false;
+}
+
+/**
+ * Convert client-serialized data for Firestore (Timestamps, etc.)
+ */
+function _normalizeOrderForFirestore(orderPayload) {
+  const out = { ...orderPayload };
+  if (out.createdAt && typeof out.createdAt === 'object') {
+    if (out.createdAt._seconds != null) {
+      out.createdAt = new admin.firestore.Timestamp(
+        out.createdAt._seconds,
+        out.createdAt._nanoseconds || 0
+      );
+    } else {
+      out.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+  } else {
+    out.createdAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+  if (out.scheduleTime && typeof out.scheduleTime === 'object' && out.scheduleTime._seconds != null) {
+    out.scheduleTime = new admin.firestore.Timestamp(
+      out.scheduleTime._seconds,
+      out.scheduleTime._nanoseconds || 0
+    );
+  }
+  return out;
+}
+
+/**
+ * placeOrderWithDispatch: Single source of truth for order creation + driver assignment.
+ * Returns { success, orderId?, driverAssigned?, code?, message? }
+ */
+exports.placeOrderWithDispatch = functions
+  .region('us-central1')
+  .runWith({ timeoutSeconds: 60, memory: '512MB' })
+  .https.onCall(async (data, context) => {
+    const customerId = context.auth?.uid;
+    const idempotencyKey = (data?.idempotencyKey || '').toString().trim();
+    const orderPayload = data?.order;
+
+    if (!customerId) {
+      console.log('[placeOrderWithDispatch] Unauthenticated request');
+      throw new functions.https.HttpsError(
+        'unauthenticated',
+        'Login required to place an order'
+      );
+    }
+
+    // 1. Idempotency check (before any validation or writes)
+    const db = getDb();
+    if (idempotencyKey) {
+      const idemRef = db.collection('idempotency_keys').doc(idempotencyKey);
+      const idemSnap = await idemRef.get();
+      if (idemSnap.exists) {
+        const stored = idemSnap.data()?.result;
+        if (stored) {
+          console.log('[placeOrderWithDispatch] Idempotent return for key:', idempotencyKey);
+          return stored;
+        }
+      }
+    }
+
+    if (!orderPayload || typeof orderPayload !== 'object') {
+      const err = { success: false, code: 'VALIDATION_ERROR', message: 'Invalid order payload' };
+      console.log('[placeOrderWithDispatch] Validation failed: missing order');
+      return err;
+    }
+
+    const vendorId = orderPayload.vendorID || orderPayload.vendor?.id || '';
+    const deliveryLat = _asNumber(orderPayload.address?.location?.latitude) ||
+      _asNumber(orderPayload.author?.location?.latitude);
+    const deliveryLng = _asNumber(orderPayload.address?.location?.longitude) ||
+      _asNumber(orderPayload.author?.location?.longitude);
+    const orderTotal = _asNumber(orderPayload.totalAmount) || _asNumber(orderPayload.total) || 0;
+
+    console.log('[placeOrderWithDispatch] customerId=', customerId, 'vendorId=', vendorId,
+      'orderTotal=', orderTotal);
+
+    // 2. Restaurant open check
+    const vendorSnap = await db.collection('vendors').doc(vendorId).get();
+    if (!vendorSnap.exists) {
+      const err = {
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: 'Restaurant not found',
+      };
+      console.log('[placeOrderWithDispatch] Restaurant not found:', vendorId);
+      return err;
+    }
+    const vendorData = vendorSnap.data() || {};
+    if (!_checkRestaurantOpen(vendorData)) {
+      const err = {
+        success: false,
+        code: 'RESTAURANT_CLOSED',
+        message: 'The restaurant is currently closed. Please try during operating hours.',
+      };
+      console.log('[placeOrderWithDispatch] Restaurant closed:', vendorId);
+      return err;
+    }
+
+    // 3. Zone capacity check
+    if (deliveryLat && deliveryLng) {
+      const capCheck = await _checkZoneCapacity(deliveryLat, deliveryLng);
+      if (capCheck.atCapacity) {
+        const err = {
+          success: false,
+          code: 'ZONE_AT_CAPACITY',
+          message: 'Delivery area is at full capacity. Please try again in a few minutes.',
+        };
+        console.log('[placeOrderWithDispatch] Zone at capacity:',
+          capCheck.zoneName, capCheck.currentCount, '/', capCheck.maxRiders);
+        return err;
+      }
+    }
+
+    // 4. Build order context for driver selection
+    const restaurantLocation = _extractRestaurantLocation(orderPayload);
+    const deliveryLocation = {
+      lat: deliveryLat || 0,
+      lng: deliveryLng || 0,
+    };
+    const orderForDispatch = {
+      id: null,
+      ...orderPayload,
+      restaurantLocation,
+      deliveryLocation,
+      vendorID: vendorId,
+    };
+
+    // 5. Find best driver (same logic as autoDispatcher)
+    const searchRadiusKm = 3;
+    const driversSnapshot = await db.collection('users')
+      .where('role', '==', 'driver')
+      .get();
+
+    let bestDriver = null;
+    if (!driversSnapshot.empty) {
+      const weights = await _loadDispatchWeights();
+      const eligibleDrivers = [];
+      for (const driverDoc of driversSnapshot.docs) {
+        const driver = { id: driverDoc.id, ...driverDoc.data() };
+        if (!_isDriverEligibleBase(driver)) continue;
+        const driverLocation = _extractDriverLocation(driver);
+        if (!driverLocation.lat && !driverLocation.lng) continue;
+        const activeOrders = _activeOrdersCount(driver);
+        const effectiveCap = _calculateDynamicCapacity(driver, weights);
+        if (activeOrders >= effectiveCap) continue;
+        const distanceKm = _distanceMeters(driverLocation, restaurantLocation) / 1000;
+        if (distanceKm > searchRadiusKm) continue;
+        const eta = calculateETA(driverLocation, restaurantLocation);
+        const headingMatch = _calculateDriverHeading(driver, driverLocation, restaurantLocation);
+        eligibleDrivers.push({
+          driver,
+          driverLocation,
+          activeOrders,
+          effectiveCap,
+          eta,
+          distanceKm,
+          headingMatch,
+        });
+      }
+
+      if (eligibleDrivers.length > 0) {
+        const eligibleIds = eligibleDrivers.map(d => d.driver.id);
+        const [batchBaseRates, batchFairness] = await Promise.all([
+          getMLAcceptanceProbabilityBatch(eligibleIds),
+          Promise.resolve(calculateFairnessScoreBatch(eligibleDrivers.map(d => d.driver))),
+        ]);
+        const hour = new Date().getHours();
+        const timeBonus = (hour >= 10 && hour <= 21) ? 0.05 : 0;
+
+        let bestScore = Infinity;
+        for (const e of eligibleDrivers) {
+          const baseRate = batchBaseRates[e.driver.id] || 0.7;
+          const distancePenalty = Math.min(e.eta / 60, 0.3);
+          const workloadPenalty = e.activeOrders * 0.15;
+          const mlAcceptanceProbability = Math.max(0.05, Math.min(0.95,
+            baseRate - distancePenalty - workloadPenalty + timeBonus
+          ));
+          const fairnessScore = batchFairness[e.driver.id] || 50;
+          const compositeScore = calculateCompositeScore({
+            eta: e.eta,
+            mlAcceptanceProbability,
+            effectiveCapacity: e.effectiveCap,
+            fairnessScore,
+            headingMatch: e.headingMatch,
+            currentOrders: e.activeOrders,
+            restaurantPrepMinutes: 0,
+          });
+          if (compositeScore < bestScore) {
+            bestScore = compositeScore;
+            bestDriver = {
+              driverId: e.driver.id,
+              driverName: `${e.driver.firstName || ''} ${e.driver.lastName || ''}`.trim(),
+              fcmToken: e.driver.fcmToken,
+              driverLocation: e.driverLocation,
+              eta: e.eta,
+              distance: e.distanceKm,
+            };
+          }
+        }
+      }
+    }
+
+    console.log('[placeOrderWithDispatch] Drivers considered:', driversSnapshot.size,
+      'bestDriver:', bestDriver ? bestDriver.driverId : 'none');
+
+    // 6. Atomic transaction: create order and optionally assign driver
+    const orderRef = db.collection('restaurant_orders').doc();
+    const orderId = orderRef.id;
+
+    const orderData = _normalizeOrderForFirestore({
+      ...orderPayload,
+      id: orderId,
+      status: 'Order Placed',
+      authorID: customerId,
+    });
+
+    if (bestDriver) {
+      orderData.driverID = bestDriver.driverId;
+      orderData.assignedDriverName = bestDriver.driverName;
+      orderData.driverDistance = bestDriver.distance;
+      orderData.estimatedETA = bestDriver.eta;
+      orderData.dispatchStatus = 'success';
+      orderData.placementMethod = 'placeOrderWithDispatch';
+    } else {
+      orderData.dispatchStatus = 'no_drivers_at_placement';
+      orderData.placementMethod = 'placeOrderWithDispatch';
+    }
+
+    try {
+      await db.runTransaction(async (tx) => {
+        if (bestDriver) {
+          const driverRef = db.collection('users').doc(bestDriver.driverId);
+          const driverSnap = await tx.get(driverRef);
+          if (!driverSnap.exists) throw new Error('DRIVER_NOT_FOUND');
+          const d = driverSnap.data() || {};
+          if (d.riderAvailability !== 'available') throw new Error('DRIVER_TAKEN');
+          const activeOrders = _activeOrdersCount(d);
+          const weights = await _loadDispatchWeights();
+          const cap = _calculateDynamicCapacity(d, weights);
+          if (activeOrders >= cap) throw new Error('DRIVER_TAKEN');
+
+          tx.set(orderRef, orderData);
+          tx.update(driverRef, {
+            inProgressOrderID: admin.firestore.FieldValue.arrayUnion(orderId),
+            lastAssignedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          const updatedData = {
+            ...d,
+            inProgressOrderID: [...(d.inProgressOrderID || []), orderId],
+          };
+          const { riderAvailability, riderDisplayStatus } = _computeRiderStatus(updatedData, weights);
+          tx.update(driverRef, { riderAvailability, riderDisplayStatus });
+        } else {
+          tx.set(orderRef, orderData);
+        }
+      });
+
+      const driverAssigned = !!bestDriver;
+      const result = {
+        success: true,
+        orderId,
+        driverAssigned,
+      };
+
+      if (driverAssigned && bestDriver?.fcmToken) {
+        try {
+          await getMessaging().send({
+            token: bestDriver.fcmToken,
+            notification: {
+              title: 'New Order Assigned (Place Order)',
+              body: `Order #${orderId.substring(0, 8)} assigned. ETA: ${Math.round(bestDriver.eta)} mins`,
+            },
+            data: {
+              orderId,
+              type: 'order_assignment',
+              eta: String(bestDriver.eta),
+              restaurantLat: String(restaurantLocation.lat),
+              restaurantLng: String(restaurantLocation.lng),
+              deliveryLat: String(deliveryLocation.lat),
+              deliveryLng: String(deliveryLocation.lng),
+            },
+          });
+        } catch (fcmErr) {
+          console.warn('[placeOrderWithDispatch] FCM error:', fcmErr.message);
+        }
+      }
+
+      if (idempotencyKey) {
+        const expireAt = new Date();
+        expireAt.setHours(expireAt.getHours() + IDEMPOTENCY_TTL_HOURS);
+        await db.collection('idempotency_keys').doc(idempotencyKey).set({
+          orderId,
+          result,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          expireAt: admin.firestore.Timestamp.fromDate(expireAt),
+        });
+      }
+
+      console.log('[placeOrderWithDispatch] Success orderId=', orderId, 'driverAssigned=', driverAssigned);
+      return result;
+    } catch (txErr) {
+      const msg = txErr.message || '';
+      if (msg === 'DRIVER_TAKEN' || msg === 'DRIVER_NOT_FOUND') {
+        const err = {
+          success: false,
+          code: 'NO_DRIVERS_AVAILABLE',
+          message: 'No delivery partners are available right now. Please try again in a few minutes.',
+        };
+        console.log('[placeOrderWithDispatch] Driver taken/not found, returning NO_DRIVERS_AVAILABLE');
+        return err;
+      }
+      console.error('[placeOrderWithDispatch] Transaction error:', txErr);
+      return {
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: 'Failed to create order. Please try again.',
+      };
+    }
+  });
+
+// =========================
 // PAUTOS Dispatcher
 // =========================
 
@@ -1124,10 +1669,7 @@ exports.pautosDispatcher = functions
         const driver = { id: doc.id, ...doc.data() };
         if (excludedIds.has(driver.id)) continue;
         if (driver.pautosEligible === false) continue;
-        const avail = driver.riderAvailability || '';
-        const online = driver.isOnline === true;
-        if (avail !== 'available' && !online) continue;
-        if (driver.checkedOutToday === true) continue;
+        if (!_isDriverEligibleBase(driver)) continue;
         if (driver.suspended === true) continue;
 
         if (zoneDriverIds && zoneDriverIds.length > 0) {
@@ -1278,10 +1820,7 @@ exports.pautosRejectAndReassign = functions
       const driver = { id: doc.id, ...doc.data() };
       if (excludeSet.has(driver.id)) continue;
       if (driver.pautosEligible === false) continue;
-      const avail = driver.riderAvailability || '';
-      const online = driver.isOnline === true;
-      if (avail !== 'available' && !online) continue;
-      if (driver.checkedOutToday === true) continue;
+      if (!_isDriverEligibleBase(driver)) continue;
 
       if (zoneDriverIds && zoneDriverIds.length > 0 && !zoneDriverIds.includes(driver.id)) continue;
 
@@ -2075,11 +2614,36 @@ function _activeOrdersCount(driverData) {
   return Array.isArray(v) ? v.length : 0;
 }
 
-function _isDriverEligibleBase(driverData) {
+function _isSchemaV2Driver(driverData) {
+  return Number(driverData?.statusSchemaVersion || 0) === 2;
+}
+
+function _getDriverMaxOrders(driverData, weights) {
+  const w = weights || _dispatchWeightsCache || DEFAULT_DISPATCH_WEIGHTS;
+  const rawMax = _asNumber(driverData?.maxOrders);
+  if (rawMax && rawMax > 0) {
+    return Math.max(1, Math.floor(rawMax));
+  }
+  return _calculateDynamicCapacity(driverData || {}, w);
+}
+
+function _isDriverEligibleCanonical(driverData, weights) {
   if (!driverData) return false;
   if (driverData.role !== 'driver') return false;
   if (driverData.isOnline !== true) return false;
-  if (driverData.checkedInToday !== true) return false;
+  if (driverData.riderAvailability !== 'available') return false;
+  if (driverData.suspended === true) return false;
+
+  const activeOrders = _activeOrdersCount(driverData);
+  const maxOrders = _getDriverMaxOrders(driverData, weights);
+  return activeOrders < maxOrders;
+}
+
+function _isDriverEligibleBase(driverData) {
+  if (!driverData) return false;
+  if (_isSchemaV2Driver(driverData)) {
+    return _isDriverEligibleCanonical(driverData);
+  }
 
   const isSuspended =
     driverData.suspended === true ||
@@ -2098,9 +2662,8 @@ function _isDriverEligibleBase(driverData) {
 function _computeIsActiveForDispatch(driverData, activeOrdersCount, weights) {
   if (!_isDriverEligibleBase(driverData)) return false;
 
-  const w = weights || _dispatchWeightsCache || DEFAULT_DISPATCH_WEIGHTS;
-  const effectiveCap = _calculateDynamicCapacity(driverData, w);
-  return activeOrdersCount < effectiveCap;
+  const maxOrders = _getDriverMaxOrders(driverData, weights);
+  return activeOrdersCount < maxOrders;
 }
 
 async function _logDispatchEvent({
@@ -2422,7 +2985,14 @@ async function _checkZoneCapacity(deliveryLat, deliveryLng) {
   for (const dDoc of driversSnap.docs) {
     if (!assignedIds.includes(dDoc.id)) continue;
     const d = dDoc.data();
-    if (d.checkedOutToday === true) continue;
+    if (_isSchemaV2Driver(d)) {
+      if (d.isOnline !== true) continue;
+      if (d.riderAvailability !== 'available' &&
+          d.riderAvailability !== 'on_delivery' &&
+          d.riderAvailability !== 'on_break') continue;
+    } else if (d.checkedOutToday === true) {
+      continue;
+    }
     const locTs = d.locationUpdatedAt;
     if (locTs && locTs.toDate() > fiveMinAgo) {
       activeCount++;
@@ -2456,7 +3026,6 @@ async function _pickBestDriverForOrder({
   const driversSnapshot = await db
     .collection('users')
     .where('role', '==', 'driver')
-    .where('riderAvailability', '==', 'available')
     .get();
 
   const drivers = [];
@@ -3151,6 +3720,80 @@ exports.riderFirstDispatchTimeouts = functions.pubsub
       });
     }
 
+    return null;
+  });
+
+/**
+ * Canonical rider inactivity monitor.
+ * Single backend writer: sets rider offline after inactivity timeout.
+ */
+exports.monitorRiderInactivity = functions.pubsub
+  .schedule('every 2 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const configSnap = await db
+      .collection('config')
+      .doc('rider_time_settings')
+      .get();
+    const config = configSnap.exists ? configSnap.data() : {};
+    const inactivityTimeoutMinutes = _asNumber(
+      config?.inactivityTimeoutMinutes,
+    ) || 15;
+    const excludeWithActiveOrders = config?.excludeWithActiveOrders !== false;
+    const thresholdMs = inactivityTimeoutMinutes * 60 * 1000;
+    const nowMs = Date.now();
+
+    const ridersSnap = await db
+      .collection('users')
+      .where('role', '==', 'driver')
+      .get();
+
+    let forcedOffline = 0;
+    for (const riderDoc of ridersSnap.docs) {
+      const data = riderDoc.data() || {};
+      if (!_isSchemaV2Driver(data)) continue;
+
+      const avail = String(data.riderAvailability || 'offline');
+      if (
+        avail !== 'available' &&
+        avail !== 'on_delivery' &&
+        avail !== 'on_break'
+      ) {
+        continue;
+      }
+      if (data.isOnline !== true) continue;
+
+      const activeOrders = _activeOrdersCount(data);
+      if (excludeWithActiveOrders && activeOrders > 0) continue;
+
+      const lastActRaw = data.lastActivityTimestamp;
+      const locRaw = data.locationUpdatedAt;
+      const lastActMs = lastActRaw?.toMillis
+        ? lastActRaw.toMillis()
+        : locRaw?.toMillis
+          ? locRaw.toMillis()
+          : 0;
+      if (!lastActMs) continue;
+
+      const inactiveMs = nowMs - lastActMs;
+      if (inactiveMs < thresholdMs) continue;
+
+      await riderDoc.ref.update({
+        isOnline: false,
+        riderAvailability: 'offline',
+        riderDisplayStatus: '⚪ Offline',
+        inactiveReason: 'timeout',
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      forcedOffline++;
+    }
+
+    if (forcedOffline > 0) {
+      console.log(
+        `[monitorRiderInactivity] Forced offline ${forcedOffline} rider(s)`,
+      );
+    }
     return null;
   });
 
@@ -4245,30 +4888,38 @@ function _distanceWeight(distanceKm, w) {
 
 function _computeRiderStatus(driverData, weights) {
   const w = weights || _dispatchWeightsCache || DEFAULT_DISPATCH_WEIGHTS;
+  const isV2 = _isSchemaV2Driver(driverData);
 
   if (driverData.suspended === true ||
       String(driverData.attendanceStatus || '').toLowerCase() === 'suspended') {
-    return { riderAvailability: 'suspended', riderDisplayStatus: '🔴 Suspended' };
+    return { riderAvailability: 'offline', riderDisplayStatus: '🔴 Suspended' };
   }
 
-  const isCheckedOut = driverData.checkedOutToday === true ||
-    (driverData.todayCheckOutTime != null &&
-     String(driverData.todayCheckOutTime || '').trim() !== '');
-  if (isCheckedOut) {
-    return { riderAvailability: 'checked_out', riderDisplayStatus: '⚫ Checked Out' };
-  }
-
-  if (driverData.riderAvailability === 'on_break') {
-    return { riderAvailability: 'on_break', riderDisplayStatus: '⏸ On Break' };
-  }
-
-  if (driverData.checkedInToday !== true || driverData.isOnline !== true) {
-    return { riderAvailability: 'offline', riderDisplayStatus: '⚪ Offline' };
+  if (isV2) {
+    if (driverData.isOnline !== true) {
+      return { riderAvailability: 'offline', riderDisplayStatus: '⚪ Offline' };
+    }
+    if (driverData.riderAvailability === 'on_break') {
+      return { riderAvailability: 'on_break', riderDisplayStatus: '⏸ On Break' };
+    }
+  } else {
+    const isCheckedOut = driverData.checkedOutToday === true ||
+      (driverData.todayCheckOutTime != null &&
+       String(driverData.todayCheckOutTime || '').trim() !== '');
+    if (isCheckedOut) {
+      return { riderAvailability: 'offline', riderDisplayStatus: '⚫ Checked Out' };
+    }
+    if (driverData.riderAvailability === 'on_break') {
+      return { riderAvailability: 'on_break', riderDisplayStatus: '⏸ On Break' };
+    }
+    if (driverData.checkedInToday !== true || driverData.isOnline !== true) {
+      return { riderAvailability: 'offline', riderDisplayStatus: '⚪ Offline' };
+    }
   }
 
   const activeOrders = _activeOrdersCount(driverData);
   if (activeOrders > 0) {
-    const cap = _calculateDynamicCapacity(driverData, w);
+    const cap = _getDriverMaxOrders(driverData, w);
     if (activeOrders >= cap) {
       return { riderAvailability: 'on_delivery', riderDisplayStatus: '🟡 On Delivery' };
     }
@@ -5017,10 +5668,6 @@ exports.processNotificationJob = functions
     const job = snap.data() || {};
     const kind = String(job.kind || '').trim();
     const payload = job.payload && typeof job.payload === 'object' ? job.payload : {};
-    // #region agent log
-    const _log = (h, msg, d) => { try { console.log('[DBG-0fb808] ' + JSON.stringify({ hypothesisId: h, message: msg, data: d || {}, timestamp: Date.now() })); } catch (_) {} };
-    _log('H1', 'triggered', { jobId, kind, segment: payload.segment });
-    // #endregion
 
     const jobRef = snap.ref;
     const now = admin.firestore.FieldValue.serverTimestamp();
@@ -5203,7 +5850,7 @@ exports.processNotificationJob = functions
         }
 
         for (const userDoc of usersSnapshot.docs) {
-          const tokens = await _getUserFcmTokens(db, userDoc.id);
+          const tokens = _extractUserFcmTokensFromData(userDoc.data());
           for (const t of tokens) {
             tokenAccumulator.push(t);
             if (tokenAccumulator.length >= FCM_BATCH_SIZE) {
@@ -5543,20 +6190,56 @@ exports.sendReorderReminders = functions
   });
 
 /**
- * Scheduled: Send Ash hunger break reminders at 8 AM, 12 PM, 6 PM.
- * Uses HungerDetection to decide who gets reminders and generate content.
+ * Scheduled: Smart Hunger Notifications at 10:30 AM, 2:30 PM, 5:00 PM Asia/Manila.
+ * Sends window-specific notifications (lunch, snack, dinner) just before hunger windows.
  */
-exports.sendHungerReminders = functions
+exports.sendSmartHungerReminders = functions
+  .runWith({ timeoutSeconds: 540, memory: '1GB' })
   .region('us-central1')
-  .pubsub.schedule('0 8,12,18 * * *')
+  .pubsub.schedule('0,30 * * * *')
   .timeZone('Asia/Manila')
   .onRun(async () => {
     const db = getDb();
     const now = new Date();
     const currentHour = now.getHours();
-    const currentPeriod = HungerDetection.getMealPeriod(now);
+    const currentMinute = now.getMinutes();
 
-    console.log(`[sendHungerReminders] Checking at ${currentPeriod} (${currentHour}:00)...`);
+    let window = null;
+    if (currentHour === 10 && currentMinute === 30) {
+      window = 'lunch';
+    } else if (currentHour === 14 && currentMinute === 30) {
+      window = 'snack';
+    } else if (currentHour === 17 && currentMinute === 0) {
+      window = 'dinner';
+    }
+
+    if (!window) {
+      return null;
+    }
+
+    console.log(`[sendSmartHungerReminders] Window: ${window} (${currentHour}:${currentMinute})`);
+
+    const smartHungerConfigSnap = await db
+      .collection('config')
+      .doc('smart_hunger_settings')
+      .get();
+    const smartHungerConfig = smartHungerConfigSnap.exists
+      ? (smartHungerConfigSnap.data() || {})
+      : {};
+    const isSmartHungerEnabled = smartHungerConfig.enabled !== false;
+    if (!isSmartHungerEnabled) {
+      console.log('[sendSmartHungerReminders] Disabled via admin config');
+      return null;
+    }
+    const enabledWindows = smartHungerConfig.windows || {};
+    if (enabledWindows[window] === false) {
+      console.log(
+        `[sendSmartHungerReminders] Window "${window}" disabled by admin config`,
+      );
+      return null;
+    }
+    const frequencyMode = smartHungerConfig.frequencyMode || 'recommended';
+    const customMessages = smartHungerConfig.customMessages || {};
 
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -5564,13 +6247,12 @@ exports.sendHungerReminders = functions
 
     const usersSnapshot = await db
       .collection('users')
-      .where('settings.ashHungerReminders', '==', true)
       .where('reorderEligible', '==', true)
       .where('lastOnlineTimestamp', '>=', thirtyDaysAgoTs)
       .limit(500)
       .get();
 
-    console.log(`[sendHungerReminders] Found ${usersSnapshot.size} eligible users`);
+    console.log(`[sendSmartHungerReminders] Found ${usersSnapshot.size} eligible users`);
 
     let sentCount = 0;
 
@@ -5578,41 +6260,82 @@ exports.sendHungerReminders = functions
       const userData = userDoc.data();
       const userId = userDoc.id;
 
-      const shouldSend = await HungerDetection.shouldSendHungerReminder(
-        db,
-        userId,
+      const orderedToday = await HungerDetection.hasOrderedToday(
+        db, userId, now
+      );
+      if (orderedToday) continue;
+
+      const canSend = await FrequencyManager.canSendNotification(
+        userId, 'ash_hunger', db
+      );
+      if (!canSend) continue;
+
+      const settings = userData.settings || {};
+      if (frequencyMode === 'less') {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayStartTs =
+          admin.firestore.Timestamp.fromDate(todayStart);
+        const todayHunger = await db
+          .collection('ash_notification_history')
+          .where('userId', '==', userId)
+          .where('type', '==', 'ash_hunger')
+          .where('sentAt', '>=', todayStartTs)
+          .limit(1)
+          .get();
+        if (!todayHunger.empty) continue;
+      }
+      if (settings.quietHoursEnabled) {
+        const quietStart = settings.quietHoursStart;
+        const quietEnd = settings.quietHoursEnd;
+        const userTimezone = userData.timezone || 'Asia/Manila';
+        const userHour = TimezoneUtils.getCurrentHourInUserTimezone(
+          userTimezone
+        );
+        if (
+          quietStart !== undefined &&
+          quietEnd !== undefined &&
+          TimezoneUtils.isWithinQuietHours(
+            userTimezone, quietStart, quietEnd, userHour
+          )
+        ) {
+          continue;
+        }
+      }
+
+      const pref = userData.preferenceProfile || {};
+      const favoriteRestaurantIds = pref.favoriteRestaurants || [];
+      let restaurantName = null;
+      if (favoriteRestaurantIds.length > 0) {
+        const vendorId = favoriteRestaurantIds[0];
+        const vendorDoc = await db.collection('vendors').doc(vendorId).get();
+        if (vendorDoc.exists) {
+          const v = vendorDoc.data();
+          restaurantName = v?.title || null;
+        }
+      }
+
+      const content = AshNotificationBuilder.getSmartHungerContent(
+        window,
         userData,
-        now
-      );
-
-      if (!shouldSend) continue;
-
-      const hungerContent = await HungerDetection.generateHungerContent(
-        db,
-        userId,
-        userData
-      );
-      const restaurantName =
-        hungerContent.suggestedRestaurant?.title || 'your favorite restaurant';
-      const productName = hungerContent.suggestedProduct?.name || null;
-      const notification = AshNotificationBuilder.buildAshNotification(
-        'hunger',
-        { ...userData, id: userId },
         {
           userId,
           restaurantName,
-          productName,
-          suggestion: productName || 'something tasty',
-          mealPeriod: currentPeriod,
+          customMessage: (customMessages[window] || '').toString(),
         }
       );
 
+      const notificationId = `ash_hunger_${userId}_${Date.now()}`;
       const tokens = await _getUserFcmTokens(db, userId);
       if (tokens.length === 0) continue;
 
       const fcmData = {
-        ...notification.data,
-        mealPeriod: String(currentPeriod),
+        type: 'ash_hunger',
+        notificationId,
+        userId: String(userId),
+        timestamp: new Date().toISOString(),
+        ash: 'true',
+        mealPeriod: String(window),
         hour: String(currentHour),
       };
       Object.keys(fcmData).forEach((k) => {
@@ -5622,8 +6345,8 @@ exports.sendHungerReminders = functions
       try {
         const multicastMessage = {
           notification: {
-            title: notification.title,
-            body: notification.body,
+            title: content.title,
+            body: content.body,
           },
           data: fcmData,
           tokens,
@@ -5632,32 +6355,112 @@ exports.sendHungerReminders = functions
         };
         await getMessaging().sendEachForMulticast(multicastMessage);
 
-        await db.collection('ash_notification_history').doc(fcmData.notificationId).set({
-          userId,
-          type: 'ash_hunger',
-          title: notification.title,
-          body: notification.body,
-          data: {
-            mealPeriod: currentPeriod,
-            hour: currentHour,
-            suggestedProduct: hungerContent.suggestedProduct || null,
-            suggestedRestaurant: hungerContent.suggestedRestaurant || null,
-          },
-          sentAt: admin.firestore.FieldValue.serverTimestamp(),
-          openedAt: null,
-          actionTaken: null,
-        });
+        await db.collection('ash_notification_history')
+          .doc(notificationId)
+          .set({
+            userId,
+            type: 'ash_hunger',
+            window,
+            title: content.title,
+            body: content.body,
+            data: {
+              mealPeriod: window,
+              hour: currentHour,
+            },
+            sentAt: admin.firestore.FieldValue.serverTimestamp(),
+            openedAt: null,
+            actionTaken: null,
+          });
 
         sentCount++;
-        console.log(`[sendHungerReminders] Sent to user ${userId}`);
+        console.log(`[sendSmartHungerReminders] Sent to user ${userId}`);
       } catch (e) {
-        console.error(`[sendHungerReminders] Failed for user ${userId}:`, e);
+        console.error(
+          `[sendSmartHungerReminders] Failed for user ${userId}:`, e
+        );
       }
     }
 
-    console.log(`[sendHungerReminders] Complete. Sent: ${sentCount}`);
+    console.log(`[sendSmartHungerReminders] Complete. Sent: ${sentCount}`);
     return null;
   });
+
+// Legacy - replaced by sendSmartHungerReminders
+// exports.sendHungerReminders = functions
+//   .region('us-central1')
+//   .pubsub.schedule('0 8,12,18 * * *')
+//   .timeZone('Asia/Manila')
+//   .onRun(async () => {
+//     const db = getDb();
+//     const now = new Date();
+//     const currentHour = now.getHours();
+//     const currentPeriod = HungerDetection.getMealPeriod(now);
+//     console.log(`[sendHungerReminders] Checking at ${currentPeriod}...`);
+//     const thirtyDaysAgo = new Date();
+//     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+//     const thirtyDaysAgoTs = admin.firestore.Timestamp.fromDate(thirtyDaysAgo);
+//     const usersSnapshot = await db
+//       .collection('users')
+//       .where('settings.ashHungerReminders', '==', true)
+//       .where('reorderEligible', '==', true)
+//       .where('lastOnlineTimestamp', '>=', thirtyDaysAgoTs)
+//       .limit(500)
+//       .get();
+//     let sentCount = 0;
+//     for (const userDoc of usersSnapshot.docs) {
+//       const userData = userDoc.data();
+//       const userId = userDoc.id;
+//       const shouldSend = await HungerDetection.shouldSendHungerReminder(
+//         db, userId, userData, now
+//       );
+//       if (!shouldSend) continue;
+//       const hungerContent = await HungerDetection.generateHungerContent(
+//         db, userId, userData
+//       );
+//       const restaurantName =
+//         hungerContent.suggestedRestaurant?.title || 'your favorite restaurant';
+//       const productName = hungerContent.suggestedProduct?.name || null;
+//       const notification = AshNotificationBuilder.buildAshNotification(
+//         'hunger', { ...userData, id: userId },
+//         { userId, restaurantName, productName,
+//           suggestion: productName || 'something tasty',
+//           mealPeriod: currentPeriod }
+//       );
+//       const tokens = await _getUserFcmTokens(db, userId);
+//       if (tokens.length === 0) continue;
+//       const fcmData = {
+//         ...notification.data,
+//         mealPeriod: String(currentPeriod),
+//         hour: String(currentHour),
+//       };
+//       Object.keys(fcmData).forEach((k) => { fcmData[k] = String(fcmData[k]); });
+//       try {
+//         await getMessaging().sendEachForMulticast({
+//           notification: { title: notification.title, body: notification.body },
+//           data: fcmData, tokens,
+//           android: { priority: 'high', notification: { sound: 'default' } },
+//           apns: { payload: { aps: { sound: 'default' } } },
+//         });
+//         await db.collection('ash_notification_history')
+//           .doc(fcmData.notificationId).set({
+//             userId, type: 'ash_hunger', title: notification.title,
+//             body: notification.body,
+//             data: {
+//               mealPeriod: currentPeriod, hour: currentHour,
+//               suggestedProduct: hungerContent.suggestedProduct || null,
+//               suggestedRestaurant: hungerContent.suggestedRestaurant || null,
+//             },
+//             sentAt: admin.firestore.FieldValue.serverTimestamp(),
+//             openedAt: null, actionTaken: null,
+//           });
+//         sentCount++;
+//       } catch (e) {
+//         console.error(`[sendHungerReminders] Failed for user ${userId}:`, e);
+//       }
+//     }
+//     console.log(`[sendHungerReminders] Complete. Sent: ${sentCount}`);
+//     return null;
+//   });
 
 /**
  * Scheduled: Process cart recovery - find abandoned carts, schedule reminders.
@@ -10005,6 +10808,170 @@ exports.computeDailyRestaurantMetrics = functions
   });
 
 /**
+ * Callable: Debug dailyMetrics vs restaurant_orders for a vendor.
+ * Data: { vendorId: string }. Returns dailyMetrics coverage and direct order count.
+ */
+exports.debugVendorMetrics = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const db = getDb();
+    const vendorId = (data && data.vendorId) || '';
+    if (!vendorId) throw new functions.https.HttpsError('invalid-argument', 'vendorId required');
+
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const directOrdersSnap = await db
+      .collection('restaurant_orders')
+      .where('vendorID', '==', vendorId)
+      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(thirtyDaysAgo))
+      .get();
+
+    const vendorRef = db.collection('vendors').doc(vendorId);
+    const dailyDetails = [];
+    let fromDailyTotal = 0;
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const snap = await vendorRef.collection('dailyMetrics').doc(dateStr).get();
+      const t = snap.exists ? (snap.data().totalOrders || 0) : null;
+      if (snap.exists && t != null) fromDailyTotal += t;
+      dailyDetails.push({ date: dateStr, totalOrders: t, exists: snap.exists });
+    }
+
+    const pm = (await vendorRef.get()).data()?.publicMetrics || {};
+    return {
+      vendorId,
+      directOrderCountLast30Days: directOrdersSnap.size,
+      fromDailyMetricsTotal: fromDailyTotal,
+      publicMetricsOrderCount: pm.orderCountLast30Days,
+      daysWithDailyMetrics: dailyDetails.filter((d) => d.exists).length,
+      dailyDetails: dailyDetails.filter((d) => d.exists),
+    };
+  });
+
+/**
+ * Callable: Backfill dailyMetrics for last N days from restaurant_orders.
+ * Use when dailyMetrics was missing (e.g. job recently added). Run once per vendor or all.
+ * Data: { vendorId?: string, days?: number } - vendorId optional, days defaults to 30.
+ */
+exports.backfillDailyMetrics = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const db = getDb();
+    const vendorId = (data && data.vendorId) || null;
+    const days = Math.min(90, Math.max(1, (data && data.days) || 30));
+    const now = new Date();
+
+    const vendorIds = vendorId
+      ? [vendorId]
+      : (await db.collection('vendors').get()).docs.map((d) => d.id);
+
+    let backfilled = 0;
+    for (const vid of vendorIds) {
+      try {
+        for (let i = 0; i < days; i++) {
+          const d = new Date(now);
+          d.setDate(d.getDate() - i);
+          const dateStr = d.toISOString().slice(0, 10);
+          const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0);
+          const endOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59);
+
+          const ordersSnap = await db
+            .collection('restaurant_orders')
+            .where('vendorID', '==', vid)
+            .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(startOfDay))
+            .where('createdAt', '<=', admin.firestore.Timestamp.fromDate(endOfDay))
+            .get();
+
+          let total = 0;
+          let accepted = 0;
+          let missed = 0;
+          let totalAcceptanceTime = 0;
+          let acceptanceTimeCount = 0;
+
+          for (const orderDoc of ordersSnap.docs) {
+            const order = orderDoc.data();
+            total++;
+            const status = String(order.status || '').toLowerCase();
+            if (status === 'order accepted') {
+              accepted++;
+              const acceptedAt = order.acceptedAt;
+              const createdAt = order.createdAt;
+              if (acceptedAt && createdAt) {
+                const a = acceptedAt.toDate ? acceptedAt.toDate() : new Date(acceptedAt.seconds * 1000);
+                const c = createdAt.toDate ? createdAt.toDate() : new Date(createdAt.seconds * 1000);
+                totalAcceptanceTime += (a - c) / 1000;
+                acceptanceTimeCount++;
+              }
+            }
+            if (status === 'order rejected') missed++;
+            if (status === 'order placed') {
+              const expiresAt = order.expiresAt;
+              if (expiresAt) {
+                const exp = expiresAt.toDate ? expiresAt.toDate() : new Date(expiresAt.seconds * 1000);
+                if (exp < now) missed++;
+              }
+            }
+          }
+
+          const acceptanceRate = total > 0 ? (accepted / total) * 100 : 100;
+          const avgAcceptanceTime = acceptanceTimeCount > 0 ? totalAcceptanceTime / acceptanceTimeCount : 0;
+
+          const vendorDoc = await db.collection('vendors').doc(vid).get();
+          const vendorData = vendorDoc.data() || {};
+          const metrics = vendorData.acceptanceMetrics || {};
+          const autoPause = vendorData.autoPause || {};
+
+          await db
+            .collection('vendors')
+            .doc(vid)
+            .collection('dailyMetrics')
+            .doc(dateStr)
+            .set({
+              date: dateStr,
+              totalOrders: total,
+              accepted,
+              missed,
+              acceptanceRate,
+              avgAcceptanceTimeSeconds: avgAcceptanceTime,
+              consecutiveMisses: metrics.consecutiveUnaccepted || 0,
+              wasPaused: autoPause.isPaused === true,
+              computedAt: admin.firestore.FieldValue.serverTimestamp(),
+              backfilled: true,
+            });
+
+          if (total > 0) backfilled++;
+        }
+
+        const publicMetrics = await computePublicMetrics(db, vid, now);
+        const coordMetrics = await computeCoordinationMetrics(db, vid, now);
+        const vendorRef = db.collection('vendors').doc(vid);
+        const currentData = (await vendorRef.get()).data() || {};
+        const existingPublicMetrics = currentData.publicMetrics || {};
+        const publicUpdates = {
+          ...publicMetrics,
+          overrideBadge: existingPublicMetrics.overrideBadge || null,
+        };
+        if (coordMetrics) {
+          publicUpdates.coordinationScore = coordMetrics.coordinationScore;
+          publicUpdates.avgRiderWaitSeconds = coordMetrics.avgRiderWaitSeconds;
+          publicUpdates.readyOnTimeRate = coordMetrics.readyOnTimeRate;
+          publicUpdates.coordinationLastUpdated = admin.firestore.FieldValue.serverTimestamp();
+        }
+        await vendorRef.update({ publicMetrics: publicUpdates });
+      } catch (e) {
+        console.error(`[backfillDailyMetrics] Failed for vendor ${vid}:`, e);
+        throw new functions.https.HttpsError('internal', `Backfill failed: ${e.message}`);
+      }
+    }
+
+    return { vendorsProcessed: vendorIds.length, days, backfilled };
+  });
+
+/**
  * Scheduled: set status to 'inactive' for bundles whose endDate has passed.
  */
 exports.deactivateExpiredBundles = functions
@@ -10319,4 +11286,58 @@ exports.batchUpdateUserRoles = functions
   .https.onCall(async (data, context) =>
     batchUpdateUserRoles(data, context, getDb),
   );
+
+// Optional: Batched home screen data to reduce client Firestore round-trips.
+// Implement getHomePageShowCategory, getBanners, getActiveCoupons, getBundleDeals,
+// getNearbyRestaurantsFirstPage to match Customer Firestore schema.
+exports.getHomeScreenInitialData = functions.https.onCall(async (data, context) => {
+  const { userId, lat, lng } = data || {};
+  const db = getDb();
+  try {
+    const [categories, banners, promos, bundles, restaurants] = await Promise.all([
+      _getHomePageCategories(db),
+      _getBanners(db),
+      _getActiveCoupons(db, userId || null),
+      _getBundleDeals(db),
+      _getNearbyRestaurantsFirstPage(db, lat, lng, 20),
+    ]);
+    return { categories, banners, promos, bundles, restaurants };
+  } catch (err) {
+    console.error('[getHomeScreenInitialData] Error:', err);
+    throw new functions.https.HttpsError('internal', err.message);
+  }
+});
+
+async function _getHomePageCategories(db) {
+  const snap = await db.collection('vendor_categories').limit(50).get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function _getBanners(db) {
+  const snap = await db.collection('advertisements').limit(20).get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function _getActiveCoupons(db, userId) {
+  const now = admin.firestore.Timestamp.now();
+  const snap = await db.collection('coupons')
+    .where('expireOfferDate', '>=', now)
+    .limit(20)
+    .get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function _getBundleDeals(db) {
+  const snap = await db.collection('bundles').limit(20).get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+async function _getNearbyRestaurantsFirstPage(db, lat, lng, limit) {
+  if (lat == null || lng == null) return [];
+  const snap = await db.collection('vendors')
+    .where('reststatus', '==', true)
+    .limit(limit)
+    .get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
 

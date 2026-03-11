@@ -12,6 +12,7 @@ class UserListenerService {
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subscription;
   String? _userId;
   final Map<String, void Function(Map<String, dynamic>)> _callbacks = {};
+  DateTime? _ignoreRemoteUntil;
 
   /// Number of currently registered callbacks.
   int get callbackCount => _callbacks.length;
@@ -29,6 +30,10 @@ class UserListenerService {
         .snapshots()
         .listen(
       (snapshot) {
+        if (_ignoreRemoteUntil != null &&
+            DateTime.now().isBefore(_ignoreRemoteUntil!)) {
+          return;
+        }
         if (snapshot.exists && snapshot.data() != null) {
           final data = snapshot.data()!;
           for (final cb in _callbacks.values.toList()) {
@@ -69,5 +74,10 @@ class UserListenerService {
   /// Remove a previously registered callback by key.
   void removeCallback(String key) {
     _callbacks.remove(key);
+  }
+
+  /// Ignore remote snapshots briefly after local optimistic writes.
+  void markLocalMutation({Duration duration = const Duration(milliseconds: 500)}) {
+    _ignoreRemoteUntil = DateTime.now().add(duration);
   }
 }

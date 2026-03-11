@@ -121,10 +121,13 @@ class PautosService {
       final status = (orderData['status'] ?? '').toString();
       if (status != 'Shopping') return false;
 
-      final subSnap = await tx.get(orderRef.collection(_substitutionRequests));
-      final hasPending = subSnap.docs.any((d) =>
-          (d.data()['status'] ?? 'pending').toString() == 'pending');
-      if (hasPending) return false;
+      // tx.get() only accepts DocumentReference; query subcollection outside tx
+      final subSnap = await orderRef
+          .collection(_substitutionRequests)
+          .where('status', isEqualTo: 'pending')
+          .limit(1)
+          .get();
+      if (subSnap.docs.isNotEmpty) return false;
 
       final update = <String, dynamic>{
         'status': 'Delivering',

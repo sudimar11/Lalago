@@ -209,6 +209,47 @@ exports.computeUserPreferences = functions
       const lastOrderedAtAllTime =
         allTimeStats.lastOrderedAtAllTime ?? lastCompletedOrder?.createdAt;
 
+      const typicalHours = {};
+      if (orders.length >= 2) {
+        const lunchHours = orders
+          .map((o) => {
+            const createdAt = o.createdAt?.toDate?.() || new Date();
+            const h = createdAt.getHours();
+            return h >= 11 && h < 16 ? h : null;
+          })
+          .filter((h) => h !== null);
+        const snackHours = orders
+          .map((o) => {
+            const createdAt = o.createdAt?.toDate?.() || new Date();
+            const h = createdAt.getHours();
+            return h >= 14 && h < 17 ? h : null;
+          })
+          .filter((h) => h !== null);
+        const dinnerHours = orders
+          .map((o) => {
+            const createdAt = o.createdAt?.toDate?.() || new Date();
+            const h = createdAt.getHours();
+            return h >= 16 && h < 22 ? h : null;
+          })
+          .filter((h) => h !== null);
+
+        const median = (arr) => {
+          if (arr.length === 0) return null;
+          const sorted = [...arr].sort((a, b) => a - b);
+          const mid = Math.floor(sorted.length / 2);
+          return sorted.length % 2
+            ? sorted[mid]
+            : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+        };
+
+        const tl = median(lunchHours);
+        const ts = median(snackHours);
+        const td = median(dinnerHours);
+        if (tl !== null) typicalHours.typicalLunchHour = tl;
+        if (ts !== null) typicalHours.typicalSnackHour = ts;
+        if (td !== null) typicalHours.typicalDinnerHour = td;
+      }
+
       const preferenceProfile = {
         cuisinePreferences: cuisinePrefs,
         avgSpend: totalOrders > 0 ? totalSpend / totalOrders : 0,
@@ -223,6 +264,7 @@ exports.computeUserPreferences = functions
         totalCompletedOrders: totalCompletedOrdersAllTime,
         favoriteProducts,
         topCategories,
+        ...typicalHours,
       };
 
       const updateData = {

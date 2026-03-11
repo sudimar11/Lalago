@@ -3,8 +3,9 @@ import 'package:foodie_customer/model/bundle_model.dart';
 import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/ui/bundle/bundle_card.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
-class BundleDealsSection extends StatelessWidget {
+class BundleDealsSection extends StatefulWidget {
   final Future<void> Function(BuildContext context, BundleModel bundle)?
       onAddToCart;
 
@@ -14,17 +15,52 @@ class BundleDealsSection extends StatelessWidget {
   });
 
   @override
+  State<BundleDealsSection> createState() => _BundleDealsSectionState();
+}
+
+class _BundleDealsSectionState extends State<BundleDealsSection> {
+  int _streamKey = 0;
+
+  void _onRetry() {
+    final delay = Duration(seconds: 1 << _streamKey.clamp(0, 2));
+    _streamKey = (_streamKey + 1).clamp(0, 3);
+    Future.delayed(delay, () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<BundleModel>>(
+      key: ValueKey(_streamKey),
       stream: BundleService.getActiveBundlesStream(limit: 20),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const SizedBox.shrink();
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Container(
+                  height: 24,
+                  width: 120,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              SizedBox(
+                height: 320,
+                child: ShimmerWidgets.productListShimmer(),
+              ),
+            ],
+          );
         }
         if (snapshot.hasError) {
           return HomeSectionUtils.sectionError(
             message: 'Failed to load bundle deals',
-            onRetry: () {},
+            onRetry: _onRetry,
           );
         }
         final bundles = snapshot.data ?? [];
@@ -61,9 +97,9 @@ class BundleDealsSection extends StatelessWidget {
                           height: 318,
                           child: BundleCard(
                             bundle: bundle,
-                            onAddToCart: onAddToCart == null
+                            onAddToCart: widget.onAddToCart == null
                                 ? null
-                                : () => onAddToCart!(context, bundle),
+                                : () => widget.onAddToCart!(context, bundle),
                           ),
                         ),
                       ),

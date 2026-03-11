@@ -19,8 +19,17 @@ import 'package:foodie_customer/services/timezone_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/services/version_service.dart';
+import 'package:foodie_customer/services/cart_state_notifier.dart';
 import 'package:foodie_customer/services/cart_sync_service.dart';
+import 'package:foodie_customer/services/device_capability.dart';
+import 'package:foodie_customer/services/image_cache_config.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:foodie_customer/services/chat_read_service.dart';
+import 'package:foodie_customer/services/app_configuration_service.dart';
+import 'package:foodie_customer/utils/performance_logger.dart';
+import 'package:foodie_customer/widgets/performance_debug_overlay.dart';
 
+import 'package:foodie_customer/ui/chat_screen/inbox_driver_screen.dart';
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/signUp/SignUpScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
@@ -126,6 +135,8 @@ class _ContainerScreen extends State<ContainerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    PerformanceLogger.markAppStart();
+    ImageCacheConfig.ensureInitialized();
 
     if (widget.user != null) {
       user = widget.user!;
@@ -151,12 +162,26 @@ class _ContainerScreen extends State<ContainerScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     final userId = user?.userID ?? MyAppState.currentUser?.userID;
-    if (userId == null || userId.isEmpty) return;
-    if (state == AppLifecycleState.resumed) {
-      AnalyticsService.trackUserEngagement(userId, 'app_open');
-    } else if (state == AppLifecycleState.paused) {
-      AnalyticsService.trackUserEngagement(userId, 'app_background');
+    if (userId != null && userId.isNotEmpty) {
+      if (state == AppLifecycleState.resumed) {
+        AnalyticsService.trackUserEngagement(userId, 'app_open');
+      } else if (state == AppLifecycleState.paused) {
+        AnalyticsService.trackUserEngagement(userId, 'app_background');
+      }
     }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _maybeClearImageCacheOnBackground();
+    }
+  }
+
+  void _maybeClearImageCacheOnBackground() async {
+    try {
+      final lowEnd = await DeviceCapability.isLowEndDevice();
+      if (lowEnd) {
+        await DefaultCacheManager().emptyCache();
+      }
+    } catch (_) {}
   }
 
   Future<void> _performInitialization() async {
@@ -178,11 +203,27 @@ class _ContainerScreen extends State<ContainerScreen>
         return;
       }
 
-      // 2) Check FirebaseAuth user (wait for session restore if null)
-      auth.User? fbUser = auth.FirebaseAuth.instance.currentUser;
-      debugPrint('[AUTH_INIT] Initial currentUser: ${fbUser?.uid}');
+      // 2) Wait for Firebase Auth to restore session from local storage
+      debugPrint('[AUTH_INIT] Waiting for Firebase Auth session restoration...');
+      auth.User? fbUser;
+      try {
+        fbUser = await auth.FirebaseAuth.instance.authStateChanges().first
+            .timeout(
+          const Duration(seconds: 3),
+          onTimeout: () {
+            debugPrint(
+                '[AUTH_INIT] Auth restoration timeout, using currentUser');
+            return auth.FirebaseAuth.instance.currentUser;
+          },
+        );
+      } catch (e) {
+        debugPrint('[AUTH_INIT] Error during auth restoration: $e');
+        fbUser = auth.FirebaseAuth.instance.currentUser;
+      }
+      debugPrint(
+          '[AUTH_INIT] Auth restoration complete. User: ${fbUser?.uid ?? "null"}');
 
-if (fbUser == null) {
+      if (fbUser == null) {
         MyAppState.currentUser = null;
         user = null;
         final loc = MyAppState.selectedPosition.location;
@@ -291,7 +332,7 @@ if (fbUser == null) {
         }
       });
     }
-    // Load placeholder image
+    // Load placeholder image (fire-and-forget)
     FireStoreUtils.getplaceholderimage().then((value) {
       AppGlobal.placeHolderImage = value;
     });
@@ -304,10 +345,7 @@ if (fbUser == null) {
       } catch (_) {}
     }
 
-    // Initialize currency and settings
-    await setCurrency();
-
-    // Initialize persistent tab screens once
+    // Build main scaffold immediately; defer currency/settings to background
     if (mounted) {
       setState(() {
         _homeScreen = widget.currentWidget is HomeScreen
@@ -345,6 +383,42 @@ if (fbUser == null) {
           }
         });
       }
+      // Defer non-critical config so main UI appears first
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadAppConfigurationInBackground();
+      });
+      // Log time to first paint once main scaffold is built
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          final elapsed = PerformanceLogger.elapsedSinceAppStart;
+          if (elapsed != null) {
+            PerformanceLogger.logPhase('time_to_first_paint', elapsed);
+          }
+        }
+      });
+    }
+  }
+
+  /// Loads theme, currency, tax, payment config in background; updates UI when done.
+  Future<void> _loadAppConfigurationInBackground() async {
+    try {
+      await AppConfigurationService.loadAsync();
+    } catch (e) {
+      debugPrint('[ContainerScreen] App config load error: $e');
+    }
+    if (mounted) {
+      setState(() {
+        // Refresh bottom nav selection from currentWidget when config is ready
+        if (widget.currentWidget is CartScreen) {
+          _currentBottomNav = BottomNavSelection.Cart;
+        } else if (widget.currentWidget is SearchScreen) {
+          _currentBottomNav = BottomNavSelection.Search;
+        } else if (widget.currentWidget is ProfileScreen) {
+          _currentBottomNav = BottomNavSelection.Profile;
+        } else {
+          _currentBottomNav = BottomNavSelection.Home;
+        }
+      });
     }
   }
 
@@ -602,6 +676,89 @@ if (fbUser == null) {
     );
   }
 
+  Widget _buildMessageFloatingButton() {
+    final userId = MyAppState.currentUser?.userID ?? '';
+    return FloatingActionButton(
+      onPressed: () {
+        if (MyAppState.currentUser != null) {
+          push(context, const InboxDriverScreen());
+        } else {
+          push(context, LoginScreen());
+        }
+      },
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: StreamBuilder<int>(
+        stream: ChatReadService.getTotalUnreadCountStream(userId),
+        builder: (context, snapshot) {
+          final count = snapshot.data ?? 0;
+          return Semantics(
+            button: true,
+            label:
+                'Messages, ${count > 0 ? '$count unread' : 'no unread messages'}',
+            child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.orange.shade400,
+                          Colors.orange.shade600,
+                        ],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.orange.withOpacity(0.3),
+                          blurRadius: 10,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.chat_bubble_outline,
+                      color: Colors.white,
+                      size: 29,
+                    ),
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: const BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 18,
+                          minHeight: 18,
+                        ),
+                        child: Text(
+                          count > 99 ? '99+' : '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildErrorState() {
     return Scaffold(
       backgroundColor: Colors.white,
@@ -716,7 +873,8 @@ if (fbUser == null) {
 
   Widget _buildMainScaffold(BuildContext context) {
     return Scaffold(
-        body: Column(
+        body: PerformanceDebugOverlay(
+          child: Column(
           children: [
             // Guest mode banner - only show on Home screen
             if (MyAppState.currentUser == null && _currentBottomNav == BottomNavSelection.Home)
@@ -749,6 +907,7 @@ if (fbUser == null) {
               ),
             ),
           ],
+          ),
         ),
         bottomNavigationBar: BottomNavigationBar(
                   currentIndex: _currentBottomNav.index,
@@ -769,15 +928,9 @@ if (fbUser == null) {
                       label: 'Search',
                     ),
                     BottomNavigationBarItem(
-                      icon: StreamBuilder<List<CartProduct>>(
-                        stream: cartDatabase.watchProducts,
-                        builder: (context, snapshot) {
-                          int totalQuantity = 0;
-                          if (snapshot.hasData) {
-                            totalQuantity = snapshot.data!
-                                .fold(0, (sum, item) => sum + item.quantity);
-                          }
-
+                      icon: Selector<CartStateNotifier, int>(
+                        selector: (_, notifier) => notifier.itemCount,
+                        builder: (context, totalQuantity, _) {
                           return Stack(
                             children: [
                               Icon(CupertinoIcons.cart),
@@ -789,7 +942,8 @@ if (fbUser == null) {
                                     padding: EdgeInsets.all(2),
                                     decoration: BoxDecoration(
                                       color: Colors.red,
-                                      borderRadius: BorderRadius.circular(8),
+                                      borderRadius:
+                                          BorderRadius.circular(8),
                                     ),
                                     constraints: BoxConstraints(
                                       minWidth: 16,
@@ -834,12 +988,21 @@ if (fbUser == null) {
                     );
                   },
                   child: _currentBottomNav == BottomNavSelection.Home
-                      ? FloatingActionButton(
-                          key: const ValueKey('ai_fab'),
-                          onPressed: () => push(context, AiChatScreen()),
-                          backgroundColor: Colors.transparent,
-                          elevation: 0,
-                          child: AshAvatar(radius: 24, showGlow: true),
+                      ? Column(
+                          key: const ValueKey('fab_column'),
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            _buildMessageFloatingButton(),
+                            const SizedBox(height: 8),
+                            FloatingActionButton(
+                              key: const ValueKey('ai_fab'),
+                              onPressed: () => push(context, AiChatScreen()),
+                              backgroundColor: Colors.transparent,
+                              elevation: 0,
+                              child: AshAvatar(radius: 24, showGlow: true),
+                            ),
+                          ],
                         )
                       : const SizedBox(key: ValueKey('ai_fab_empty')),
                 ),

@@ -20,6 +20,7 @@ import 'package:foodie_restaurant/ui/add_story_screen.dart';
 import 'package:foodie_restaurant/ui/auth/AuthScreen.dart';
 import 'package:foodie_restaurant/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_restaurant/ui/chat_screen/inbox_screen.dart';
+import 'package:foodie_restaurant/ui/communication/order_communication_screen.dart';
 import 'package:foodie_restaurant/ui/container/message.dart';
 import 'package:foodie_restaurant/ui/manageProductsScreen/ManageProductsScreen.dart';
 import 'package:foodie_restaurant/ui/order_acceptance_screen.dart';
@@ -139,6 +140,7 @@ class _ContainerScreen extends State<ContainerScreen> {
     NotificationService.onPrepTimeReminder = _showPrepTimeReminderDialog;
     NotificationService.onNewOrder = _openOrderAcceptanceScreen;
     NotificationService.onDeclineOrder = _openOrderAcceptanceScreen;
+    NotificationService.onOpenOrderCommunication = _openOrderCommunication;
     setCurrency();
 
     // Initialize user from widget.user if available, otherwise from MyAppState
@@ -226,6 +228,7 @@ class _ContainerScreen extends State<ContainerScreen> {
     NotificationService.onPrepTimeReminder = null;
     NotificationService.onNewOrder = null;
     NotificationService.onDeclineOrder = null;
+    NotificationService.onOpenOrderCommunication = null;
     super.dispose();
   }
 
@@ -273,6 +276,31 @@ class _ContainerScreen extends State<ContainerScreen> {
     );
   }
 
+  Future<void> _openOrderCommunication(String orderId) async {
+    if (!mounted) return;
+    final orderSnap = await FirebaseFirestore.instance
+        .collection('restaurant_orders')
+        .doc(orderId)
+        .get();
+    if (!mounted || !orderSnap.exists) return;
+    final data = orderSnap.data() ?? {};
+    final riderId = (data['driverID'] ?? data['driverId'] ?? '').toString();
+    final vendorId = (data['vendorID'] ?? '').toString();
+    final customerId = (data['authorID'] ?? data['authorId'] ?? '').toString();
+    if (riderId.isEmpty || vendorId.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => OrderCommunicationScreen(
+          orderId: orderId,
+          riderId: riderId,
+          vendorId: vendorId,
+          customerId: customerId,
+        ),
+      ),
+    );
+  }
+
   void listenForUnreadMessages() {
     // Make sure user is logged in
     String? vendorId = user?.vendorID ?? MyAppState.currentUser?.vendorID;
@@ -291,13 +319,13 @@ class _ContainerScreen extends State<ContainerScreen> {
         String chatDocId = chatDoc.id;
 
         // Query the subcollection "thread" for messages
-        // where receiverId == vendorId AND isread == false
+        // where receiverId == vendorId AND isRead == false
         QuerySnapshot threadSnapshot = await FirebaseFirestore.instance
             .collection("chat_restaurant")
             .doc(chatDocId)
             .collection("thread")
             .where("receiverId", isEqualTo: vendorId)
-            .where("isread", isEqualTo: false) // <-- use "isread"
+            .where("isRead", isEqualTo: false)
             .get();
 
         // Count how many unread messages we have
@@ -325,13 +353,13 @@ class _ContainerScreen extends State<ContainerScreen> {
   ) async {
     print("📌 Opening chat for Order ID: $orderId");
 
-    // Fetch unread messages (where isread == false) for this order
+    // Fetch unread messages (where isRead == false) for this order
     var unreadMessagesSnapshot = await FirebaseFirestore.instance
         .collection("chat_restaurant")
         .doc(orderId)
         .collection("thread")
         .where("receiverId", isEqualTo: restaurantId)
-        .where("isread", isEqualTo: false) // <-- use "isread"
+        .where("isRead", isEqualTo: false)
         .get();
 
     print("🔹 Unread messages found: ${unreadMessagesSnapshot.docs.length}");
@@ -343,7 +371,7 @@ class _ContainerScreen extends State<ContainerScreen> {
 
     // Mark all unread messages as read
     for (var doc in unreadMessagesSnapshot.docs) {
-      await doc.reference.update({"isread": true}); // <-- use "isread"
+      await doc.reference.update({"isRead": true});
     }
 
     Navigator.push(
@@ -872,6 +900,18 @@ class _ContainerScreen extends State<ContainerScreen> {
                     )),
               ],
             ),
+          if (_currentTab == BottomNavTab.orders) ...[
+            IconButton(
+              icon: Icon(Icons.upload_file),
+              onPressed: () =>
+                  _unifiedOrdersKey.currentState?.showExportSheet(),
+            ),
+            IconButton(
+              icon: Icon(Icons.filter_list),
+              onPressed: () =>
+                  _unifiedOrdersKey.currentState?.showFilterSheet(),
+            ),
+          ],
           if (_currentTab == BottomNavTab.menu)
             IconButton(
               icon: Icon(Icons.checklist),
@@ -903,19 +943,21 @@ class _ContainerScreen extends State<ContainerScreen> {
         ),
       ),
         body: _buildBody(),
-        floatingActionButton: Tooltip(
-          message: 'Ask Ash',
-          child: FloatingActionButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const AiChatScreen(),
+        floatingActionButton: _currentTab == BottomNavTab.menu
+            ? null
+            : Tooltip(
+                message: 'Ask Ash',
+                child: FloatingActionButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const AiChatScreen(),
+                    ),
+                  ),
+                  backgroundColor: Color(COLOR_PRIMARY),
+                  child: const Icon(Icons.assistant, color: Colors.white),
+                ),
               ),
-            ),
-            backgroundColor: Color(COLOR_PRIMARY),
-            child: const Icon(Icons.assistant, color: Colors.white),
-          ),
-        ),
         floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
         bottomNavigationBar: BottomNavigationBar(
           currentIndex: _selectedIndex,

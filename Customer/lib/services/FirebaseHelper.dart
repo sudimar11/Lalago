@@ -6,6 +6,7 @@ import 'dart:developer';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
@@ -572,6 +573,30 @@ class FireStoreUtils {
       }
     });
     return cuisines;
+  }
+
+  /// Optional: Batched home screen data via Cloud Function. Use as fast path
+  /// in HomeScreen init; fallback to individual fetches if this fails.
+  static Future<Map<String, dynamic>?> getHomeScreenInitialData(
+    String? userId,
+    double? lat,
+    double? lng,
+  ) async {
+    try {
+      final callable = FirebaseFunctions.instance
+          .httpsCallable('getHomeScreenInitialData');
+      final result = await callable.call<Map<String, dynamic>>({
+        'userId': userId,
+        'lat': lat,
+        'lng': lng,
+      });
+      return result.data;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[HOME] getHomeScreenInitialData failed: $e');
+      }
+      return null;
+    }
   }
 
   Future<List<BannerModel>> getHomeTopBanner() async {

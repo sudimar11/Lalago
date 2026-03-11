@@ -120,18 +120,18 @@ class _NearbyRestaurantsSectionState extends State<NearbyRestaurantsSection> {
               List<VendorModel> displayList = nearbyAll.isNotEmpty
                   ? List<VendorModel>.from(nearbyAll)
                   : List<VendorModel>.from(fallbackAll);
-              // Sort by distance so nearest shows first
+              // Sort by distance so nearest shows first (cache distances once)
               final loc = MyAppState.selectedPosition.location;
               if (loc != null && displayList.length > 1) {
-                displayList.sort((VendorModel a, VendorModel b) {
-                  final distA = Geolocator.distanceBetween(
-                    loc.latitude, loc.longitude, a.latitude, a.longitude,
+                final distCache = <String, double>{};
+                for (final v in displayList) {
+                  distCache[v.id] = Geolocator.distanceBetween(
+                    loc.latitude, loc.longitude, v.latitude, v.longitude,
                   );
-                  final distB = Geolocator.distanceBetween(
-                    loc.latitude, loc.longitude, b.latitude, b.longitude,
-                  );
-                  return distA.compareTo(distB);
-                });
+                }
+                displayList.sort(
+                  (a, b) => (distCache[a.id] ?? 0).compareTo(distCache[b.id] ?? 0),
+                );
               }
               final maxDisplay = min(
                 displayList.length,

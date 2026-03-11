@@ -22,17 +22,16 @@ import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/ui/contactUs/ContactUsScreen.dart';
 import 'package:foodie_driver/ui/reauthScreen/reauth_user_screen.dart';
 import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
+import 'package:foodie_driver/ui/communication/unified_communication_hub_screen.dart';
 import 'package:foodie_driver/ui/profile/zone_browser_screen.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/widgets/more_options_bottom_sheet.dart';
 import 'package:foodie_driver/userPrefrence.dart';
-import 'package:foodie_driver/widgets/attendance_card.dart';
 import 'package:foodie_driver/widgets/time_input_dialog.dart';
 import 'package:foodie_driver/services/time_tracking_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/performance_tier_helper.dart';
 import 'package:foodie_driver/services/rider_preset_location_service.dart';
-import 'package:foodie_driver/ui/profile/AttendanceHistoryScreen.dart';
 import 'package:foodie_driver/ui/reviews/RiderReviewsScreen.dart';
 import 'package:foodie_driver/widgets/shared_app_bar.dart';
 import 'package:foodie_driver/services/order_service.dart';
@@ -287,25 +286,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textAlign: TextAlign.center,
             ),
           ),
-          // Attendance Card
-          AttendanceCard(
-            checkInTime: MyAppState.currentUser!.checkInTime,
-            checkOutTime: MyAppState.currentUser!.checkOutTime,
-            totalHours: _calculateTotalHours(),
-            onCheckInTap: _updateCheckInTime,
-            onCheckOutTap: _updateCheckOutTime,
-            canCheckInToday: _canCheckInToday(),
-            onCheckInTodayTap: _handleCheckInToday,
-            checkedInToday: MyAppState.currentUser!.checkedInToday,
-            todayCheckInTime: MyAppState.currentUser!.todayCheckInTime,
-            canCheckOutToday: _canCheckOutToday(),
-            onCheckOutTodayTap: _handleCheckOutToday,
-            checkedOutToday: MyAppState.currentUser!.checkedOutToday,
-            todayCheckOutTime: MyAppState.currentUser!.todayCheckOutTime,
-            isLate: _checkIfLate()['isLate'],
-            hoursLate: _checkIfLate()['hoursLate'],
-            lateMessage: _checkIfLate()['message'],
-          ),
+          const SizedBox.shrink(),
           // Activity Overview Section
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
@@ -876,19 +857,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             padding: const EdgeInsets.only(top: 8),
             child: Column(
               children: <Widget>[
-                ListTile(
-                  onTap: () {
-                    push(context, const AttendanceHistoryScreen());
-                  },
-                  title: Text(
-                    'Attendance History',
-                    style: TextStyle(fontSize: 16),
-                  ),
-                  leading: Icon(
-                    CupertinoIcons.calendar,
-                    color: Colors.purple,
-                  ),
-                ),
+                const SizedBox.shrink(),
                 ListTile(
                   onTap: () {
                     push(context,
@@ -918,6 +887,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 _WorkAreaCard(
                   currentZone: _currentZone,
+                  riderLocation: MyAppState.currentUser?.location,
                   isLoading: _isLoadingZone,
                   onBrowseZones: _openZoneBrowser,
                 ),
@@ -1108,7 +1078,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // Handle driver ranking navigation if needed
                 },
                 onInboxTap: () {
-                  // Handle inbox navigation if needed
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const UnifiedCommunicationHubScreen(),
+                    ),
+                  );
                 },
                 onLocationUpdate: () {
                   // Handle location update if needed
@@ -3151,13 +3126,30 @@ double _zoomForRadius(double radiusKm) {
   return zoom.clamp(8.0, 17.0);
 }
 
+double _distanceInKm(LatLng a, LatLng b) {
+  const earthRadiusKm = 6371.0;
+  final dLat = (b.latitude - a.latitude) * (math.pi / 180.0);
+  final dLng = (b.longitude - a.longitude) * (math.pi / 180.0);
+  final lat1 = a.latitude * (math.pi / 180.0);
+  final lat2 = b.latitude * (math.pi / 180.0);
+
+  final hav = math.pow(math.sin(dLat / 2), 2).toDouble() +
+      math.cos(lat1) *
+          math.cos(lat2) *
+          math.pow(math.sin(dLng / 2), 2).toDouble();
+  final c = 2 * math.atan2(math.sqrt(hav), math.sqrt(1 - hav));
+  return earthRadiusKm * c;
+}
+
 class _WorkAreaCard extends StatelessWidget {
   final RiderPresetLocationData? currentZone;
+  final UserLocation? riderLocation;
   final bool isLoading;
   final VoidCallback onBrowseZones;
 
   const _WorkAreaCard({
     required this.currentZone,
+    required this.riderLocation,
     required this.isLoading,
     required this.onBrowseZones,
   });
@@ -3261,6 +3253,15 @@ class _WorkAreaCard extends StatelessWidget {
     final zone = currentZone!;
     final hasCircle = zone.hasRadius;
     final center = LatLng(zone.latitude, zone.longitude);
+    final hasRiderLocation = riderLocation != null &&
+        riderLocation!.latitude.abs() > 0.0001 &&
+        riderLocation!.longitude.abs() > 0.0001;
+    final riderLatLng = hasRiderLocation
+        ? LatLng(riderLocation!.latitude, riderLocation!.longitude)
+        : null;
+    final isOutsideZone = hasCircle &&
+        riderLatLng != null &&
+        _distanceInKm(center, riderLatLng) > zone.radiusKm!;
     final zoom = hasCircle
         ? _zoomForRadius(zone.radiusKm!)
         : 14.0;
@@ -3292,6 +3293,19 @@ class _WorkAreaCard extends StatelessWidget {
               mapToolbarEnabled: false,
               myLocationEnabled: false,
               myLocationButtonEnabled: false,
+              markers: {
+                if (riderLatLng != null)
+                  Marker(
+                    markerId: const MarkerId('rider_current_location'),
+                    position: riderLatLng,
+                    icon: BitmapDescriptor.defaultMarkerWithHue(
+                      BitmapDescriptor.hueRed,
+                    ),
+                    infoWindow: const InfoWindow(
+                      title: 'Your current location',
+                    ),
+                  ),
+              },
               circles: hasCircle
                   ? {
                       Circle(
@@ -3311,6 +3325,31 @@ class _WorkAreaCard extends StatelessWidget {
             ),
           ),
         ),
+        if (isOutsideZone) ...[
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 8,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.red.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.red.withOpacity(0.35),
+              ),
+            ),
+            child: const Text(
+              'Note: Rider is outside the selected zone radius.',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.red,
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 8),
         Row(
           children: [

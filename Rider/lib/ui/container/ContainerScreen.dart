@@ -29,6 +29,7 @@ import 'package:foodie_driver/ui/profile/ProfileScreen.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
 import 'package:foodie_driver/ui/pautos/pautos_order_detail_screen.dart';
+import 'package:foodie_driver/ui/communication/unified_communication_hub_screen.dart';
 import 'package:foodie_driver/ui/heat_map/DriverHeatMapScreen.dart';
 import 'package:foodie_driver/widgets/shared_bottom_navigation_bar.dart';
 import 'package:foodie_driver/services/helper.dart';
@@ -87,6 +88,10 @@ class _ContainerScreen extends State<ContainerScreen>
     NotificationService.onOrderActionFromNotification =
         _handleOrderActionFromNotification;
     NotificationService.onPautosAssignmentTap = _handlePautosAssignmentTap;
+    NotificationService.onOpenOrderCommunication =
+        _handleOpenOrderCommunication;
+    NotificationService.onOpenUnifiedCommunicationHub =
+        _handleOpenUnifiedCommunicationHub;
 
     /// On iOS, we request notification permissions, Does nothing and returns null on Android
     FireStoreUtils.firebaseMessaging.requestPermission(
@@ -118,9 +123,8 @@ class _ContainerScreen extends State<ContainerScreen>
         final u = MyAppState.currentUser;
         if (mounted &&
             u != null &&
-            u.checkedInToday == true &&
             u.isOnline == true &&
-            u.checkedOutToday != true) {
+            u.riderAvailability != 'offline') {
           _startPeriodicLocationUpdates();
         }
       });
@@ -356,7 +360,7 @@ class _ContainerScreen extends State<ContainerScreen>
   }
 
   void _updateClosingTimeTimer() {
-    final isCheckedIn = MyAppState.currentUser?.checkedInToday == true;
+    final isCheckedIn = MyAppState.currentUser?.isOnline == true;
 
     if (isCheckedIn && _closingTimeCheckTimer == null) {
       // Start timer when checked in and timer is not running
@@ -455,10 +459,54 @@ class _ContainerScreen extends State<ContainerScreen>
     });
   }
 
+  Future<void> _handleOpenOrderCommunication(String orderId) async {
+    _handleOpenUnifiedCommunicationHub(
+      UnifiedCommunicationTab.restaurants.name,
+      orderId,
+    );
+  }
+
+  Future<void> _handleOpenUnifiedCommunicationHub(
+    String initialTab,
+    String orderId,
+  ) async {
+    if (!mounted) return;
+    setState(() {
+      _currentIndex = 0;
+      _bottomNavSelection = BottomNavSelection.MyOrders;
+      _appBarTitle = 'Orders';
+      _currentWidget = OrdersBlankScreen();
+    });
+
+    var tab = UnifiedCommunicationTab.customers;
+    if (initialTab == UnifiedCommunicationTab.restaurants.name) {
+      tab = UnifiedCommunicationTab.restaurants;
+    } else if (initialTab == UnifiedCommunicationTab.support.name) {
+      tab = UnifiedCommunicationTab.support;
+    } else if (initialTab == UnifiedCommunicationTab.community.name) {
+      tab = UnifiedCommunicationTab.community;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => UnifiedCommunicationHubScreen(
+            initialTab: tab,
+            initialOrderId: orderId.isNotEmpty ? orderId : null,
+            autoOpenConversation: orderId.isNotEmpty,
+          ),
+        ),
+      );
+    });
+  }
+
   @override
   void dispose() {
     NotificationService.onOrderActionFromNotification = null;
     NotificationService.onPautosAssignmentTap = null;
+    NotificationService.onOpenOrderCommunication = null;
+    NotificationService.onOpenUnifiedCommunicationHub = null;
     _closingTimeCheckTimer?.cancel();
     _inactivityWarningTimer?.cancel();
     _periodicLocationTimer?.cancel();
@@ -900,12 +948,10 @@ class _ContainerScreen extends State<ContainerScreen>
         _adjustLocationThresholds(hasActiveOrder);
         
         final isCheckedInAndOnline = value.isOnline == true &&
-            value.checkedInToday == true &&
-            value.checkedOutToday != true;
+            value.riderAvailability != 'offline';
         print('LOCATION CHECK - hasActiveOrder: $hasActiveOrder, '
             'isActive: ${value.isActive}, isOnline: ${value.isOnline}, '
-            'checkedInToday: ${value.checkedInToday}, '
-            'checkedOutToday: ${value.checkedOutToday}');
+            'riderAvailability: ${value.riderAvailability}');
         if (!hasActiveOrder &&
             !value.isActive &&
             !isCheckedInAndOnline) {
@@ -1000,11 +1046,8 @@ class _ContainerScreen extends State<ContainerScreen>
     final user = MyAppState.currentUser;
     if (user == null) return;
 
-    final now = DateTime.now();
-    final timeString = DateFormat('h:mm a').format(now);
-
-    if (user.checkedInToday != true) {
-      // Check zone capacity before allowing check-in
+    if (user.isOnline != true) {
+      // Check zone capacity before allowing go-online
       final presetId = user.selectedPresetLocationId;
       if (presetId != null && presetId.trim().isNotEmpty) {
         try {
@@ -1022,7 +1065,7 @@ class _ContainerScreen extends State<ContainerScreen>
                   '${capResult.currentCount}/'
                   '${capResult.maxRiders} riders active. '
                   'You may not receive orders. '
-                  'Continue check-in anyway?',
+                  'Continue going online anyway?',
                 ),
                 actions: [
                   TextButton(
@@ -1033,7 +1076,7 @@ class _ContainerScreen extends State<ContainerScreen>
                   TextButton(
                     onPressed: () =>
                         Navigator.pop(ctx, true),
-                    child: const Text('Check In Anyway'),
+                    child: const Text('Go Online Anyway'),
                   ),
                 ],
               ),
@@ -1045,15 +1088,10 @@ class _ContainerScreen extends State<ContainerScreen>
         }
       }
 
-      user.checkedInToday = true;
       user.isOnline = true;
       user.isActive = true;
       user.active = true;
-      user.todayCheckInTime = timeString;
-      user.checkedOutToday = false;
-      user.todayCheckOutTime = '';
-
-      // Fix 2: Set location from preset on check-in
+      // Fix 2: Set location from preset on go-online
       if (presetId != null && presetId.trim().isNotEmpty) {
         try {
           final preset =
@@ -1066,15 +1104,15 @@ class _ContainerScreen extends State<ContainerScreen>
             user.locationUpdatedAt = Timestamp.now();
           }
         } catch (e) {
-          log('Preset location load failed on check-in: $e');
+          log('Preset location load failed on go-online: $e');
         }
       }
-    } else if (user.checkedOutToday != true) {
-      user.checkedOutToday = true;
+    } else {
       user.isOnline = false;
-      user.todayCheckOutTime = timeString;
+      user.riderAvailability = 'offline';
+      user.isActive = false;
 
-      // Remove rider from zone on checkout
+      // Remove rider from zone on go-offline
       final presetId = user.selectedPresetLocationId;
       if (presetId != null && presetId.trim().isNotEmpty) {
         try {
@@ -1085,18 +1123,17 @@ class _ContainerScreen extends State<ContainerScreen>
             'assignedDriverIds': FieldValue.arrayRemove([user.userID]),
           });
         } catch (e) {
-          log('Zone removal on checkout failed: $e');
+          log('Zone removal on go-offline failed: $e');
         }
       }
       _stopPeriodicLocationUpdates();
-    } else {
-      return;
     }
 
+    UserListenerService.instance.markLocalMutation();
     await FireStoreUtils.updateCurrentUser(user);
 
-    // Fix 3: Add rider to zone assignedDriverIds on check-in
-    if (user.checkedInToday == true &&
+    // Fix 3: Add rider to zone assignedDriverIds on go-online
+    if (user.isOnline == true &&
         user.selectedPresetLocationId != null &&
         user.selectedPresetLocationId!.trim().isNotEmpty) {
       try {
@@ -1107,12 +1144,12 @@ class _ContainerScreen extends State<ContainerScreen>
           'assignedDriverIds': FieldValue.arrayUnion([user.userID]),
         });
       } catch (e) {
-        log('Zone add on check-in failed: $e');
+        log('Zone add on go-online failed: $e');
       }
     }
 
     await OrderService.updateRiderStatus();
-    if (user.checkedInToday == true && user.isOnline == true) {
+    if (user.isOnline == true) {
       await FireStoreUtils.touchLastActivity(user.userID);
       _startPeriodicLocationUpdates();
     }
@@ -1234,7 +1271,7 @@ class _ContainerScreen extends State<ContainerScreen>
             }
             // Monitor check-in status changes and update timer
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              final currentCheckedIn = user.checkedInToday == true;
+              final currentCheckedIn = user.isOnline == true;
               if (_lastCheckedInStatus != currentCheckedIn) {
                 _updateClosingTimeTimer();
                 _lastCheckedInStatus = currentCheckedIn;

@@ -10,6 +10,8 @@ import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/helper.dart';
+import 'package:foodie_driver/services/order_service.dart';
+import 'package:foodie_driver/services/user_listener_service.dart';
 import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/ui/privacy_policy/privacy_policy.dart';
 import 'package:foodie_driver/ui/termsAndCondition/terms_and_codition.dart';
@@ -70,12 +72,12 @@ class MoreOptionsBottomSheet extends StatelessWidget {
             ),
             SwitchListTile(
               title: Text(
-                "Online",
+                "Go Online",
                 style: TextStyle(
                   color: isDarkMode(context) ? Colors.white : Colors.black,
                 ),
               ),
-              value: user.isActive,
+              value: user.isOnline ?? false,
               onChanged: (value) async {
                 final latestUser =
                     await AttendanceService.fetchLatestUser(user.userID);
@@ -93,17 +95,37 @@ class MoreOptionsBottomSheet extends StatelessWidget {
 
                 await AttendanceService.touchLastActiveDate(current);
 
-                user.isActive = value;
+                user.isOnline = value;
                 user.inProgressOrderID =
                     MyAppState.currentUser!.inProgressOrderID;
                 user.orderRequestData =
                     MyAppState.currentUser!.orderRequestData;
-                if (user.isActive == true) {
+                if (value == true) {
                   onLocationUpdate();
                 }
-                FireStoreUtils.updateCurrentUser(user);
+                UserListenerService.instance.markLocalMutation();
+                await FireStoreUtils.updateCurrentUser(user);
+                await OrderService.updateRiderStatus();
               },
             ),
+            if ((user.isOnline ?? false) == true)
+              ListTile(
+                leading: const Icon(Icons.coffee),
+                title: Text(
+                  user.riderAvailability == 'on_break'
+                      ? 'End Break'
+                      : 'Take Break',
+                ),
+                onTap: () async {
+                  if (user.riderAvailability == 'on_break') {
+                    await OrderService.updateRiderStatus();
+                  } else {
+                    await OrderService.updateRiderStatus(
+                      overrideAvailability: 'on_break',
+                    );
+                  }
+                },
+              ),
             SwitchListTile(
               title: Text(
                 "Multiple Orders",

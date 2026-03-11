@@ -54,21 +54,17 @@ class OrderService {
       }
 
       final driverData = driverSnapshot.data();
-      final bool checkedInToday =
-          driverData?['checkedInToday'] == true;
-      final todayCheckOut = driverData?['todayCheckOutTime'];
-      final bool hasCheckedOutToday =
-          todayCheckOut != null && todayCheckOut.toString().isNotEmpty;
-      final todayCheckIn = driverData?['todayCheckInTime'];
-      final bool hasCheckedInToday = checkedInToday &&
-          todayCheckIn != null &&
-          todayCheckIn.toString().isNotEmpty;
-
-      if (!hasCheckedInToday || hasCheckedOutToday) {
+      final bool riderOnline = driverData?['isOnline'] == true;
+      final String availability =
+          (driverData?['riderAvailability'] ?? 'offline')
+              .toString();
+      if (!riderOnline ||
+          availability == 'offline' ||
+          availability == 'on_break') {
         await DialogUtils.showAlertDialog(
           context,
-          title: 'Check In Required',
-          content: 'You must check in today to accept orders.',
+          title: 'Go Online Required',
+          content: 'Please go online to accept orders.',
         );
         return false;
       }
@@ -649,9 +645,8 @@ class OrderService {
     }
   }
 
-  /// Compute and persist `riderAvailability` + `riderDisplayStatus`.
-  /// Call after every action that changes the rider's logical state
-  /// (accept, complete, check-in, check-out, break).
+  /// Compute and persist canonical rider status.
+  /// Invariant: isOnline=false always forces riderAvailability=offline.
   static Future<void> updateRiderStatus({
     String? overrideAvailability,
   }) async {
@@ -663,18 +658,11 @@ class OrderService {
     String availability;
     String displayStatus;
 
-    if (user.suspended == true ||
-        (user.attendanceStatus?.toLowerCase() == 'suspended')) {
-      availability = 'suspended';
-      displayStatus = '🔴 Suspended';
-    } else if (user.checkedOutToday == true) {
-      availability = 'checked_out';
-      displayStatus = '⚫ Checked Out';
-    } else if (overrideAvailability == 'on_break') {
+    if (overrideAvailability == 'on_break' &&
+        user.isOnline == true) {
       availability = 'on_break';
       displayStatus = '⏸ On Break';
-    } else if (user.checkedInToday != true ||
-        user.isOnline != true) {
+    } else if (user.isOnline != true) {
       availability = 'offline';
       displayStatus = '⚪ Offline';
     } else {
@@ -707,10 +695,9 @@ class OrderService {
       'riderDisplayStatus': displayStatus,
     };
 
-    if (availability == 'available') {
-      user.isActive = true;
-      updateMap['isActive'] = true;
-    }
+    final bool activeForDispatch = availability == 'available';
+    user.isActive = activeForDispatch;
+    updateMap['isActive'] = activeForDispatch;
 
     await _firestore.collection('users').doc(uid).update(updateMap);
   }

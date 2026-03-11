@@ -763,49 +763,15 @@ class _DriverInformationPageState extends State<DriverInformationPage> {
   }
 
   Future<void> _performCleanup() async {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) =>
-          const Center(child: CircularProgressIndicator()),
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Direct rider cleanup is disabled. Use backend dispatch controls.',
+        ),
+        backgroundColor: Colors.orange,
+      ),
     );
-
-    try {
-      await FirebaseFirestore.instance
-          .collection(USERS)
-          .doc(widget.driverId)
-          .update({
-        'inProgressOrderID': [],
-        'riderAvailability': 'available',
-        'isActive': true,
-        'lastCleanupAt': FieldValue.serverTimestamp(),
-        'lastCleanupBy':
-            'admin_${auth.FirebaseAuth.instance.currentUser?.uid ?? 'unknown'}',
-      });
-
-      if (!mounted) return;
-      Navigator.of(context).pop();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Rider cleaned up successfully'),
-          backgroundColor: Colors.green,
-        ),
-      );
-
-      setState(() {});
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.of(context).pop();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-        ),
-      );
-    }
   }
 
   Widget _buildInfoRow(

@@ -39,7 +39,6 @@ import 'package:brgy/confirmed_payouts.dart';
 import 'package:brgy/payout_remittance_page.dart';
 import 'package:brgy/driver_suspension.dart';
 import 'package:brgy/driverlist.dart';
-import 'package:brgy/attendance_page.dart';
 import 'package:brgy/pages/ads_management_page.dart';
 import 'package:brgy/pages/happy_hour_settings_page.dart';
 import 'package:brgy/pages/notification_management_page.dart';
@@ -2621,9 +2620,11 @@ class _ActiveRidersKpi extends StatelessWidget {
         for (final doc in docs) {
           try {
             final data = doc.data() as Map<String, dynamic>;
-            final checkedInToday = data['checkedInToday'] == true;
-            final checkedOutToday = data['checkedOutToday'] == true;
-            if (checkedInToday && !checkedOutToday) {
+            final isOnline = data['isOnline'] == true;
+            final availability =
+                (data['riderAvailability'] ?? 'offline').toString();
+            if (isOnline &&
+                availability != 'offline') {
               activeToday++;
             }
           } catch (_) {}
@@ -2633,7 +2634,7 @@ class _ActiveRidersKpi extends StatelessWidget {
           icon: Icons.drive_eta,
           label: 'Active riders',
           value: activeToday.toString(),
-          helper: 'Checked in today',
+          helper: 'Currently online',
           onTap: () => onNavigate(DriversMapPage()),
         );
       },

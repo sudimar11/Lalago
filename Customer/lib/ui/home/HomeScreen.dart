@@ -69,7 +69,6 @@ import 'package:foodie_customer/ui/home/view_all_popular_restaurant_screen.dart'
 import 'package:foodie_customer/ui/home/view_all_restaurant.dart';
 import 'package:foodie_customer/ui/home/view_all_sulit_foods_screen.dart';
 import 'package:foodie_customer/ui/home/favourite_restaurant.dart';
-import 'package:foodie_customer/ui/chat_screen/inbox_driver_screen.dart';
 import 'package:foodie_customer/ui/home/sections/top_restaurants_section.dart';
 import 'package:foodie_customer/ui/home/sections/category_restaurants_section.dart';
 import 'package:foodie_customer/ui/home/sections/all_restaurants_section.dart';
@@ -90,6 +89,8 @@ import 'package:foodie_customer/ui/home/sections/bundle_deals_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_pautos_entry_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/promo_card.dart';
+import 'package:foodie_customer/ui/home/sections/promos_section.dart';
+import 'package:foodie_customer/ui/home/sections/order_again_section.dart';
 
 import 'package:foodie_customer/model/bundle_model.dart';
 import 'package:foodie_customer/services/bundle_service.dart';
@@ -132,6 +133,9 @@ import 'package:foodie_customer/userPrefrence.dart';
 import 'package:foodie_customer/utils/performance_logger.dart';
 import 'package:foodie_customer/services/home_screen_cache.dart';
 import 'package:foodie_customer/services/device_capability.dart';
+import 'package:foodie_customer/services/data_cache_service.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+import 'package:foodie_customer/ui/home/widgets/lazy_section.dart';
 
 class HomeScreen extends StatefulWidget {
   final User? user;
@@ -194,11 +198,6 @@ class _HomeScreenState extends State<HomeScreen> {
   List<ProductModel> popularTodayFoods = [];
 
   // Order Again section
-  List<ProductModel> orderAgainProducts = [];
-  bool isLoadingOrderAgain = true;
-  bool orderAgainError = false;
-  StreamSubscription<List<OrderModel>>? orderAgainStreamSubscription;
-
   bool _didRunNearbyFallback = false;
   bool _didRunPopularTodayFallback = false;
   bool _isLoadingPopularToday = true;
@@ -277,6 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
     nearbyFoodVendors
       ..clear()
       ..addAll(allVendorMap.values);
+    DataCacheService.instance.putVendors(allVendorMap.values.toList());
 
     int fallbackVendorMissing = 0;
     int fallbackAdded = 0;
@@ -367,10 +367,6 @@ class _HomeScreenState extends State<HomeScreen> {
     await _updatePopularTodayProducts(todayProducts);
   }
 
-  // Promos section
-  List<OfferModel> activePromos = [];
-  bool isLoadingPromos = true;
-
   // Additional timers and subscriptions that need cleanup
   Timer? _debounceTimer;
   Timer? _bannerTimeoutTimer;
@@ -445,7 +441,6 @@ class _HomeScreenState extends State<HomeScreen> {
   int _bannerLoadCount = 0;
 
   bool isHomeBannerMiddleLoading = true;
-  bool isPromosError = false;
 
   final CarouselSliderController _carouselController =
       CarouselSliderController();
@@ -484,15 +479,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Cached callbacks for HomeHeaderSection
   late final VoidCallback _onSearchTap;
-  late final VoidCallback _onMessageTap;
   late final VoidCallback _onFavoriteTap;
 
   // Cached callback for favorite changes
   late final VoidCallback _onFavoriteChanged;
 
   // Cached callback for Order Again section
-  late final VoidCallback _onOrderAgainViewAll;
-
   // Cached method reference for BannerSection
   late final Widget Function(BuildContext, VendorModel?, OfferModel)
       _buildCouponsForYouItemCached;
@@ -794,14 +786,6 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     };
 
-    _onMessageTap = () {
-      if (MyAppState.currentUser == null) {
-        push(context, LoginScreen());
-      } else {
-        push(context, InboxDriverScreen());
-      }
-    };
-
     _onFavoriteTap = () {
       if (MyAppState.currentUser == null) {
         push(context, LoginScreen());
@@ -812,14 +796,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _onFavoriteChanged = () {
       _updateState();
-    };
-
-    _onOrderAgainViewAll = () {
-      if (MyAppState.currentUser == null) {
-        push(context, LoginScreen());
-      } else {
-        push(context, const OrderHistoryScreen());
-      }
     };
 
     // Cache method reference
@@ -849,44 +825,62 @@ class _HomeScreenState extends State<HomeScreen> {
     _setDefaultAddressIfNeeded();
   }
 
-  /// Load heavy operations in parallel (products first, then banners + restaurants)
-  Future<void> _loadSecondaryData() async {
-    _cachedCuisinesFuture ??= fireStoreUtils.getCuisines();
-    // Phase 1: Load products first (needed for order again and meal for one)
-    await fetchAllProducts();
-    if (!mounted || _isLeavingHome) return;
+  static const _secondaryDataTimeout = Duration(seconds: 12);
 
-    // Phase 2: Load banners, restaurant data, and fallback in parallel
+  /// Load heavy operations in parallel so sections populate sooner.
+  Future<void> _loadSecondaryData() async {
+    final stopwatch = Stopwatch()..start();
+
+    // Run all major fetches in parallel with timeout; one failure does not block others
     await Future.wait<void>([
-      getBanner(),
-      getData(),
-      _loadMostRatedRestaurantsFallback(),
+      withTimeout(fetchAllProducts(), timeout: _secondaryDataTimeout)
+          .catchError((e) {
+        debugPrint('[HOME] fetchAllProducts failed: $e');
+        if (mounted && !_isLeavingHome) {
+          _updateState(callback: () {});
+        }
+      }),
+      withTimeout(getBanner(), timeout: _secondaryDataTimeout).catchError((e) {
+        debugPrint('[HOME] getBanner failed: $e');
+        if (mounted && !_isLeavingHome) {
+          _updateState(callback: () {
+            isHomeBannerLoading = false;
+            isHomeBannerError = true;
+          });
+        }
+      }),
+      withTimeout(getData(), timeout: _secondaryDataTimeout).catchError((e) {
+        debugPrint('[HOME] getData failed: $e');
+        if (mounted && !_isLeavingHome) {
+          _updateState(callback: () {
+            _topRestaurantsError = true;
+            _isLoadingNearbyFoods = false;
+            _isLoadingPopularToday = false;
+          });
+        }
+      }),
+      withTimeout(_loadMostRatedRestaurantsFallback(),
+              timeout: _secondaryDataTimeout)
+          .catchError((e) {
+        debugPrint('[HOME] _loadMostRatedRestaurantsFallback failed: $e');
+        if (mounted && !_isLeavingHome) _updateState(callback: () {});
+      }),
     ]);
     if (!mounted || _isLeavingHome) return;
 
-    _setupCompletionDialogListener();
-    try {
-      await withTimeout(
-        _loadActivePromos(),
-        timeout: const Duration(seconds: 10),
-      );
-    } catch (e) {
-      debugPrint('[PROMO] Load failed or timed out: $e');
-      if (mounted && !_isLeavingHome) {
-        _updateState(callback: () {
-          isLoadingPromos = false;
-          isPromosError = true;
-        });
-      }
+    if (kDebugMode) {
+      PerformanceLogger.logPhase(
+          'home_first_data', stopwatch.elapsedMilliseconds);
     }
 
-    // Initialize cached streams/futures once
-    _cachedCuisinesFuture ??= fireStoreUtils.getCuisines();
+    // Initialize cached streams/futures once (categories come from getBanner)
     _cachedNewArrivalStream =
         fireStoreUtils.getVendorsForNewArrival().asBroadcastStream();
     _cachedNewestRestaurantsStream =
         fireStoreUtils.getNewestRestaurantsStream(limit: 15).asBroadcastStream();
     _cachedStoriesFuture = FireStoreUtils().getStory();
+    _setupCompletionDialogListener();
+
   }
 
   void _retryNearbyRestaurants() {
@@ -935,14 +929,11 @@ class _HomeScreenState extends State<HomeScreen> {
     _bannerTimeoutTimer?.cancel();
     _bannerTimeoutTimer = Timer(const Duration(seconds: 15), () {
       if (mounted &&
-          (isHomeBannerLoading ||
-              isHomeBannerMiddleLoading ||
-              isLoadingPromos)) {
+          (isHomeBannerLoading || isHomeBannerMiddleLoading)) {
         debugPrint('[BANNER] Force timeout - stopping loading indicators');
         _updateState(callback: () {
           isHomeBannerLoading = false;
           isHomeBannerMiddleLoading = false;
-          isLoadingPromos = false;
         });
       }
     });
@@ -954,12 +945,18 @@ class _HomeScreenState extends State<HomeScreen> {
       // Show cached vendors first for instant display
       final cached = await HomeScreenCache.getCachedVendors();
       if (cached != null && cached.isNotEmpty && mounted && !_isLeavingHome) {
+        DataCacheService.instance.putVendors(cached);
         _updateState(callback: () {
           mostRatedRestaurantsFallback = List.from(cached);
         });
       }
 
-      final vendorsFallback = await fireStoreUtils.getVendors();
+      final result = await fireStoreUtils.getRestaurantsPaginated(
+        orderType: 'delivery',
+        limit: 15,
+      );
+      final List<VendorModel> vendorsFallback =
+          (result['restaurants'] as List<VendorModel>?) ?? [];
       vendorsFallback.sort((a, b) {
         final double ratingA =
             a.reviewsCount != 0 ? (a.reviewsSum / a.reviewsCount) : 0.0;
@@ -971,6 +968,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
 
       if (!mounted || _isLeavingHome) return;
+      DataCacheService.instance.putVendors(vendorsFallback);
       _updateState(callback: () {
         mostRatedRestaurantsFallback = vendorsFallback;
       });
@@ -979,38 +977,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-
-  /// Load active promos/coupons
-  Future<void> _loadActivePromos() async {
-    if (!mounted || _isLeavingHome) return;
-
-    debugPrint('[PROMO] Starting _loadActivePromos');
-    _updateState(callback: () {
-      isLoadingPromos = true;
-      isPromosError = false;
-    });
-
-    try {
-      final coupons = await CouponService.getActiveCoupons(null);
-      debugPrint('[PROMO] Loaded ${coupons.length} coupons');
-      if (mounted && !_isLeavingHome) {
-        _updateState(callback: () {
-          activePromos = coupons;
-          isLoadingPromos = false;
-        });
-        // Rebuild caches after promos load
-        _rebuildComputationCaches();
-      }
-    } catch (e) {
-      debugPrint('[PROMO] Error: $e');
-      if (mounted && !_isLeavingHome) {
-        _updateState(callback: () {
-          isLoadingPromos = false;
-          isPromosError = true;
-        });
-      }
-    }
-  }
 
   void _populateOfferVendorLists() {
     offerVendorList.clear();
@@ -1074,6 +1040,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _rebuildComputationCaches() {
     // Rebuild vendor map
     _cachedVendorMap = {for (var vendor in vendors) vendor.id: vendor};
+    DataCacheService.instance.putVendors(vendors);
 
     // Rebuild rating cache
     _cachedRatings.clear();
@@ -1083,13 +1050,7 @@ class _HomeScreenState extends State<HomeScreen> {
           : '0.0';
     }
 
-    // Rebuild discount text cache
-    _cachedDiscountTexts.clear();
-    for (var promo in activePromos) {
-      if (promo.offerId != null) {
-        _cachedDiscountTexts[promo.offerId!] = _getPromoDiscountText(promo);
-      }
-    }
+    // Discount text cache updated via PromosSection.onPromosLoaded
 
     // Rebuild vendor futures map for stories
     _cachedVendorFutures = {};
@@ -1167,11 +1128,14 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       // Batch all setState calls into one for better performance
+      final categories = results[1] as List<VendorCategoryModel>;
+      _cachedCuisinesFuture = Future.value(categories);
+      DataCacheService.instance.setCategories(categories);
       _updateState(callback: () {
         bannerTopHome = results[0] as List<BannerModel>;
         _updateCachedFilteredBanners();
 
-        categoryWiseProductList = results[1] as List<VendorCategoryModel>;
+        categoryWiseProductList = categories;
         debugPrint(
             '📱 HomeScreen.getBanner(): categoryWiseProductList assigned ${categoryWiseProductList.length} categories');
         for (int i = 0; i < categoryWiseProductList.length; i++) {
@@ -1230,115 +1194,21 @@ class _HomeScreenState extends State<HomeScreen> {
         await fireStoreUtils.getHomeScreenProducts(limit: limit);
     PerformanceLogger.end('fetchAllProducts', itemCount: products.length);
     if (!mounted || _isLeavingHome) return;
+    DataCacheService.instance.setProducts(products);
     _updateState(callback: () {
       allProducts = products; // Populate global product list
     });
-    fetchOrderAgainProducts(); // Fetch order again products after load
     fetchMealForOneProducts(); // Fetch meal for one products after load
   }
 
-  // Fetch order again products from user's completed orders
-  Future<void> fetchOrderAgainProducts() async {
-    if (MyAppState.currentUser == null) {
-      if (!mounted || _isLeavingHome) return;
-      _updateState(callback: () {
-        isLoadingOrderAgain = false;
-      });
-      return;
+  void _onPromosLoaded(List<OfferModel> promos) {
+    _cachedDiscountTexts.clear();
+    for (var p in promos) {
+      if (p.offerId != null) {
+        _cachedDiscountTexts[p.offerId!] = _getPromoDiscountText(p);
+      }
     }
-
-    try {
-      if (!mounted || _isLeavingHome) return;
-      _updateState(callback: () {
-        isLoadingOrderAgain = true;
-        orderAgainError = false;
-      });
-
-      // Cancel any existing subscription
-      orderAgainStreamSubscription?.cancel();
-
-      // Listen to the orders stream
-      orderAgainStreamSubscription =
-          fireStoreUtils.getOrders(MyAppState.currentUser!.userID).listen(
-        (List<OrderModel> allOrders) async {
-          // Safety check
-          if (!mounted || _isLeavingHome) return;
-
-          // Filter for completed orders using correct status values
-          List<OrderModel> completedOrders = allOrders.where((order) {
-            return order.status.toLowerCase().contains('completed') ||
-                order.status.toLowerCase().contains('delivered') ||
-                order.status == ORDER_STATUS_COMPLETED;
-          }).toList();
-
-          if (completedOrders.isEmpty) {
-            if (!mounted || _isLeavingHome) return;
-            _updateState(callback: () {
-              orderAgainProducts = [];
-              isLoadingOrderAgain = false;
-            });
-            return;
-          }
-
-          // Wait for allProducts to be loaded
-          if (allProducts.isEmpty) {
-            await Future.delayed(const Duration(seconds: 1));
-            if (!mounted || _isLeavingHome) return;
-          }
-
-          // Extract product IDs from completed orders
-          Set<String> productIds = {};
-          for (OrderModel order in completedOrders) {
-            for (var product in order.products) {
-              // Extract the base product ID (remove variant suffix if exists)
-              String baseProductId = product.id.contains('~')
-                  ? product.id.split('~').first
-                  : product.id;
-              productIds.add(baseProductId);
-            }
-          }
-
-          // Map product IDs to ProductModels
-          List<ProductModel> orderAgainList = [];
-          for (String productId in productIds) {
-            try {
-              ProductModel? product = allProducts.firstWhere(
-                (p) => p.id == productId,
-                orElse: () => ProductModel(),
-              );
-              if (product.id.isNotEmpty) {
-                orderAgainList.add(product);
-              }
-            } catch (e) {
-              // Silently handle individual product errors
-            }
-          }
-
-          // Remove duplicates and limit to 10 items
-          orderAgainList = orderAgainList.toSet().toList();
-          orderAgainList = orderAgainList.take(10).toList();
-
-          if (!mounted || _isLeavingHome) return;
-          _updateState(callback: () {
-            orderAgainProducts = orderAgainList;
-            isLoadingOrderAgain = false;
-          });
-        },
-        onError: (error) {
-          if (!mounted || _isLeavingHome) return;
-          _updateState(callback: () {
-            isLoadingOrderAgain = false;
-            orderAgainError = true;
-          });
-        },
-      );
-    } catch (e) {
-      if (!mounted || _isLeavingHome) return;
-      _updateState(callback: () {
-        isLoadingOrderAgain = false;
-        orderAgainError = true;
-      });
-    }
+    if (mounted && !_isLeavingHome) setState(() {});
   }
 
   // Fetch meal for one products (sulit price)
@@ -1393,294 +1263,6 @@ class _HomeScreenState extends State<HomeScreen> {
         mealForOneError = true;
       });
     }
-  }
-
-  // Order Again card with same design as Meal for One cards
-  Widget _orderAgainCard(ProductModel product, VendorModel vendor, bool isDark,
-      double screenWidth) {
-    return GestureDetector(
-      onTap: () {
-        push(
-          context,
-          ProductDetailsScreen(productModel: product, vendorModel: vendor),
-        );
-      },
-      child: Container(
-        width: screenWidth * 0.375,
-        margin: const EdgeInsets.only(right: 12, bottom: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Image section with restaurant logo
-            Stack(
-              children: [
-                // Main product image
-                Container(
-                  height: 120,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      topRight: Radius.circular(16),
-                    ),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      topRight: Radius.circular(16),
-                    ),
-                    child: CachedNetworkImage(
-                      imageUrl: getImageVAlidUrl(product.photo),
-                      memCacheWidth: ((screenWidth * 0.4).round()).clamp(1, 300),
-                      memCacheHeight: 240,
-                      maxWidthDiskCache: 600,
-                      maxHeightDiskCache: 600,
-                      fit: BoxFit.cover,
-                      placeholder: (context, url) => Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade200,
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(16),
-                            topRight: Radius.circular(16),
-                          ),
-                        ),
-                        child: const Center(
-                          child: Icon(
-                            Icons.restaurant,
-                            size: 40,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ),
-                      errorWidget: (context, url, error) => Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade200,
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(16),
-                            topRight: Radius.circular(16),
-                          ),
-                        ),
-                        child: const Center(
-                          child: Icon(
-                            Icons.error,
-                            size: 40,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                // Restaurant logo overlay
-                Positioned(
-                  bottom: 8,
-                  left: 8,
-                  child: Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: CachedNetworkImage(
-                        imageUrl: getImageVAlidUrl(vendor.photo),
-                        memCacheWidth: 64,
-                        memCacheHeight: 64,
-                        maxWidthDiskCache: 200,
-                        maxHeightDiskCache: 200,
-                        fit: BoxFit.cover,
-                        placeholder: (context, url) => const Center(
-                          child: Icon(
-                            Icons.restaurant,
-                            size: 16,
-                            color: Colors.grey,
-                          ),
-                        ),
-                        errorWidget: (context, url, error) => const Center(
-                          child: Icon(
-                            Icons.restaurant,
-                            size: 16,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                // "Order Again" badge
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Color(COLOR_PRIMARY),
-                      borderRadius: BorderRadius.circular(8),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.refresh,
-                          size: 10,
-                          color: Colors.white,
-                        ),
-                        const SizedBox(width: 2),
-                        Text(
-                          'Again',
-                          style: TextStyle(
-                            fontFamily: 'Poppinssb',
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            // Content section
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Restaurant name and rating
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          vendor.title,
-                          style: TextStyle(
-                            fontFamily: 'Poppinsm',
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                            color: isDark ? Colors.white : Colors.black87,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const Icon(
-                        Icons.star,
-                        size: 12,
-                        color: Colors.amber,
-                      ),
-                      const SizedBox(width: 2),
-                      Text(
-                        vendor.reviewsCount != 0
-                            ? '${(vendor.reviewsSum / vendor.reviewsCount).toStringAsFixed(1)}'
-                            : '0.0',
-                        style: TextStyle(
-                          fontFamily: 'Poppinsm',
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          color: isDark ? Colors.white70 : Colors.black54,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 1),
-                  // Product name
-                  Text(
-                    product.name,
-                    style: TextStyle(
-                      fontFamily: 'Poppinssb',
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? Colors.white : Colors.black87,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  // Price and order again indicator
-                  Row(
-                    children: [
-                      Text(
-                        product.disPrice != "" && product.disPrice != "0"
-                            ? "₱ ${double.parse(product.disPrice.toString()).toStringAsFixed(currencyModel!.decimal)}"
-                            : "₱ ${double.parse(product.price.toString()).toStringAsFixed(currencyModel!.decimal)}",
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Color(COLOR_PRIMARY),
-                        ),
-                      ),
-                      if (product.disPrice != "" && product.disPrice != "0")
-                        Padding(
-                          padding: const EdgeInsets.only(left: 4),
-                          child: Text(
-                            "₱ ${double.parse(product.price.toString()).toStringAsFixed(currencyModel!.decimal)}",
-                            style: TextStyle(
-                              fontFamily: 'Poppinsr',
-                              fontSize: 10,
-                              fontWeight: FontWeight.w400,
-                              color: Colors.grey.shade600,
-                              decoration: TextDecoration.lineThrough,
-                            ),
-                          ),
-                        ),
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.shade50,
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: Colors.orange.shade200),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.history,
-                              size: 10,
-                              color: Colors.orange.shade600,
-                            ),
-                            const SizedBox(width: 2),
-                            Text(
-                              'Ordered',
-                              style: TextStyle(
-                                fontFamily: 'Poppinsm',
-                                fontSize: 10,
-                                fontWeight: FontWeight.w500,
-                                color: Colors.orange.shade700,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   // Advertisement slider shown above Stories
@@ -2017,63 +1599,60 @@ class _HomeScreenState extends State<HomeScreen> {
                       homeContent: RefreshIndicator(
                         onRefresh: _refreshHomeData,
                         color: Color(COLOR_PRIMARY),
-                        child: CustomScrollView(
-                          controller: _homeScrollController,
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          slivers: [
-                            SliverToBoxAdapter(
-                              child: Container(
-                                color: isDark
-                                    ? const Color.fromARGB(255, 212, 197, 128)
-                                    : const Color(0xffFFFFFF),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    if (MyAppState.selectedPosition
-                                        .usesDefaultLocation)
-                                      DefaultLocationBanner(
-                                        onSetLocationTap: () =>
-                                            showLocationOptionsBottomSheet(
-                                                context),
-                                      ),
-                                    HomeHeaderSection(
-                              selctedOrderTypeValue: selctedOrderTypeValue,
-                              rotatingHints: rotatingHints,
-                              onOrderTypeChanged: _handleOrderTypeChanged,
-                              onLocationTap: _handleLocationTap,
-                              onSearchTap: _onSearchTap,
-                              onMessageTap: _onMessageTap,
-                              onFavoriteTap: _onFavoriteTap,
-                            ),
-
-                            // Divider above Categories section
-                            Container(
-                              margin: const EdgeInsets.symmetric(vertical: 2),
-                              child: Divider(
-                                height: 1,
-                                thickness: 1,
-                                color: isDark
-                                    ? Colors.grey.shade600
-                                    : Colors.grey.shade300,
-                                indent: 5,
-                                endIndent: 5,
+                        child: Container(
+                          color: isDark
+                              ? const Color.fromARGB(255, 212, 197, 128)
+                              : const Color(0xffFFFFFF),
+                          child: CustomScrollView(
+                            controller: _homeScrollController,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            slivers: [
+                              if (MyAppState.selectedPosition
+                                  .usesDefaultLocation)
+                                SliverToBoxAdapter(
+                                  child: DefaultLocationBanner(
+                                    onSetLocationTap: () =>
+                                        showLocationOptionsBottomSheet(
+                                            context),
+                                  ),
+                                ),
+                              SliverToBoxAdapter(
+                                child: HomeHeaderSection(
+                                  selctedOrderTypeValue: selctedOrderTypeValue,
+                                  rotatingHints: rotatingHints,
+                                  onOrderTypeChanged: _handleOrderTypeChanged,
+                                  onLocationTap: _handleLocationTap,
+                                  onSearchTap: _onSearchTap,
+                                  onFavoriteTap: _onFavoriteTap,
+                                ),
                               ),
-                            ),
-
-                            // Categories section moved above First-time promo card
-                            CategoriesHorizontalSection(
-                              categoriesFuture: _cachedCuisinesFuture ??
-                                  fireStoreUtils.getCuisines(),
-                              onRetry: () {
-                                _cachedCuisinesFuture =
-                                    fireStoreUtils.getCuisines();
-                                _updateState();
-                              },
-                            ),
-
-                            RepaintBoundary(
-                              child: BannerSection(
+                              SliverToBoxAdapter(
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(vertical: 2),
+                                  child: Divider(
+                                    height: 1,
+                                    thickness: 1,
+                                    color: isDark
+                                        ? Colors.grey.shade600
+                                        : Colors.grey.shade300,
+                                    indent: 5,
+                                    endIndent: 5,
+                                  ),
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: CategoriesHorizontalSection(
+                                  categoriesFuture: _cachedCuisinesFuture ??
+                                      Future.value(<VendorCategoryModel>[]),
+                                  onRetry: () {
+                                    getBanner();
+                                    _updateState();
+                                  },
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: RepaintBoundary(
+                                  child: BannerSection(
                                 isBannerLoading: isHomeBannerLoading,
                                 bannerErrorMessage: isHomeBannerError
                                     ? 'Failed to load banner'
@@ -2090,267 +1669,247 @@ class _HomeScreenState extends State<HomeScreen> {
                                 offersList: offersList,
                                 buildCouponsForYouItem:
                                     _buildCouponsForYouItemCached,
-                              ),
-                            ),
-
-                            // Promos Section
-                            if (activePromos.isNotEmpty || isPromosError)
-                              Column(
-                                mainAxisAlignment: MainAxisAlignment.start,
-                                children: [
-                                  isPromosError
-                                      ? HomeSectionUtils.sectionError(
-                                          message: 'Failed to load promos',
-                                          onRetry: _loadActivePromos,
-                                        )
-                                      : RepaintBoundary(
-                                          child: SizedBox(
-                                            height: 200,
-                                            child: ListView.builder(
-                                              scrollDirection: Axis.horizontal,
-                                              physics:
-                                                  const BouncingScrollPhysics(),
-                                              padding:
-                                                  const EdgeInsets.fromLTRB(
-                                                      10, 10, 16, 0),
-                                              cacheExtent: 300.0,
-                                              itemCount:
-                                                  activePromos.length >= 10
-                                                      ? 10
-                                                      : activePromos.length,
-                                              itemBuilder: (context, index) {
-                                                final coupon =
-                                                    activePromos[index];
-                                                final vendor = coupon
-                                                            .restaurantId !=
-                                                        null
-                                                    ? (_cachedVendorMap?[
-                                                        coupon.restaurantId])
-                                                    : null;
-                                                return PromoCard(
-                                                  key: ValueKey(
-                                                    coupon.offerId ??
-                                                        'promo_$index',
-                                                  ),
-                                                  coupon: coupon,
-                                                  isDark: isDark,
-                                                  screenWidth: screenWidth,
-                                                  vendor: vendor,
-                                                  index: index,
-                                                );
-                                              },
-                                            ),
-                                          ),
-                                        ),
-                                ],
-                              ),
-
-                            RepaintBoundary(
-                              child: BundleDealsSection(
-                                onAddToCart: _onBundleAddToCart,
-                              ),
-                            ),
-
-                            RepaintBoundary(
-                              child: const HomePautosEntrySection(),
-                            ),
-
-                            //storyWidget(),
-
-                            RepaintBoundary(
-                              child: const FoodVarietiesRow(),
-                            ),
-
-                            RepaintBoundary(
-                              child: HomePopularTodaySection(
-                                popularTodayFoods: popularTodayFoods,
-                                vendors: popularTodayVendors,
-                                isLoading: _isLoadingPopularToday,
-                                hasError: _popularTodayError,
-                                onRetry: _retryPopularTodaySection,
-                              ),
-                            ),
-
-                            RepaintBoundary(
-                              child: HomeNearbyFoodsSection(
-                                lstNearByFood: lstNearByFood,
-                                vendors: nearbyFoodVendors,
-                                isLoading: _isLoadingNearbyFoods,
-                                hasError: _nearbyFoodsError,
-                                onRetry: _retryNearbyFoodsSection,
-                              ),
-                            ),
-
-                            // Order Again Section (skeleton when loading, list when has data)
-                            if (MyAppState.currentUser != null &&
-                                (isLoadingOrderAgain ||
-                                    orderAgainProducts.isNotEmpty ||
-                                    orderAgainError))
-                              Column(
-                                mainAxisAlignment: MainAxisAlignment.start,
-                                children: [
-                                  buildTitleRow(
-                                    titleValue: "Order Again",
-                                    onClick: _onOrderAgainViewAll,
                                   ),
-                                  orderAgainError
-                                      ? HomeSectionUtils.sectionError(
-                                          message:
-                                              'Failed to load order again',
-                                          onRetry: fetchOrderAgainProducts,
-                                        )
-                                      : isLoadingOrderAgain
-                                          ? ShimmerWidgets.orderAgainSkeleton()
-                                          : RepaintBoundary(
-                                          child: Container(
-                                      width: screenWidth,
-                                      height: 220,
-                                      margin: const EdgeInsets.fromLTRB(
-                                          16, 0, 0, 10),
-                                      child: ListView.builder(
-                                        shrinkWrap: true,
-                                        scrollDirection: Axis.horizontal,
-                                        physics: const BouncingScrollPhysics(),
-                                        itemCount:
-                                            orderAgainProducts.length >= 10
-                                                ? 10
-                                                : orderAgainProducts.length,
-                                        itemBuilder: (context, index) {
-                                          ProductModel product =
-                                              orderAgainProducts[index];
-                                          // O(1) lookup instead of O(n) linear search
-                                          final vendorModel =
-                                              vendorMap[product.vendorID];
-                                          if (vendorModel == null) {
-                                            return Container();
-                                          }
-                                          return _orderAgainCard(product,
-                                              vendorModel, isDark, screenWidth);
-                                        },
-                                      ),
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: PromosSection(
+                                  onPromosLoaded: _onPromosLoaded,
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: RepaintBoundary(
+                                  child: BundleDealsSection(
+                                    onAddToCart: _onBundleAddToCart,
+                                  ),
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: RepaintBoundary(
+                                  child: const HomePautosEntrySection(),
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: RepaintBoundary(
+                                  child: const FoodVarietiesRow(),
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: RepaintBoundary(
+                                  child: HomePopularTodaySection(
+                                    popularTodayFoods: popularTodayFoods,
+                                    vendors: popularTodayVendors,
+                                    isLoading: _isLoadingPopularToday,
+                                    hasError: _popularTodayError,
+                                    onRetry: _retryPopularTodaySection,
+                                  ),
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: RepaintBoundary(
+                                  child: HomeNearbyFoodsSection(
+                                    lstNearByFood: lstNearByFood,
+                                    vendors: nearbyFoodVendors,
+                                    isLoading: _isLoadingNearbyFoods,
+                                    hasError: _nearbyFoodsError,
+                                    onRetry: _retryNearbyFoodsSection,
+                                  ),
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: MyAppState.currentUser != null
+                                    ? LazySection(
+                                        sectionKey: const Key('section_order_again'),
+                                        activateCondition: () =>
+                                            MyAppState.currentUser != null,
+                                        loadingPlaceholder: ShimmerWidgets
+                                            .orderAgainSkeleton(),
+                                        contentBuilder: () =>
+                                            OrderAgainSection(),
+                                      )
+                                    : const SizedBox.shrink(),
+                              ),
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey: const Key('section_trending'),
+                                  loadingPlaceholder:
+                                      const SizedBox(height: 200),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: TrendingNowSection(
+                                      allProducts: allProducts,
+                                      lstFav: lstFav,
+                                      onFavoriteChanged: _onFavoriteChanged,
                                     ),
                                   ),
-                                ],
+                                ),
                               ),
-
-                            Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                RepaintBoundary(
-                                  child: TrendingNowSection(
-                                    allProducts: allProducts,
-                                    lstFav: lstFav,
-                                    onFavoriteChanged: _onFavoriteChanged,
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey: const Key('section_time_based'),
+                                  loadingPlaceholder:
+                                      const SizedBox(height: 200),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: TimeBasedSection(
+                                      allProducts: allProducts,
+                                      lstFav: lstFav,
+                                      onFavoriteChanged: _onFavoriteChanged,
+                                      highlightMealPeriod:
+                                          widget.highlightMealPeriod,
+                                    ),
                                   ),
                                 ),
-                                RepaintBoundary(
-                                  child: TimeBasedSection(
-                                    allProducts: allProducts,
-                                    lstFav: lstFav,
-                                    onFavoriteChanged: _onFavoriteChanged,
-                                    highlightMealPeriod:
-                                        widget.highlightMealPeriod,
+                              ),
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey:
+                                      const Key('section_personalized'),
+                                  loadingPlaceholder:
+                                      const SizedBox(height: 200),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: PersonalizedRecommendationsSection(
+                                      allProducts: allProducts,
+                                      offerList: offerList,
+                                      currencyModel: currencyModel,
+                                    ),
                                   ),
                                 ),
-                                RepaintBoundary(
-                                  child: PersonalizedRecommendationsSection(
-                                    allProducts: allProducts,
-                                    offerList: offerList,
-                                    currencyModel: currencyModel,
+                              ),
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey:
+                                      const Key('section_meal_for_one'),
+                                  loadingPlaceholder:
+                                      const SizedBox(height: 220),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: MealForOneSection(
+                                      mealForOneProducts: mealForOneProducts,
+                                      vendors: mealForOneVendors.isNotEmpty
+                                          ? mealForOneVendors
+                                          : vendors,
+                                      allProducts: allProducts,
+                                      isLoadingMealForOne: isLoadingMealForOne,
+                                      hasError: mealForOneError,
+                                      onRetry: fetchMealForOneProducts,
+                                    ),
                                   ),
                                 ),
-                                RepaintBoundary(
-                                  child: MealForOneSection(
-                                    mealForOneProducts: mealForOneProducts,
-                                    vendors: mealForOneVendors.isNotEmpty
-                                        ? mealForOneVendors
-                                        : vendors,
-                                    allProducts: allProducts,
-                                    isLoadingMealForOne: isLoadingMealForOne,
-                                    hasError: mealForOneError,
-                                    onRetry: fetchMealForOneProducts,
+                              ),
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey: const Key(
+                                      'section_nearby_restaurants'),
+                                  loadingPlaceholder:
+                                      const SizedBox(height: 280),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: NearbyRestaurantsSection(
+                                      vendorsStream: _cachedNewArrivalStream ??
+                                          fireStoreUtils
+                                              .getVendorsForNewArrival()
+                                              .asBroadcastStream(),
+                                      fallbackVendors:
+                                          mostRatedRestaurantsFallback,
+                                      allProducts: allProducts,
+                                      lstFav: lstFav,
+                                      isRestaurantOpen: isRestaurantOpen,
+                                      onFavoriteChanged: _onFavoriteChanged,
+                                      onRetry: _retryNearbyRestaurants,
+                                    ),
                                   ),
                                 ),
-                              ],
-                            ),
-
-                            RepaintBoundary(
-                              child: NearbyRestaurantsSection(
-                                vendorsStream: _cachedNewArrivalStream ??
-                                    fireStoreUtils
-                                        .getVendorsForNewArrival()
-                                        .asBroadcastStream(),
-                                fallbackVendors: mostRatedRestaurantsFallback,
-                                allProducts: allProducts,
-                                lstFav: lstFav,
-                                isRestaurantOpen: isRestaurantOpen,
-                                onFavoriteChanged: _onFavoriteChanged,
-                                onRetry: _retryNearbyRestaurants,
                               ),
-                            ),
-
-                            RepaintBoundary(
-                              child: NewRestaurantsSection(
-                                vendorsStream: _cachedNewestRestaurantsStream ??
-                                    fireStoreUtils
-                                        .getNewestRestaurantsStream(limit: 15)
-                                        .asBroadcastStream(),
-                                fallbackVendors: mostRatedRestaurantsFallback,
-                                allProducts: allProducts,
-                                lstFav: lstFav,
-                                isRestaurantOpen: isRestaurantOpen,
-                                onFavoriteChanged: _onFavoriteChanged,
-                                onRetry: _retryNewRestaurants,
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey:
+                                      const Key('section_new_restaurants'),
+                                  loadingPlaceholder:
+                                      const SizedBox(height: 280),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: NewRestaurantsSection(
+                                      vendorsStream:
+                                          _cachedNewestRestaurantsStream ??
+                                              fireStoreUtils
+                                                  .getNewestRestaurantsStream(
+                                                      limit: 15)
+                                                  .asBroadcastStream(),
+                                      fallbackVendors:
+                                          mostRatedRestaurantsFallback,
+                                      allProducts: allProducts,
+                                      lstFav: lstFav,
+                                      isRestaurantOpen: isRestaurantOpen,
+                                      onFavoriteChanged: _onFavoriteChanged,
+                                      onRetry: _retryNewRestaurants,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-
-                            RepaintBoundary(
-                              child: TopRestaurantsSection(
-                                popularRestaurantLst: popularRestaurantLst,
-                                allProducts: allProducts,
-                                lstFav: lstFav,
-                                fallbackRestaurants:
-                                    mostRatedRestaurantsFallback,
-                                onFavoriteChanged: _onFavoriteChanged,
-                                isLoading: popularRestaurantLst.isEmpty &&
-                                    !_hasReceivedVendorData,
-                                hasError: _topRestaurantsError,
-                                onRetry: _refreshHomeData,
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey:
+                                      const Key('section_top_restaurants'),
+                                  loadingPlaceholder:
+                                      const SizedBox(height: 280),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: TopRestaurantsSection(
+                                      popularRestaurantLst:
+                                          popularRestaurantLst,
+                                      allProducts: allProducts,
+                                      lstFav: lstFav,
+                                      fallbackRestaurants:
+                                          mostRatedRestaurantsFallback,
+                                      onFavoriteChanged: _onFavoriteChanged,
+                                      isLoading: popularRestaurantLst
+                                              .isEmpty &&
+                                          !_hasReceivedVendorData,
+                                      hasError: _topRestaurantsError,
+                                      onRetry: _refreshHomeData,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-
-                            RepaintBoundary(
-                              child: CategoryRestaurantsSection(
-                                categoryWiseProductList:
-                                    categoryWiseProductList,
-                                allProducts: allProducts,
-                                currencyModel: currencyModel,
-                                isLoadingCategories: categoryWiseProductList
-                                        .isEmpty &&
-                                    isHomeBannerLoading,
-                                onRetry: _refreshHomeData,
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey: const Key(
+                                      'section_category_restaurants'),
+                                  loadingPlaceholder:
+                                      const SizedBox(height: 300),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: CategoryRestaurantsSection(
+                                      categoryWiseProductList:
+                                          categoryWiseProductList,
+                                      allProducts: allProducts,
+                                      currencyModel: currencyModel,
+                                      isLoadingCategories:
+                                          categoryWiseProductList.isEmpty &&
+                                              isHomeBannerLoading,
+                                      onRetry: _refreshHomeData,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-
-                            RepaintBoundary(
-                              child: AllRestaurantsSection(
-                                offerList: offerList,
-                                allProducts: allProducts,
-                                currencyModel: currencyModel,
-                                orderType: 'delivery',
-                                pageSize: 10,
-                                lstFav: lstFav,
-                                scrollController: _homeScrollController,
-                                onFavoriteChanged: _onFavoriteChanged,
-                                isRestaurantOpen: isRestaurantOpen,
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey:
+                                      const Key('section_all_restaurants'),
+                                  loadingPlaceholder:
+                                      const SizedBox(height: 400),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: AllRestaurantsSection(
+                                      offerList: offerList,
+                                      allProducts: allProducts,
+                                      currencyModel: currencyModel,
+                                      orderType: 'delivery',
+                                      pageSize: 10,
+                                      lstFav: lstFav,
+                                      scrollController: _homeScrollController,
+                                      onFavoriteChanged: _onFavoriteChanged,
+                                      isRestaurantOpen: isRestaurantOpen,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ),
-                ],
-              ),
             ),
           ),
           Positioned(
@@ -2837,6 +2396,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   memCacheWidth: 300,
                   memCacheHeight: 300,
                   fit: BoxFit.cover,
+                  errorWidget: (context, u, e) => Container(
+                    color: Colors.grey.shade200,
+                    child: Icon(Icons.restaurant,
+                        size: 40, color: Colors.grey.shade400),
+                  ),
                 ),
               ),
               fit: BoxFit.cover,
@@ -3147,7 +2711,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   memCacheWidth: 300,
                   memCacheHeight: 300,
                   fit: BoxFit.cover,
-                  errorWidget: (context, url, error) => const Icon(Icons.error),
+                  placeholder: (context, url) => Container(
+                    color: Colors.grey.shade200,
+                    child: const Center(
+                      child: Icon(Icons.restaurant, color: Colors.grey),
+                    ),
+                  ),
+                  errorWidget: (context, url, error) =>
+                      const Icon(Icons.broken_image),
                 ),
               ),
               const SizedBox(height: 10),
@@ -3323,7 +2894,6 @@ class _HomeScreenState extends State<HomeScreen> {
     // Cancel all streams and timers
     fireStoreUtils.closeVendorStream();
     fireStoreUtils.closeNewArrivalStream();
-    orderAgainStreamSubscription?.cancel();
     _completionDialogStreamSubscription?.cancel();
     _restaurantStreamSubscription?.cancel();
     _debounceTimer?.cancel();
@@ -3994,6 +3564,11 @@ class _HomeScreenState extends State<HomeScreen> {
                         memCacheWidth: 300,
                         memCacheHeight: 300,
                         fit: BoxFit.cover,
+                        errorWidget: (context, u, e) => Container(
+                          color: Colors.grey.shade200,
+                          child: Icon(Icons.restaurant,
+                              size: 40, color: Colors.grey.shade400),
+                        ),
                       )),
                   fit: BoxFit.cover,
                 )),

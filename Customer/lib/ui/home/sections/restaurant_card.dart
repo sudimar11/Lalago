@@ -142,6 +142,11 @@ class RestaurantCard extends StatelessWidget {
                               memCacheWidth: 200,
                               memCacheHeight: 200,
                               fit: BoxFit.cover,
+                              errorWidget: (context, u, e) => Container(
+                                color: Colors.grey.shade200,
+                                child: Icon(Icons.restaurant,
+                                    size: 50, color: Colors.grey.shade400),
+                              ),
                             )),
                       ),
                     ),

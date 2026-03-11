@@ -120,7 +120,11 @@ class _DriversMapPageState extends State<DriversMapPage> {
         if (riderId != null && riderId.isNotEmpty) {
           final riderRef =
               FirebaseFirestore.instance.collection(USERS).doc(riderId);
-          batch.update(riderRef, {'checkedOutToday': true});
+          batch.update(riderRef, {
+            'isOnline': false,
+            'riderAvailability': 'offline',
+            'inactiveReason': 'admin_bulk_offline',
+          });
         }
       }
 
@@ -129,7 +133,7 @@ class _DriversMapPageState extends State<DriversMapPage> {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('All riders have been checked out successfully.'),
+            content: Text('All riders have been set offline successfully.'),
             backgroundColor: Colors.green,
           ),
         );

@@ -419,33 +419,15 @@ class _RiderOverviewTable extends StatelessWidget {
 
     if (confirm != true) return;
 
-    try {
-      await FirebaseFirestore.instance
-          .collection(USERS)
-          .doc(riderId)
-          .update({
-        'inProgressOrderID': [],
-        'riderAvailability': 'available',
-        'isActive': true,
-        'lastCleanupAt': FieldValue.serverTimestamp(),
-      });
-
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$riderName cleaned up'),
-          backgroundColor: Colors.green,
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Direct rider status mutation is disabled. Use backend dispatch controls.',
         ),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   @override

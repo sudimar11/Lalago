@@ -51,6 +51,7 @@ import 'package:foodie_customer/services/addon_promo_service.dart';
 import 'package:foodie_customer/ui/addon/addon_promo_card.dart';
 import 'package:foodie_customer/utils/extensions/cart_product_extension.dart';
 import 'package:foodie_customer/services/analytics_service.dart';
+import 'package:foodie_customer/services/performance_logger.dart';
 import 'package:foodie_customer/services/restaurant_status_service.dart';
 
 /// Temporarily set to false to silence cart debug logs while tracing FCM.
@@ -69,6 +70,14 @@ class _CartEntry {
   _CartEntry.item(this.product)
       : isBundleHeader = false,
         bundleName = null;
+}
+
+/// Holds a pending quantity update for debouncing rapid +/- taps.
+class _PendingQuantityUpdate {
+  final CartProduct product;
+  final int targetQty;
+
+  const _PendingQuantityUpdate(this.product, this.targetQty);
 }
 
 class CartScreen extends StatefulWidget {
@@ -205,10 +214,12 @@ class _CartScreenState extends State<CartScreen> {
   bool _isInitialized = false;
   bool _isDeliveryDataLoading = false;
   bool _isDeliveryReady = false;
+  bool _deliveryCalcFailed = false;
   bool _isDependenciesInitialized = false;
   String? _lastVendorID;
   List<CartProduct>? _lastCartProducts;
   double? _lastSubTotal;
+  String? _lastTotalsSignature;
   Map<String, ProductModel>? _productCache;
   Map<String, VendorModel>? _vendorCache;
 
@@ -517,6 +528,12 @@ class _CartScreenState extends State<CartScreen> {
   // ValueNotifiers for cart item quantities (for display only)
   final Map<String, ValueNotifier<int>> _itemQuantityNotifiers = {};
 
+  // Debounce quantity +/- taps to reduce DB writes during rapid taps
+  static const Duration _quantityDebounceDelay =
+      Duration(milliseconds: 300);
+  Timer? _quantityDebounceTimer;
+  final Map<String, _PendingQuantityUpdate> _pendingQuantityUpdates = {};
+
   // Initialize/update quantity notifiers for cart items
   void _updateQuantityNotifiers(List<CartProduct> products) {
     // Remove notifiers for items that no longer exist
@@ -544,6 +561,32 @@ class _CartScreenState extends State<CartScreen> {
       _itemQuantityNotifiers[itemId] = ValueNotifier<int>(initialQuantity);
     }
     return _itemQuantityNotifiers[itemId]!;
+  }
+
+  /// Schedules a quantity update with 300ms debounce. Optimistic UI update
+  /// should be done by caller before calling this.
+  void _scheduleQuantityUpdate(CartProduct cartProduct, int targetQty) {
+    final key = cartProduct.id;
+    _pendingQuantityUpdates[key] =
+        _PendingQuantityUpdate(cartProduct, targetQty);
+    _quantityDebounceTimer?.cancel();
+    _quantityDebounceTimer = Timer(_quantityDebounceDelay, () {
+      _quantityDebounceTimer = null;
+      _flushPendingQuantityUpdates();
+    });
+  }
+
+  void _flushPendingQuantityUpdates() {
+    final pending =
+        Map<String, _PendingQuantityUpdate>.from(_pendingQuantityUpdates);
+    _pendingQuantityUpdates.clear();
+    for (final e in pending.values) {
+      if (e.targetQty <= 0) {
+        cartDatabase.removeProduct(e.product.id);
+      } else {
+        removetocard(e.product, e.targetQty);
+      }
+    }
   }
 
   // Diagnostic method to test database access and stream functionality
@@ -619,10 +662,27 @@ class _CartScreenState extends State<CartScreen> {
     }
   }
 
+  /// Builds a signature for memoization to skip recalculation when inputs unchanged.
+  String _totalsSignature(
+      List<CartProduct> data, String delivery, double tip) {
+    final cartPart = data
+        .map((e) => '${e.id}:${e.quantity}:${e.price}')
+        .join(';');
+    return '$cartPart|$delivery|$tip';
+  }
+
   /// Pure calculation method that computes all totals without mutating state
   /// Returns calculated values that should be applied to state via setState
   void _calculateAndUpdateTotals(
       List<CartProduct> data, List<AddAddonsDemo> lstExtras, String vendorID) {
+    final sig = _totalsSignature(data, deliveryCharges, tipValue);
+    if (_lastTotalsSignature == sig) {
+      if (_kShowCartLogs) debugPrint(
+          '🟢 [TOTALS_MEMO] Skipping recalc, signature match');
+      return;
+    }
+    _lastTotalsSignature = sig;
+
     if (_kShowCartLogs) debugPrint(
         '🟢 [SUBTOTAL_CALC] _calculateAndUpdateTotals() called OUTSIDE build');
 
@@ -1671,16 +1731,16 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   Future<void> getDeliveyData({bool forceFresh = false}) async {
+    final stopwatch = Stopwatch()..start();
     print('🟠 [DELIVERY_DATA] getDeliveyData started');
     debugPrint("getDeliveyData started");
 
-    // Set loading state if not already set (prevents duplicate setState when called from _updateCartDependentData)
     if (mounted && !_isDeliveryDataLoading) {
       if (!mounted) return;
-      print('🟠 [DELIVERY_DATA] Setting loading state');
       setState(() {
         _isDeliveryDataLoading = true;
         _isDeliveryReady = false;
+        _deliveryCalcFailed = false;
       });
     }
 
@@ -1906,18 +1966,22 @@ class _CartScreenState extends State<CartScreen> {
           }
         });
       }
-    } finally {
-      // Always set loading state to false when done
+    } catch (e, st) {
+      debugPrint('Delivery calculation failed: $e');
+      debugPrint('StackTrace: $st');
       if (mounted) {
-        if (!mounted) return;
+        setState(() {
+          _deliveryCalcFailed = true;
+        });
+      }
+    } finally {
+      stopwatch.stop();
+      PerformanceLogger.logDeliveryCalculation(stopwatch.elapsed);
+      if (mounted) {
         setState(() {
           _isDeliveryDataLoading = false;
         });
-
-        // Recalculate totals after delivery charges are updated
         if (cartProducts.isNotEmpty) {
-          print(
-              '🟢 [DELIVERY_DATA] Triggering totals recalculation after delivery update');
           _calculateAndUpdateTotals(cartProducts, lstExtras, vendorID);
         }
       }
@@ -2149,6 +2213,7 @@ class _CartScreenState extends State<CartScreen> {
   // Pull-to-refresh handler
   Future<void> _onRefresh() async {
     _lastSubTotal = null;
+    _lastTotalsSignature = null;
     _invalidateDeliveryCache();
     _useLiveLocationOnNextDeliveryCalc = true;
     _lastCartProducts = null;
@@ -2480,20 +2545,28 @@ class _CartScreenState extends State<CartScreen> {
                       children: [
                         EstimatedDeliveryTimeCard(
                           deliveryTime: _estimatedDeliveryTimeText,
+                          isLoading: _isDeliveryDataLoading,
+                          hasFailed: _deliveryCalcFailed,
+                          onRetry: () =>
+                              getDeliveyData(forceFresh: true),
                         ),
                         if (isLoading)
                           ShimmerWidgets.cartListShimmer(
                             isDarkMode: isDarkMode(context),
                           )
                         else
-                          ListView.builder(
-                            shrinkWrap: true,
-                            physics: const ClampingScrollPhysics(),
-                            itemCount: _buildCartEntries(cartProducts).length,
-                            itemBuilder: (context, index) {
+                          Builder(
+                            builder: (context) {
+                              // Cached to avoid recalculating on every
+                              // item build
                               final entries =
                                   _buildCartEntries(cartProducts);
-                              final entry = entries[index];
+                              return ListView.builder(
+                                shrinkWrap: true,
+                                physics: const ClampingScrollPhysics(),
+                                itemCount: entries.length,
+                                itemBuilder: (context, index) {
+                                  final entry = entries[index];
                               if (entry.isBundleHeader) {
                                 return Padding(
                                   padding: const EdgeInsets.only(
@@ -2516,6 +2589,7 @@ class _CartScreenState extends State<CartScreen> {
                               }
                               final product = entry.product!;
                               return Container(
+                                key: Key(product.id),
                                 margin: const EdgeInsets.only(
                                     left: 13, top: 13, right: 13, bottom: 5),
                                 decoration: BoxDecoration(
@@ -2546,7 +2620,9 @@ class _CartScreenState extends State<CartScreen> {
                                 ),
                               );
                             },
-                          ),
+                          );
+                        },
+                      ),
                         if (cartProducts.isNotEmpty && currentVendorID.isNotEmpty)
                           _CartCompleteYourMealSection(
                             cartProducts: cartProducts,
@@ -2958,74 +3034,10 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   buildCartRow(CartProduct cartProduct, List<AddAddonsDemo> addons) {
-    List addOnVal = [];
-
     var quen = cartProduct.quantity;
-
-    double priceTotalValue = 0.0;
-
-    // priceTotalValue   = double.parse(cartProduct.price);
-
-    double addOnValDoule = 0;
-
-    for (int i = 0; i < lstExtras.length; i++) {
-      AddAddonsDemo addAddonsDemo = lstExtras[i];
-
-      if (addAddonsDemo.categoryID == cartProduct.id) {
-        addOnValDoule = addOnValDoule + double.parse(addAddonsDemo.price!);
-      }
-    }
-
-    // ProductModel will be fetched on-demand in the onTap handler to avoid side effects during build
     final variantInfo = cartProduct.parseVariantInfo();
-
-    if (cartProduct.extras == null) {
-      addOnVal.clear();
-    } else {
-      if (cartProduct.extras is String) {
-        if (cartProduct.extras == '[]') {
-          addOnVal.clear();
-        } else {
-          String extraDecode = cartProduct.extras
-              .toString()
-              .replaceAll("[", "")
-              .replaceAll("]", "")
-              .replaceAll("\"", "");
-
-          if (extraDecode.contains(",")) {
-            addOnVal = extraDecode.split(",");
-          } else {
-            if (extraDecode.trim().isNotEmpty) {
-              addOnVal = [extraDecode];
-            }
-          }
-        }
-      }
-
-      if (cartProduct.extras is List) {
-        addOnVal = List.from(cartProduct.extras);
-      }
-      // Filter out meaningless addon values (\\, null, [], empty) that display as garbage
-      addOnVal = addOnVal.where((e) {
-        final s = e.toString().trim();
-        return s.isNotEmpty &&
-            s != 'null' &&
-            s != '[]' &&
-            s != '\\' &&
-            s != r'\\';
-      }).toList();
-    }
-
-    if (cartProduct.extras_price != null &&
-        cartProduct.extras_price != "" &&
-        double.parse(cartProduct.extras_price!) != 0.0) {
-      priceTotalValue +=
-          double.parse(cartProduct.extras_price!) * cartProduct.quantity;
-    }
-
-    priceTotalValue += double.parse(cartProduct.price) * cartProduct.quantity;
-
-    // VariantInfo variantInfo= cartProduct.variant_info;
+    final priceTotalValue = cartProduct.computeLineTotal();
+    final addOnVal = cartProduct.parseExtrasAsList();
 
     return InkWell(
       onTap: () async {
@@ -3106,10 +3118,9 @@ class _CartScreenState extends State<CartScreen> {
                       onTap: () {
                         if (quen != 0) {
                           quen--;
-                          // Update quantity notifier for immediate UI feedback
                           _getQuantityNotifier(cartProduct.id, quen).value =
                               quen;
-                          removetocard(cartProduct, quen);
+                          _scheduleQuantityUpdate(cartProduct, quen);
                         }
                       },
                       child: Image(
@@ -3185,10 +3196,9 @@ class _CartScreenState extends State<CartScreen> {
                                         .toString()) ==
                                     -1) {
                               quen++;
-                              // Update quantity notifier for immediate UI feedback
                               _getQuantityNotifier(cartProduct.id, quen).value =
                                   quen;
-                              addtocard(cartProduct, quen);
+                              _scheduleQuantityUpdate(cartProduct, quen);
                             } else {
                               ScaffoldMessenger.of(context)
                                   .showSnackBar(SnackBar(
@@ -3199,10 +3209,9 @@ class _CartScreenState extends State<CartScreen> {
                             if (productModel.quantity > quen ||
                                 productModel.quantity == -1) {
                               quen++;
-                              // Update quantity notifier for immediate UI feedback
                               _getQuantityNotifier(cartProduct.id, quen).value =
                                   quen;
-                              addtocard(cartProduct, quen);
+                              _scheduleQuantityUpdate(cartProduct, quen);
                             } else {
                               ScaffoldMessenger.of(context)
                                   .showSnackBar(SnackBar(
@@ -3214,10 +3223,9 @@ class _CartScreenState extends State<CartScreen> {
                           if (productModel.quantity > quen ||
                               productModel.quantity == -1) {
                             quen++;
-                            // Update quantity notifier for immediate UI feedback
                             _getQuantityNotifier(cartProduct.id, quen).value =
                                 quen;
-                            addtocard(cartProduct, quen);
+                            _scheduleQuantityUpdate(cartProduct, quen);
                           } else {
                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                               content: Text("Food out of stock"),
@@ -4076,6 +4084,7 @@ class _CartScreenState extends State<CartScreen> {
   // }
 
   addtocard(CartProduct cartProduct, qun) async {
+    final stopwatch = Stopwatch()..start();
     await cartDatabase.updateProduct(CartProduct(
         id: cartProduct.id,
         category_id: cartProduct.category_id,
@@ -4093,9 +4102,12 @@ class _CartScreenState extends State<CartScreen> {
         addonPromoId: cartProduct.addonPromoId,
         addonPromoName: cartProduct.addonPromoName,
         addedAt: cartProduct.addedAt));
+    stopwatch.stop();
+    PerformanceLogger.logUpdateQuantity(stopwatch.elapsed);
   }
 
   removetocard(CartProduct cartProduct, qun) async {
+    final stopwatch = Stopwatch()..start();
     if (qun >= 1) {
       await cartDatabase.updateProduct(CartProduct(
           id: cartProduct.id,
@@ -4112,10 +4124,16 @@ class _CartScreenState extends State<CartScreen> {
           bundleId: cartProduct.bundleId,
           bundleName: cartProduct.bundleName,
           addonPromoId: cartProduct.addonPromoId,
-          addonPromoName: cartProduct.addonPromoName,
-          addedAt: cartProduct.addedAt));
+        addonPromoName: cartProduct.addonPromoName,
+        addedAt: cartProduct.addedAt));
     } else {
-      cartDatabase.removeProduct(cartProduct.id);
+      await cartDatabase.removeProduct(cartProduct.id);
+    }
+    stopwatch.stop();
+    if (qun >= 1) {
+      PerformanceLogger.logUpdateQuantity(stopwatch.elapsed);
+    } else {
+      PerformanceLogger.logRemoveFromCart(stopwatch.elapsed);
     }
   }
 
@@ -4598,7 +4616,9 @@ class _CartScreenState extends State<CartScreen> {
   void dispose() {
     _statusCheckTimer?.cancel();
     _statusCheckTimer = null;
-    // Cancel debounce timer to prevent memory leaks
+    _quantityDebounceTimer?.cancel();
+    _quantityDebounceTimer = null;
+    _flushPendingQuantityUpdates();
     _distanceCalculationDebounceTimer?.cancel();
     _distanceCalculationDebounceTimer = null;
     // Dispose ValueNotifiers

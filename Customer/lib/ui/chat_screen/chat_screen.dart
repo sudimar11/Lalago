@@ -390,15 +390,13 @@ class _ChatScreensState extends State<ChatScreens> {
       final data = driverDoc.data();
       if (data == null) return;
 
-      final active = data['active'] is bool ? data['active'] as bool : false;
-      final lastOnline = data['lastOnlineTimestamp'];
-      bool isOnline = active;
-      if (lastOnline is Timestamp) {
-        final lastSeen = lastOnline.toDate();
-        if (DateTime.now().difference(lastSeen).inMinutes <= 5) {
-          isOnline = true;
-        }
-      }
+      final bool online = data['isOnline'] == true;
+      final String avail =
+          (data['riderAvailability'] ?? 'offline').toString();
+      final bool isOnline = online &&
+          (avail == 'available' ||
+              avail == 'on_delivery' ||
+              avail == 'on_break');
 
       if (_isDriverOnline != isOnline) {
         setState(() {

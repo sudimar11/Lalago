@@ -120,6 +120,11 @@ class _HappyHourSettingsPageState extends State<HappyHourSettingsPage> {
 
                 const SizedBox(height: 24),
 
+                // Auto Monitor
+                _HappyHourAutoMonitorCard(settings: settings),
+
+                const SizedBox(height: 24),
+
                 // Configurations Header
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -354,6 +359,306 @@ class _AutomationSettingsCard extends StatefulWidget {
   State<_AutomationSettingsCard> createState() => _AutomationSettingsCardState();
 }
 
+class _HappyHourAutoMonitorCard extends StatelessWidget {
+  const _HappyHourAutoMonitorCard({required this.settings});
+
+  final HappyHourSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 4,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Happy Hour Auto Monitor',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Manual button sends now (triggeredBy: manual). '
+              'Auto scheduler sends on configured window '
+              '(triggeredBy: auto_schedule).',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _buildStatusRows(context),
+            const SizedBox(height: 12),
+            const Divider(),
+            const SizedBox(height: 10),
+            _buildLatestAutoJob(context),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusRows(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _statusRow(
+          'Enabled',
+          settings.enabled ? 'Yes' : 'No',
+          settings.enabled ? Colors.green : Colors.grey,
+        ),
+        _statusRow(
+          'Auto-create notification',
+          settings.autoCreateNotification ? 'Yes' : 'No',
+          settings.autoCreateNotification ? Colors.green : Colors.grey,
+        ),
+        _statusRow(
+          'Last auto trigger',
+          _formatTimestamp(settings.lastTriggeredAt),
+          Colors.black87,
+        ),
+        _statusRow(
+          'Last triggered config',
+          settings.lastTriggeredConfigId?.isNotEmpty == true
+              ? settings.lastTriggeredConfigId!
+              : 'N/A',
+          Colors.black87,
+        ),
+        _statusRow(
+          'Next active window',
+          _computeNextActiveWindow(settings.configs),
+          Colors.black87,
+        ),
+      ],
+    );
+  }
+
+  Widget _statusRow(String label, String value, Color valueColor) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 170,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(color: valueColor),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLatestAutoJob(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('notification_jobs')
+          .where('kind', isEqualTo: 'happy_hour')
+          .where('triggeredBy', isEqualTo: 'auto_schedule')
+          .orderBy('createdAt', descending: true)
+          .limit(1)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.red.shade50,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'Unable to load auto job status. If this is a Firestore index '
+              'error, create the suggested composite index and refresh.',
+              style: TextStyle(
+                color: Colors.red.shade700,
+                fontSize: 12,
+              ),
+            ),
+          );
+        }
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: LinearProgressIndicator(),
+          );
+        }
+
+        final docs = snapshot.data?.docs ?? [];
+        if (docs.isEmpty) {
+          return _statusBanner(
+            color: Colors.grey,
+            text: 'No auto send yet today',
+          );
+        }
+
+        final data = docs.first.data();
+        final status = (data['status'] ?? 'unknown').toString();
+        final stats = (data['stats'] is Map<String, dynamic>)
+            ? data['stats'] as Map<String, dynamic>
+            : <String, dynamic>{};
+        final sent = (stats['successfulDeliveries'] as num?)?.toInt() ?? 0;
+        final failed = (stats['failedDeliveries'] as num?)?.toInt() ?? 0;
+        final progress = (stats['percentComplete'] as num?)?.toDouble() ?? 0;
+        final error = data['error']?.toString();
+        final createdAt = data['createdAt'] as Timestamp?;
+
+        final banner = _bannerForStatus(status, sent, createdAt);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _statusBanner(color: banner.$1, text: banner.$2),
+            const SizedBox(height: 10),
+            _statusRow('Job status', status, Colors.black87),
+            _statusRow('Sent', '$sent', Colors.green),
+            _statusRow('Failed', '$failed', failed > 0 ? Colors.red : Colors.black87),
+            _statusRow('Progress', '${progress.toStringAsFixed(0)}%', Colors.black87),
+            _statusRow('Triggered at', _formatTimestamp(createdAt), Colors.black87),
+            if (status == 'failed' && error != null && error.isNotEmpty)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(top: 6),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Error: $error',
+                  style: TextStyle(
+                    color: Colors.red.shade700,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _statusBanner({required Color color, required String text}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  (Color, String) _bannerForStatus(
+    String status,
+    int sent,
+    Timestamp? createdAt,
+  ) {
+    final nowLocal = DateTime.now();
+    final startOfTodayLocal = DateTime(
+      nowLocal.year,
+      nowLocal.month,
+      nowLocal.day,
+    );
+    final createdLocal = createdAt?.toDate();
+    final isToday = createdLocal != null &&
+        !createdLocal.isBefore(startOfTodayLocal);
+
+    if (!isToday) {
+      return (Colors.grey, 'No auto send yet today');
+    }
+    if (status == 'failed') {
+      return (Colors.red, 'Auto Happy Hour failed');
+    }
+    if (status == 'queued' || status == 'in_progress') {
+      return (Colors.orange, 'Auto Happy Hour in progress');
+    }
+    if (status == 'completed' && sent > 0) {
+      return (Colors.green, 'Auto Happy Hour sent successfully');
+    }
+    return (Colors.grey, 'No auto send yet today');
+  }
+
+  String _computeNextActiveWindow(List<HappyHourConfig> configs) {
+    if (configs.isEmpty) return 'N/A';
+
+    final now = DateTime.now();
+    DateTime? best;
+    HappyHourConfig? bestConfig;
+
+    for (final config in configs) {
+      final time = _parseTime(config.startTime);
+      if (time == null) continue;
+
+      for (int delta = 0; delta <= 7; delta++) {
+        final day = now.add(Duration(days: delta));
+        final weekday = day.weekday % 7; // convert to 0=Sun..6=Sat
+        if (!config.activeDays.contains(weekday)) continue;
+
+        final candidate = DateTime(
+          day.year,
+          day.month,
+          day.day,
+          time.$1,
+          time.$2,
+        );
+        if (!candidate.isAfter(now)) continue;
+
+        if (best == null || candidate.isBefore(best)) {
+          best = candidate;
+          bestConfig = config;
+        }
+      }
+    }
+
+    if (best == null) return 'N/A';
+    final dayLabel = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+        [best.weekday % 7];
+    final hh = best.hour % 12 == 0 ? 12 : best.hour % 12;
+    final mm = best.minute.toString().padLeft(2, '0');
+    final ampm = best.hour >= 12 ? 'PM' : 'AM';
+    final name = bestConfig?.name ?? 'Config';
+    return '$dayLabel $hh:$mm $ampm ($name)';
+  }
+
+  (int, int)? _parseTime(String hhmm) {
+    final parts = hhmm.split(':');
+    if (parts.length != 2) return null;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return null;
+    return (h, m);
+  }
+
+  String _formatTimestamp(Timestamp? ts) {
+    if (ts == null) return 'N/A';
+    final d = ts.toDate();
+    final hh = d.hour % 12 == 0 ? 12 : d.hour % 12;
+    final mm = d.minute.toString().padLeft(2, '0');
+    final ampm = d.hour >= 12 ? 'PM' : 'AM';
+    return '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')} $hh:$mm $ampm';
+  }
+}
+
 class _AutomationSettingsCardState extends State<_AutomationSettingsCard> {
   late TextEditingController _titleController;
   late TextEditingController _bodyController;
@@ -540,7 +845,7 @@ class _AutomationSettingsCardState extends State<_AutomationSettingsCard> {
               'Management.',
             ),
             backgroundColor: Colors.green,
-            duration: const Duration(seconds: 4),
+            duration: Duration(seconds: 4),
           ),
         );
       }
@@ -1134,7 +1439,7 @@ class _HappyHourConfigDialogState extends State<_HappyHourConfigDialog> {
                               label: Text(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i]),
                               selected: _activeDays.contains(i),
                               onSelected: (_) => _toggleDay(i),
-                              selectedColor: Colors.orange.withOpacity(0.3),
+                              selectedColor: Colors.orange.withValues(alpha: 0.3),
                               checkmarkColor: Colors.orange,
                             ),
                         ],

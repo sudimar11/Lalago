@@ -55,21 +55,19 @@ class CartDatabase extends _$CartDatabase {
       : super(FlutterQueryExecutor.inDatabaseFolder(
             path: 'db.sqlite', logStatements: true));
 
-  addProduct(ProductModel model, CartDatabase cartDatabase,
+  Future<void> addProduct(ProductModel model, CartDatabase cartDatabase,
       bool isIncerementQuantity) async {
-    var joinTitleString = "";
-    String mainPrice = "";
-    List<AddAddonsDemo> lstAddOns = [];
-    List<String> lstAddOnsTemp = [];
-    double extrasPrice = 0.0;
+    try {
+      var joinTitleString = "";
+      String mainPrice = "";
+      List<AddAddonsDemo> lstAddOns = [];
+      List<String> lstAddOnsTemp = [];
+      double extrasPrice = 0.0;
 
-    SharedPreferences sp = await SharedPreferences.getInstance();
-    String addOns =
-        sp.getString("musics_key") != null ? sp.getString('musics_key')! : "";
+      final SharedPreferences sp = await SharedPreferences.getInstance();
+      final String addOns =
+          sp.getString("musics_key") ?? "";
 
-    bool isAddSame = false;
-
-    if (!isAddSame) {
       if (model.disPrice != null &&
           model.disPrice!.isNotEmpty &&
           double.parse(model.disPrice!) != 0) {
@@ -77,40 +75,35 @@ class CartDatabase extends _$CartDatabase {
       } else {
         mainPrice = model.price;
       }
-    }
 
-    if (addOns.isNotEmpty) {
-      lstAddOns = AddAddonsDemo.decode(addOns);
-      for (int a = 0; a < lstAddOns.length; a++) {
-        AddAddonsDemo newAddonsObject = lstAddOns[a];
-        if (newAddonsObject.categoryID == model.id) {
-          if (newAddonsObject.isCheck == true) {
-            lstAddOnsTemp.add(newAddonsObject.name!);
-            extrasPrice += (double.parse(newAddonsObject.price!));
+      if (addOns.isNotEmpty) {
+        lstAddOns = AddAddonsDemo.decode(addOns);
+        for (int a = 0; a < lstAddOns.length; a++) {
+          final AddAddonsDemo newAddonsObject = lstAddOns[a];
+          if (newAddonsObject.categoryID == model.id) {
+            if (newAddonsObject.isCheck == true) {
+              lstAddOnsTemp.add(newAddonsObject.name!);
+              extrasPrice += (double.parse(newAddonsObject.price!));
+            }
           }
         }
+        joinTitleString = lstAddOnsTemp.isEmpty ? "" : lstAddOnsTemp.join(",");
       }
 
-      joinTitleString = lstAddOnsTemp.isEmpty ? "" : lstAddOnsTemp.join(",");
-    }
+      final String compositeId = model.id +
+          "~" +
+          (model.variantInfo != null
+              ? model.variantInfo!.variantId.toString()
+              : "");
+      final List<CartProduct> products = await allCartProducts;
 
-    allCartProducts.then((products) async {
-      final bool _productIsInList = products.any((product) =>
-          product.id ==
-          (model.id +
-              "~" +
-              (model.variantInfo != null
-                  ? model.variantInfo!.variantId.toString()
-                  : "")));
-      if (_productIsInList) {
-        CartProduct element = products.firstWhere((product) =>
-            product.id ==
-            (model.id +
-                "~" +
-                (model.variantInfo != null
-                    ? model.variantInfo!.variantId.toString()
-                    : "")));
-        final now = DateTime.now();
+      final bool productIsInList =
+          products.any((product) => product.id == compositeId);
+
+      if (productIsInList) {
+        final CartProduct element =
+            products.firstWhere((product) => product.id == compositeId);
+        final DateTime now = DateTime.now();
         await cartDatabase.updateProduct(CartProduct(
             id: element.id,
             category_id: element.category_id,
@@ -131,13 +124,9 @@ class CartDatabase extends _$CartDatabase {
             lastModifiedAt: now,
             variant_info: element.variant_info));
       } else {
-        final now = DateTime.now();
-        CartProduct entity = CartProduct(
-            id: model.id +
-                "~" +
-                (model.variantInfo != null
-                    ? model.variantInfo!.variantId.toString()
-                    : ""),
+        final DateTime now = DateTime.now();
+        final CartProduct entity = CartProduct(
+            id: compositeId,
             category_id: model.categoryID,
             name: model.name,
             photo: model.photo,
@@ -150,13 +139,13 @@ class CartDatabase extends _$CartDatabase {
             variant_info: model.variantInfo,
             addedAt: now,
             lastModifiedAt: now);
-        if (products.where((element) => element.id == model.id).isEmpty) {
-          into(cartProducts).insert(entity);
-        } else {
-          updateProduct(entity);
-        }
+        await into(cartProducts).insert(entity);
       }
-    });
+    } catch (e, stackTrace) {
+      debugPrint("Error in addProduct: $e");
+      debugPrint("StackTrace: $stackTrace");
+      rethrow;
+    }
   }
 
   Future<void> reAddProduct(CartProduct cartProduct) async {

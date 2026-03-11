@@ -6,6 +6,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:foodie_driver/widgets/replacement_search_dialog.dart';
 import 'package:foodie_driver/ui/chat_screen/admin_driver_chat_screen.dart';
+import 'package:foodie_driver/ui/communication/unified_communication_hub_screen.dart';
 
 class OrderDetailsPage extends StatefulWidget {
   final Map<String, dynamic> order; // Pass the selected order data
@@ -620,6 +621,28 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
       appBar: AppBar(
         title: const Text('Order Details'),
         actions: [
+          IconButton(
+            tooltip: 'Restaurant Chat',
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: () {
+              final orderId = _getOrderId();
+              if (orderId.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Order ID missing')),
+                );
+                return;
+              }
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => UnifiedCommunicationHubScreen(
+                    initialTab: UnifiedCommunicationTab.restaurants,
+                    initialOrderId: orderId,
+                    autoOpenConversation: true,
+                  ),
+                ),
+              );
+            },
+          ),
           IconButton(
             tooltip: 'Admin Messages',
             icon: const Icon(Icons.support_agent),

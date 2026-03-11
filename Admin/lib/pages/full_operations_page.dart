@@ -50,6 +50,7 @@ import 'package:brgy/pages/dispatch_analytics_page.dart';
 import 'package:brgy/pages/rider_overview_page.dart';
 import 'package:brgy/pages/ash_notification_tester.dart';
 import 'package:brgy/pages/user_role_management.dart';
+import 'package:brgy/pages/communication_analytics_page.dart';
 import 'package:brgy/utils/admin_permission_helpers.dart';
 import 'package:brgy/main.dart';
 
@@ -205,6 +206,7 @@ class FullOperationsPage extends StatelessWidget {
               _NavItem('Analytics today', Icons.analytics, () => _push(context, const AnalyticsTodayPage())),
               _NavItem('Analytics (week)', Icons.analytics_outlined, () => _push(context, const AnalyticsWeeklyPage())),
               _NavItem('Dispatch analytics', Icons.local_shipping, () => _push(context, const DispatchAnalyticsPage())),
+              _NavItem('Communication analytics', Icons.chat, () => _push(context, const CommunicationAnalyticsPage())),
             ],
           ),
         ],

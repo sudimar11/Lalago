@@ -10,11 +10,11 @@ class MessageBadgePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // A collectionGroup query on subcollection "thread"
-    // where 'receiverId' == vendorId and 'isread' == false
+    // where 'receiverId' == vendorId and 'isRead' == false
     final unreadMessagesStream = FirebaseFirestore.instance
         .collectionGroup('thread')
         .where('receiverId', isEqualTo: vendorId)
-        .where('isread', isEqualTo: false)
+        .where('isRead', isEqualTo: false)
         .snapshots();
 
     return Scaffold(

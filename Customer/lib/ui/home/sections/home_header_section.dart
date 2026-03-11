@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/services/helper.dart';
-import 'package:foodie_customer/services/chat_read_service.dart';
 import 'dart:async';
 import 'dart:developer';
 
@@ -81,7 +80,7 @@ class HomeHeaderSection extends StatelessWidget {
   final Function(String?) onOrderTypeChanged;
   final VoidCallback onLocationTap;
   final VoidCallback onSearchTap;
-  final VoidCallback onMessageTap;
+  final VoidCallback? onMessageTap;
   final VoidCallback onFavoriteTap;
 
   const HomeHeaderSection({
@@ -91,7 +90,7 @@ class HomeHeaderSection extends StatelessWidget {
     required this.onOrderTypeChanged,
     required this.onLocationTap,
     required this.onSearchTap,
-    required this.onMessageTap,
+    this.onMessageTap,
     required this.onFavoriteTap,
   }) : super(key: key);
 
@@ -134,108 +133,6 @@ class HomeHeaderSection extends StatelessWidget {
                         ],
                       ),
                       const Spacer(),
-                      // Message icon
-                      GestureDetector(
-                        onTap: onMessageTap,
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: const Icon(
-                                Icons.chat_bubble_outline,
-                                color: Colors.white,
-                                size: 24,
-                              ),
-                            ),
-                            Positioned(
-                              top: 0,
-                              right: 0,
-                              child: Builder(
-                                builder: (context) {
-                                  if (MyAppState.currentUser == null) {
-                                    _badgeLog(
-                                        'HomeHeader badge - User is null, hiding badge');
-                                    return const SizedBox.shrink();
-                                  }
-
-                                  final userID = MyAppState.currentUser!.userID;
-                                  if (userID.isEmpty) {
-                                    _badgeLog(
-                                        'HomeHeader badge - userID is empty, hiding badge');
-                                    return const SizedBox.shrink();
-                                  }
-
-                                  _badgeLog(
-                                      'HomeHeader badge - Initializing StreamBuilder for userID: $userID');
-                                  return StreamBuilder<int>(
-                                    stream: ChatReadService
-                                        .getTotalUnreadCountStream(userID),
-                                    builder: (context, snapshot) {
-                                      _badgeLog(
-                                          'HomeHeader badge - ConnectionState: ${snapshot.connectionState}, hasData: ${snapshot.hasData}, hasError: ${snapshot.hasError}, data: ${snapshot.data}');
-                                      if (snapshot.hasError) {
-                                        _badgeLog(
-                                            'HomeHeader badge - Error: ${snapshot.error}');
-                                      }
-
-                                      final totalUnread = snapshot.data ?? 0;
-                                      _badgeLog(
-                                          'HomeHeader badge - Total unread: $totalUnread');
-
-                                      if (snapshot.connectionState ==
-                                          ConnectionState.waiting) {
-                                        _badgeLog(
-                                            'HomeHeader badge - Waiting for unread count, hiding badge');
-                                        return const SizedBox.shrink();
-                                      }
-
-                                      if (totalUnread <= 0) {
-                                        _badgeLog(
-                                            'HomeHeader badge - Count is 0 or negative, hiding badge');
-                                        return const SizedBox.shrink();
-                                      }
-
-                                      _badgeLog(
-                                          'HomeHeader badge - ✅ Showing badge with count: $totalUnread');
-
-                                      final displayCount = totalUnread > 99
-                                          ? '99+'
-                                          : '$totalUnread';
-                                      final badgeSize =
-                                          totalUnread > 99 ? 24.0 : 18.0;
-
-                                      return Container(
-                                        width: badgeSize,
-                                        height: badgeSize,
-                                        decoration: const BoxDecoration(
-                                          color: Colors.red,
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: Center(
-                                          child: Text(
-                                            displayCount,
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
                       // Favorite icon
                       GestureDetector(
                         onTap: onFavoriteTap,

@@ -19,6 +19,9 @@ class _NotificationManagementPageState
   final _bodyController = TextEditingController();
   final _imageUrlController = TextEditingController();
   final _deepLinkController = TextEditingController();
+  final _smartHungerLunchController = TextEditingController();
+  final _smartHungerSnackController = TextEditingController();
+  final _smartHungerDinnerController = TextEditingController();
 
   String _notificationType = 'announcement';
   String? _targetScreen;
@@ -27,6 +30,14 @@ class _NotificationManagementPageState
   bool _loadingSegmentCounts = true;
   bool _isSending = false;
   String _campaignFilter = 'all';
+  bool _loadingSmartHunger = true;
+  bool _smartHungerEnabled = true;
+  String _smartHungerFrequencyMode = 'recommended';
+  Map<String, bool> _smartHungerWindows = const {
+    'lunch': true,
+    'snack': true,
+    'dinner': true,
+  };
 
   final List<String> _targetScreenOptions = [
     'home',
@@ -39,6 +50,94 @@ class _NotificationManagementPageState
   void initState() {
     super.initState();
     _loadSegmentCounts();
+    _loadSmartHungerSettings();
+  }
+
+  Future<void> _loadSmartHungerSettings() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('config')
+          .doc('smart_hunger_settings')
+          .get();
+      final data = doc.data() ?? {};
+      final windowsRaw = data['windows'];
+      final customMessagesRaw = data['customMessages'];
+      final windows = windowsRaw is Map
+          ? <String, bool>{
+              'lunch': windowsRaw['lunch'] is bool
+                  ? windowsRaw['lunch'] as bool
+                  : true,
+              'snack': windowsRaw['snack'] is bool
+                  ? windowsRaw['snack'] as bool
+                  : true,
+              'dinner': windowsRaw['dinner'] is bool
+                  ? windowsRaw['dinner'] as bool
+                  : true,
+            }
+          : <String, bool>{
+              'lunch': true,
+              'snack': true,
+              'dinner': true,
+            };
+      final customMessages = customMessagesRaw is Map
+          ? <String, String>{
+              'lunch': (customMessagesRaw['lunch'] ?? '').toString(),
+              'snack': (customMessagesRaw['snack'] ?? '').toString(),
+              'dinner': (customMessagesRaw['dinner'] ?? '').toString(),
+            }
+          : <String, String>{
+              'lunch': '',
+              'snack': '',
+              'dinner': '',
+            };
+      _smartHungerLunchController.text = customMessages['lunch'] ?? '';
+      _smartHungerSnackController.text = customMessages['snack'] ?? '';
+      _smartHungerDinnerController.text = customMessages['dinner'] ?? '';
+      if (!mounted) return;
+      setState(() {
+        _smartHungerEnabled = data['enabled'] != false;
+        _smartHungerFrequencyMode =
+            (data['frequencyMode'] as String?) == 'less'
+                ? 'less'
+                : 'recommended';
+        _smartHungerWindows = windows;
+        _loadingSmartHunger = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadingSmartHunger = false;
+      });
+    }
+  }
+
+  Future<void> _saveSmartHungerSettings() async {
+    try {
+      await FirebaseFirestore.instance
+          .collection('config')
+          .doc('smart_hunger_settings')
+          .set({
+        'enabled': _smartHungerEnabled,
+        'frequencyMode': _smartHungerFrequencyMode,
+        'windows': _smartHungerWindows,
+        'customMessages': {
+          'lunch': _smartHungerLunchController.text.trim(),
+          'snack': _smartHungerSnackController.text.trim(),
+          'dinner': _smartHungerDinnerController.text.trim(),
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Smart Hunger settings saved')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showErrorDialog(
+        title: 'Failed to save Smart Hunger settings',
+        error: e,
+      );
+    }
   }
 
   Future<void> _loadSegmentCounts() async {
@@ -148,6 +247,9 @@ class _NotificationManagementPageState
     _bodyController.dispose();
     _imageUrlController.dispose();
     _deepLinkController.dispose();
+    _smartHungerLunchController.dispose();
+    _smartHungerSnackController.dispose();
+    _smartHungerDinnerController.dispose();
     super.dispose();
   }
 
@@ -392,6 +494,160 @@ class _NotificationManagementPageState
     );
   }
 
+  Widget _buildSmartHungerControls() {
+    return Card(
+      elevation: 4,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Smart Hunger Controls',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Central admin controls for automatic lunch, snack, and '
+              'dinner reminders.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+            const SizedBox(height: 12),
+            if (_loadingSmartHunger)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            else ...[
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Enable Smart Hunger Notifications'),
+                value: _smartHungerEnabled,
+                onChanged: (v) {
+                  setState(() => _smartHungerEnabled = v);
+                },
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Frequency mode'),
+                subtitle: const Text(
+                  'Recommended: up to 2/day, Less: max 1/day',
+                ),
+                trailing: DropdownButton<String>(
+                  value: _smartHungerFrequencyMode,
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'recommended',
+                      child: Text('Recommended'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'less',
+                      child: Text('Less'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => _smartHungerFrequencyMode = v);
+                  },
+                ),
+              ),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Lunch window'),
+                value: _smartHungerWindows['lunch'] ?? true,
+                onChanged: (v) {
+                  setState(() {
+                    _smartHungerWindows = {
+                      ..._smartHungerWindows,
+                      'lunch': v,
+                    };
+                  });
+                },
+              ),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Afternoon snack window'),
+                value: _smartHungerWindows['snack'] ?? true,
+                onChanged: (v) {
+                  setState(() {
+                    _smartHungerWindows = {
+                      ..._smartHungerWindows,
+                      'snack': v,
+                    };
+                  });
+                },
+              ),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Dinner window'),
+                value: _smartHungerWindows['dinner'] ?? true,
+                onChanged: (v) {
+                  setState(() {
+                    _smartHungerWindows = {
+                      ..._smartHungerWindows,
+                      'dinner': v,
+                    };
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _smartHungerLunchController,
+                decoration: const InputDecoration(
+                  labelText: 'Lunch message (optional)',
+                  hintText: 'Custom lunch notification message',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 2,
+                textCapitalization: TextCapitalization.sentences,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _smartHungerSnackController,
+                decoration: const InputDecoration(
+                  labelText: 'Snack message (optional)',
+                  hintText: 'Custom snack notification message',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 2,
+                textCapitalization: TextCapitalization.sentences,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _smartHungerDinnerController,
+                decoration: const InputDecoration(
+                  labelText: 'Dinner message (optional)',
+                  hintText: 'Custom dinner notification message',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 2,
+                textCapitalization: TextCapitalization.sentences,
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ElevatedButton.icon(
+                  onPressed: _saveSmartHungerSettings,
+                  icon: const Icon(Icons.save),
+                  label: const Text('Save Smart Hunger Settings'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   IconData _getTypeIcon() {
     switch (_notificationType) {
       case 'announcement':
@@ -534,6 +790,10 @@ class _NotificationManagementPageState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Live Preview Card
+              _buildSmartHungerControls(),
+              const SizedBox(height: 24),
+
               // Live Preview Card
               Card(
                 elevation: 4,

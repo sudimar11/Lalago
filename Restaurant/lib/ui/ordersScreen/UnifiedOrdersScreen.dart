@@ -182,6 +182,18 @@ class UnifiedOrdersScreenState extends State<UnifiedOrdersScreen>
     _tabController.animateTo(tab.index);
   }
 
+  void showExportSheet() => showExportOrdersSheet(context);
+
+  Future<void> showFilterSheet() async {
+    final result = await showOrderFilterBottomSheet(
+      context,
+      initial: _filterState,
+    );
+    if (result != null && mounted) {
+      setState(() => _filterState = result);
+    }
+  }
+
   Future<void> initializeData() async {
     await setCurrency();
     final vendorID = MyAppState.currentUser?.vendorID;
@@ -347,25 +359,9 @@ class UnifiedOrdersScreenState extends State<UnifiedOrdersScreen>
         backgroundColor:
             isDarkMode(context) ? Color(DARK_CARD_BG_COLOR) : Colors.white,
         elevation: 0,
-        title: const Text('orders'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.upload_file),
-            onPressed: () => showExportOrdersSheet(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.filter_list),
-            onPressed: () async {
-              final result = await showOrderFilterBottomSheet(
-                context,
-                initial: _filterState,
-              );
-              if (result != null && mounted) {
-                setState(() => _filterState = result);
-              }
-            },
-          ),
-        ],
+        toolbarHeight: 0,
+        automaticallyImplyLeading: false,
+        titleSpacing: 0,
         bottom: TabBar(
           controller: _tabController,
           labelColor: Color(COLOR_PRIMARY),
@@ -635,8 +631,10 @@ class _ActiveTabContentState extends State<_ActiveTabContent> {
     }
     return StreamBuilder<List<OrderModel>>(
       stream: widget.ordersStream,
+      initialData: <OrderModel>[],
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {
@@ -651,13 +649,11 @@ class _ActiveTabContentState extends State<_ActiveTabContent> {
             widget.filterState,
           ),
           builder: (context, filterSnap) {
-            final orders = filterSnap.data ?? [];
-            if (filterSnap.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
+            final rawOrders = snapshot.data ?? <OrderModel>[];
+            final orders =
+                filterSnap.hasData ? filterSnap.data! : rawOrders;
             return Column(
           children: [
-            _buildPerfCard(),
             Expanded(
               child: orders.isEmpty
                   ? showEmptyState(
@@ -704,239 +700,6 @@ class _ActiveTabContentState extends State<_ActiveTabContent> {
     );
   }
 
-  Widget _buildPerfCard() {
-    return Container(
-      margin: const EdgeInsets.all(20),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDarkMode(context) ? Color(DARK_CARD_BG_COLOR) : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: FutureBuilder<Map<String, dynamic>>(
-        future: _calculateAveragePreparationTime(),
-        builder: (context, avgSnapshot) {
-          if (avgSnapshot.connectionState == ConnectionState.waiting) {
-            return Row(
-              children: [
-                const CircularProgressIndicator(),
-                const SizedBox(width: 16),
-                Text(
-                  'Calculating average preparation time...',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                    color: isDarkMode(context) ? Colors.white : Colors.black,
-                  ),
-                ),
-              ],
-            );
-          }
-          if (avgSnapshot.hasError || !avgSnapshot.hasData) {
-            return Text(
-              'Unable to calculate average preparation time',
-              style: TextStyle(fontSize: 16, color: Colors.grey),
-            );
-          }
-          final data = avgSnapshot.data!;
-          final avgMinutes = data['avgMinutes'] as double;
-          final totalOrders = data['totalOrders'] as int;
-          final rating = data['rating'] as String;
-          final stars = data['stars'] as int;
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Today\'s Performance',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: isDarkMode(context) ? Colors.white : Colors.black,
-                    ),
-                  ),
-                  Icon(Icons.analytics, color: Color(COLOR_PRIMARY), size: 24),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Average Preparation Time',
-                            style: TextStyle(
-                                fontSize: 14, color: Colors.grey.shade600)),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${avgMinutes.toStringAsFixed(1)} minutes',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Color(COLOR_PRIMARY),
-                          ),
-                        ),
-                        Text('Based on $totalOrders orders today',
-                            style: TextStyle(
-                                fontSize: 12, color: Colors.grey.shade500)),
-                      ],
-                    ),
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text('Rating',
-                          style: TextStyle(
-                              fontSize: 14, color: Colors.grey.shade600)),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: List.generate(
-                            5,
-                            (i) => Icon(
-                                  i < stars ? Icons.star : Icons.star_border,
-                                  color: i < stars ? Colors.amber : Colors.grey,
-                                  size: 20,
-                                )),
-                      ),
-                      Text(
-                        rating,
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: _getRatingColor(rating)),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Color _getRatingColor(String rating) {
-    switch (rating) {
-      case 'Excellent':
-        return Colors.green;
-      case 'Good':
-        return Colors.lightGreen;
-      case 'Average':
-        return Colors.orange;
-      case 'Below Avg':
-        return Colors.deepOrange;
-      case 'Poor':
-        return Colors.red;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  Future<Map<String, dynamic>> _calculateAveragePreparationTime() async {
-    try {
-      final vendorID = MyAppState.currentUser?.vendorID;
-      if (vendorID == null) {
-        return {
-          'avgMinutes': 0.0,
-          'totalOrders': 0,
-          'rating': 'No Data',
-          'stars': 0,
-        };
-      }
-      final now = DateTime.now();
-      final startOfDay = DateTime(now.year, now.month, now.day);
-      final endOfDay = startOfDay.add(const Duration(days: 1));
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection('restaurant_orders')
-          .where('vendorID', isEqualTo: vendorID)
-          .where('status',
-              whereIn: ['Order Shipped', 'Order Completed', 'Order Delivered'])
-          .where('createdAt',
-              isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-          .where('createdAt', isLessThan: Timestamp.fromDate(endOfDay))
-          .get();
-
-      if (querySnapshot.docs.isEmpty) {
-        return {
-          'avgMinutes': 0.0,
-          'totalOrders': 0,
-          'rating': 'No Data',
-          'stars': 0,
-        };
-      }
-      double totalPreparationTime = 0.0;
-      int validOrders = 0;
-      for (final doc in querySnapshot.docs) {
-        final data = doc.data();
-        final createdAt = data['createdAt'] as Timestamp?;
-        final shippedAt = data['shippedAt'] as Timestamp?;
-        final deliveredAt = data['deliveredAt'] as Timestamp?;
-        if (createdAt != null) {
-          DateTime? endTime =
-              deliveredAt != null ? deliveredAt.toDate() : shippedAt?.toDate();
-          if (endTime != null) {
-            final minutes =
-                endTime.difference(createdAt.toDate()).inMinutes;
-            if (minutes >= 1 && minutes <= 120) {
-              totalPreparationTime += minutes;
-              validOrders++;
-            }
-          }
-        }
-      }
-      if (validOrders == 0) {
-        return {
-          'avgMinutes': 0.0,
-          'totalOrders': 0,
-          'rating': 'No Data',
-          'stars': 0,
-        };
-      }
-      const T = 20.0;
-      final avg = totalPreparationTime / validOrders;
-      String rating;
-      int stars;
-      if (avg <= 0.8 * T) {
-        rating = 'Excellent';
-        stars = 5;
-      } else if (avg <= T) {
-        rating = 'Good';
-        stars = 4;
-      } else if (avg <= 1.2 * T) {
-        rating = 'Average';
-        stars = 3;
-      } else if (avg <= 1.5 * T) {
-        rating = 'Below Avg';
-        stars = 2;
-      } else {
-        rating = 'Poor';
-        stars = 1;
-      }
-      return {
-        'avgMinutes': avg,
-        'totalOrders': validOrders,
-        'rating': rating,
-        'stars': stars,
-      };
-    } catch (e) {
-      return {
-        'avgMinutes': 0.0,
-        'totalOrders': 0,
-        'rating': 'Error',
-        'stars': 0,
-      };
-    }
-  }
 }
 
 class _CompletedTabContent extends StatelessWidget {
@@ -995,8 +758,10 @@ class _CompletedTabContent extends StatelessWidget {
         Expanded(
           child: StreamBuilder<List<OrderModel>>(
             stream: completedOrdersStream,
+            initialData: <OrderModel>[],
             builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
+              if (snapshot.connectionState == ConnectionState.waiting &&
+                  !snapshot.hasData) {
                 return const Center(child: CircularProgressIndicator());
               }
               if (snapshot.hasError) {
@@ -1011,10 +776,9 @@ class _CompletedTabContent extends StatelessWidget {
                   filterState,
                 ),
                 builder: (context, filterSnap) {
-                  final orders = filterSnap.data ?? [];
-                  if (filterSnap.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
+                  final rawOrders = snapshot.data ?? <OrderModel>[];
+                  final orders =
+                      filterSnap.hasData ? filterSnap.data! : rawOrders;
                   if (orders.isEmpty) {
                 return showEmptyState(
                     searchQuery.isEmpty

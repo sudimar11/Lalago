@@ -256,6 +256,20 @@ class FireStoreUtils {
             .toList());
   }
 
+  Future<List<RatingModel>> getReviewsByVendorOnce(String vendorId) async {
+    final snap = await firestore
+        .collection(Order_Rating)
+        .where('VendorId', isEqualTo: vendorId)
+        .get();
+    return snap.docs
+        .map((doc) => RatingModel.fromJson({
+              ...doc.data(),
+              'Id': doc.id,
+              'id': doc.id,
+            }))
+        .toList();
+  }
+
   Future<void> addReviewReply(
     String reviewId,
     String text, {
@@ -901,7 +915,6 @@ class FireStoreUtils {
   }
 
   Stream<List<OrderModel>> watchOrdersPlaced(String vendorID) async* {
-    // broadcast so multiple listeners can share it
     final controller = StreamController<List<OrderModel>>.broadcast();
 
     firestore
@@ -927,8 +940,9 @@ class FireStoreUtils {
             }
           }
           controller.add(orders);
-        });
+        }, onError: (e) => print('Error listening to orders stream: $e'));
 
+    yield <OrderModel>[];
     yield* controller.stream;
   }
 
@@ -1010,6 +1024,7 @@ class FireStoreUtils {
           controller.add(orders);
         });
 
+    yield <OrderModel>[];
     yield* controller.stream;
   }
 

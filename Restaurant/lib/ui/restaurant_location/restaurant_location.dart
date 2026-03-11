@@ -10,7 +10,7 @@ import 'package:foodie_restaurant/model/VendorModel.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
 import 'package:foodie_restaurant/ui/container/ContainerScreen.dart';
-import 'package:foodie_restaurant/ui/ordersScreen/OrdersScreen.dart';
+import 'package:foodie_restaurant/ui/ordersScreen/UnifiedOrdersScreen.dart';
 import 'package:geoflutterfire2/geoflutterfire2.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:place_picker_v2/entities/location_result.dart';
@@ -805,7 +805,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
             context,
             ContainerScreen(
               user: MyAppState.currentUser!,
-              currentWidget: OrdersScreen(),
+              currentWidget: UnifiedOrdersScreen(),
               appBarTitle: 'Orders',
               drawerSelection: DrawerSelection.Orders,
             ),
@@ -840,7 +840,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
             context,
             ContainerScreen(
               user: MyAppState.currentUser!,
-              currentWidget: OrdersScreen(),
+              currentWidget: UnifiedOrdersScreen(),
               appBarTitle: 'Orders',
               drawerSelection: DrawerSelection.Orders,
             ),

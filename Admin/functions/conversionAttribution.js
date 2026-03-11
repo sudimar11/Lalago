@@ -8,6 +8,7 @@ const AnalyticsTracker = require('./analyticsTracker');
 const ANALYTICS = require('./analyticsConstants');
 
 const ATTRIBUTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const HUNGER_2H_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 function getDb() {
   if (!admin.apps.length) {
@@ -80,6 +81,50 @@ exports.trackOrderAttribution = functions
         );
         console.log(
           `[trackOrderAttribution] Attributed order ${orderId} to ${source}`,
+        );
+        return null;
+      }
+
+      const twoHoursStart = new Date(
+        orderCreatedAt.getTime() - HUNGER_2H_WINDOW_MS,
+      );
+      const twoHoursStartTs =
+        admin.firestore.Timestamp.fromDate(twoHoursStart);
+
+      const hunger2hSnap = await db
+        .collection(ANALYTICS.COLLECTIONS.NOTIFICATION_HISTORY)
+        .where('userId', '==', userId)
+        .where('type', '==', 'ash_hunger')
+        .where('sentAt', '>=', twoHoursStartTs)
+        .orderBy('sentAt', 'desc')
+        .limit(5)
+        .get();
+
+      const hungerNotif = hunger2hSnap.docs.find((d) => {
+        const sentAt = d.data().sentAt?.toDate?.();
+        return (
+          sentAt &&
+          orderCreatedAt.getTime() - sentAt.getTime() <= HUNGER_2H_WINDOW_MS &&
+          sentAt <= orderCreatedAt
+        );
+      });
+
+      if (hungerNotif) {
+        await AnalyticsTracker.trackConversion(
+          userId,
+          'notification',
+          hungerNotif.id,
+          orderId,
+          orderValue,
+        );
+        await db
+          .collection(ANALYTICS.COLLECTIONS.NOTIFICATION_HISTORY)
+          .doc(hungerNotif.id)
+          .update({
+            attributionWindow: '2h',
+          });
+        console.log(
+          `[trackOrderAttribution] Attributed order ${orderId} to hunger notification (2h)`,
         );
         return null;
       }

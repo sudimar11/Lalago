@@ -1,6 +1,6 @@
 const DEFAULTS = {
   MAX_PER_DAY: 3,
-  MIN_HOURS_BETWEEN: 2,
+  MIN_HOURS_BETWEEN: 4,
   PER_TYPE_LIMITS: {
     ash_reorder: { days: 1, max: 1 },
     ash_recommendation: { days: 3, max: 1 },

@@ -75,9 +75,9 @@ class ArrayValidationService {
 
       if (remaining.isEmpty) {
         final data = updatedDoc.data();
-        final checkedIn = data?['checkedInToday'] == true;
         final online = data?['isOnline'] == true;
-        final isAvailable = checkedIn && online;
+        final onBreak = (data?['riderAvailability'] ?? '') == 'on_break';
+        final isAvailable = online && !onBreak;
         await _fs
             .collection('users')
             .doc(riderId)

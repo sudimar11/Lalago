@@ -522,12 +522,74 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
+  Widget _buildCommunicationAttentionIndicator(OrderModel orderModel) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('order_messages')
+          .doc(orderModel.id)
+          .collection('messages')
+          .where('senderType', isEqualTo: 'rider')
+          .where('isRead', isEqualTo: false)
+          .limit(1)
+          .snapshots(),
+      builder: (context, unreadSnapshot) {
+        return StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('order_communications')
+              .doc(orderModel.id)
+              .collection('issues')
+              .where('state', whereIn: ['opened', 'acknowledged', 'resolved'])
+              .limit(1)
+              .snapshots(),
+          builder: (context, issueSnapshot) {
+            final hasUnreadDriverMessage =
+                (unreadSnapshot.data?.docs.isNotEmpty ?? false);
+            final hasActiveIssue = (issueSnapshot.data?.docs.isNotEmpty ?? false);
+            if (!hasUnreadDriverMessage && !hasActiveIssue) {
+              return const SizedBox.shrink();
+            }
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: hasActiveIssue ? Colors.red : Colors.orange,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.notifications_active,
+                    size: 14,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    hasActiveIssue
+                        ? 'Active issue needs attention'
+                        : 'Unread rider message',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget buildOrderContent(OrderModel orderModel) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _buildCommunicationAttentionIndicator(orderModel),
           _buildArrivalIndicator(orderModel),
           // Customer & Delivery Info
           Row(
@@ -1441,119 +1503,25 @@ class _OrdersScreenState extends State<OrdersScreen> {
 Future<Map<String, String?>> assignOrderToDriver(
     BuildContext context, OrderModel orderModel) async {
   try {
-    List<Map<String, dynamic>> drivers = [];
-    String? nearestDriverId;
-    double? nearestDistance;
-    String? driverName;
-    String? driverPhoto;
-
-    // Haversine formula
-    double calculateDistance(
-        double lat1, double lon1, double lat2, double lon2) {
-      const R = 6371;
-      final dLat = (lat2 - lat1) * (pi / 180);
-      final dLon = (lon2 - lon1) * (pi / 180);
-      final a = sin(dLat / 2) * sin(dLat / 2) +
-          cos(lat1 * (pi / 180)) *
-              cos(lat2 * (pi / 180)) *
-              sin(dLon / 2) *
-              sin(dLon / 2);
-      final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-      return R * c;
-    }
-
-    // Fetch only active drivers
-    Future<void> fetchDrivers() async {
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection("users")
-          .where("role", isEqualTo: "driver")
-          .where("isActive", isEqualTo: true)
-          .get();
-
-      drivers = querySnapshot.docs.map((doc) {
-        final data = doc.data();
-        final dist = calculateDistance(
-          orderModel.vendor.latitude,
-          orderModel.vendor.longitude,
-          data['location']['latitude'] ?? 0.0,
-          data['location']['longitude'] ?? 0.0,
-        );
-        return {
-          "id": doc.id,
-          "data": data,
-          "distance": dist,
-        };
-      }).toList();
-
-      drivers.sort((a, b) =>
-          (a["distance"] as double).compareTo(b["distance"] as double));
-
-      if (drivers.isNotEmpty) {
-        final nearest = drivers.first;
-        nearestDriverId = nearest["id"] as String;
-        nearestDistance = nearest["distance"] as double;
-        driverName =
-            "${nearest["data"]['firstName']} ${nearest["data"]['lastName']}";
-        driverPhoto = nearest["data"]['profilePictureURL'] as String?;
-      }
-    }
-
-    // Recursive assignment
-    Future<void> assignDriver() async {
-      await fetchDrivers();
-
-      if (nearestDriverId == null) {
-        // no active drivers found; wait and retry
-        await Future.delayed(const Duration(seconds: 10));
-        return assignDriver();
-      }
-
-      // double-check that this driver is still active
-      final userSnap = await FirebaseFirestore.instance
-          .collection("users")
-          .doc(nearestDriverId)
-          .get();
-      final stillActive = (userSnap.data()?['isActive'] ?? false) as bool;
-      if (!stillActive) {
-        // remove and retry with next driver
-        drivers.removeWhere((d) => d["id"] == nearestDriverId);
-        nearestDriverId = null;
-        return assignDriver();
-      }
-
-      // perform the assignment
-      await FirebaseFirestore.instance
-          .collection("restaurant_orders")
-          .doc(orderModel.id)
-          .update({
-        "status": "Driver Assigned",
-        "driverID": nearestDriverId,
-        "driverDistance": nearestDistance,
-      });
-
-      await FirebaseFirestore.instance
-          .collection("users")
-          .doc(nearestDriverId)
-          .update({
-        "isActive": false,
-        "inProgressOrderID": FieldValue.arrayUnion([orderModel.id]),
-      });
-    }
-
-    // kick off
-    await assignDriver();
+    // Client-side direct assignment is deprecated.
+    // Trigger backend dispatcher by setting order to dispatchable state.
+    await FirebaseFirestore.instance
+        .collection("restaurant_orders")
+        .doc(orderModel.id)
+        .update({
+      "status": "Order Accepted",
+      "dispatch.lock": false,
+      "dispatch.lastRetriggerAt": FieldValue.serverTimestamp(),
+    });
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Order successfully assigned to the nearest driver!'),
+        content: Text('Order queued for automatic rider dispatch.'),
         backgroundColor: Colors.green,
       ),
     );
 
-    return {
-      "driverName": driverName,
-      "driverPhoto": driverPhoto,
-    };
+    return {};
   } catch (e, stackTrace) {
     print("Error in assignOrderToDriver: $e\n$stackTrace");
     ScaffoldMessenger.of(context).showSnackBar(

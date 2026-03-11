@@ -89,6 +89,9 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   StreamSubscription<int>? _weeklyVisitSub;
   bool _hasLoggedFirstFrame = false;
 
+  /// Fresh vendor from Firestore (has publicMetrics after backfill).
+  VendorModel? _freshVendorModel;
+
   @override
   void initState() {
     super.initState();
@@ -100,7 +103,15 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
     log("ETO: ${widget.vendorModel.categoryID}");
     statusCheck();
     _checkFavoriteStatus();
+    _refreshVendorMetrics();
     WidgetsBinding.instance.addPostFrameCallback((_) => _startVisitorTracking());
+  }
+
+  Future<void> _refreshVendorMetrics() async {
+    final fresh = await FireStoreUtils.getVendor(widget.vendorModel.id);
+    if (fresh != null && mounted) {
+      setState(() => _freshVendorModel = fresh);
+    }
   }
 
   void _onScroll() {
@@ -651,12 +662,14 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
         SliverPersistentHeader(
           delegate: VendorHeaderDelegate(
               context: context,
-              vendorModel: widget.vendorModel,
+              vendorModel: _freshVendorModel ?? widget.vendorModel,
               expandedHeight: expandedHeight,
               isOpen: isOpen,
               hideCollapsedAppBar: true,
               onViewPhotos: () => push(
-                  context, RestaurantPhotos(vendorModel: widget.vendorModel)),
+                  context,
+                  RestaurantPhotos(
+                      vendorModel: _freshVendorModel ?? widget.vendorModel)),
               searchController: searchController,
               onSearchChanged: (query) {
                 filterProducts(query);

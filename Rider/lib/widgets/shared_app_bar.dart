@@ -5,7 +5,9 @@ import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/widgets/hours_online_widget.dart';
 import 'package:foodie_driver/widgets/outside_service_area_timer_widget.dart';
 import 'package:foodie_driver/ui/profile/IncentiveScreen.dart';
+import 'package:foodie_driver/ui/communication/unified_communication_hub_screen.dart';
 import 'package:foodie_driver/ui/ordersScreen/OrderHistoryScreen.dart';
+import 'package:foodie_driver/services/unified_inbox_service.dart';
 
 class SharedAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String title;
@@ -61,6 +63,61 @@ class SharedAppBar extends StatelessWidget implements PreferredSizeWidget {
                 )
               else
                 HoursOnlineWidget(user: user),
+              StreamBuilder<int>(
+                stream: UnifiedInboxService.getTotalUnreadCountStream(
+                  user.userID,
+                ),
+                builder: (context, snapshot) {
+                  final unread = snapshot.data ?? 0;
+                  return Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      IconButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  const UnifiedCommunicationHubScreen(),
+                            ),
+                          );
+                        },
+                        icon: Icon(
+                          Icons.chat_bubble_outline,
+                          color: isDarkMode(context)
+                              ? Colors.white
+                              : Colors.black,
+                        ),
+                      ),
+                      if (unread > 0)
+                        Positioned(
+                          right: 6,
+                          top: 6,
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 16,
+                              minHeight: 16,
+                            ),
+                            child: Text(
+                              unread > 99 ? '99+' : '$unread',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
               // Order history icon
               IconButton(
                 onPressed: () {
@@ -97,8 +154,7 @@ class SharedAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 
   Widget _buildAttendanceChip(BuildContext context) {
-    final isCheckedIn = user.checkedInToday == true;
-    final isCheckedOut = user.checkedOutToday == true;
+    final isOnline = user.isOnline == true;
 
     final Color bgColor;
     final Color fgColor;
@@ -106,24 +162,18 @@ class SharedAppBar extends StatelessWidget implements PreferredSizeWidget {
     final String label;
     final bool enabled;
 
-    if (!isCheckedIn) {
+    if (!isOnline) {
       bgColor = Colors.green;
       fgColor = Colors.white;
       icon = Icons.login;
-      label = 'In';
+      label = 'Online';
       enabled = true;
-    } else if (!isCheckedOut) {
+    } else {
       bgColor = Colors.blue;
       fgColor = Colors.white;
       icon = Icons.logout;
-      label = 'Out';
+      label = 'Offline';
       enabled = true;
-    } else {
-      bgColor = Colors.grey.shade400;
-      fgColor = Colors.white;
-      icon = Icons.check;
-      label = 'Done';
-      enabled = false;
     }
 
     return Padding(

@@ -2,31 +2,71 @@ import 'dart:async';
 import 'dart:developer';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:foodie_customer/services/performance_logger.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/services/restaurant_status_service.dart';
 
+/// Cache entry for vendor status to reduce Firestore reads.
+class _VendorStatusCacheEntry {
+  final Map<String, Map<String, dynamic>> statusMap;
+  final DateTime lastUpdated;
+
+  const _VendorStatusCacheEntry(this.statusMap, this.lastUpdated);
+}
+
 /// Syncs local cart state to Firestore for server-side cart recovery.
 class CartSyncService {
   static const int abandonmentHours = 2;
+  static const Duration _debounceDelay = Duration(milliseconds: 500);
+  static const Duration _vendorStatusCacheTtl = Duration(seconds: 30);
 
   static StreamSubscription<List<CartProduct>>? _cartSubscription;
+  static _VendorStatusCacheEntry? _vendorStatusCache;
+  static Timer? _debounceTimer;
+  static bool _isSyncing = false;
+  static List<CartProduct>? _pendingCartItems;
 
   /// Start watching cart and sync to Firestore when changes occur.
+  /// Uses 500ms debounce to avoid excessive syncs during rapid +/- taps.
   static void startCartSync(CartDatabase cartDb) {
     _cartSubscription?.cancel();
+    _debounceTimer?.cancel();
 
-    _cartSubscription = cartDb.watchProducts.listen((cartItems) async {
-      await _syncCartToFirestore(cartItems);
+    _cartSubscription = cartDb.watchProducts.listen((cartItems) {
+      if (cartItems.isEmpty) {
+        _debounceTimer?.cancel();
+        _debounceTimer = null;
+        _pendingCartItems = null;
+        _syncCartToFirestore(cartItems);
+        return;
+      }
+      _pendingCartItems = List.from(cartItems);
+      _debounceTimer?.cancel();
+      _debounceTimer = Timer(_debounceDelay, () {
+        _debounceTimer = null;
+        final toSync = _pendingCartItems;
+        _pendingCartItems = null;
+        if (toSync == null || _isSyncing) return;
+        _isSyncing = true;
+        _syncCartToFirestore(toSync).whenComplete(() {
+          _isSyncing = false;
+        });
+      });
     });
   }
 
   static void stopCartSync() {
     _cartSubscription?.cancel();
     _cartSubscription = null;
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _pendingCartItems = null;
+    _vendorStatusCache = null;
   }
 
   static Future<void> _syncCartToFirestore(List<CartProduct> cartItems) async {
+    final stopwatch = Stopwatch()..start();
     final userId = auth.FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) return;
 
@@ -91,37 +131,63 @@ class CartSyncService {
 
     final Map<String, dynamic> vendorStatuses = {};
     if (uniqueVendorIds.isNotEmpty) {
-      try {
-        final statusMap = await RestaurantStatusService
-            .checkMultipleVendorsStatus(uniqueVendorIds);
-        for (final vid in uniqueVendorIds) {
-          final s = statusMap[vid];
+      final now = DateTime.now();
+      final cacheValid = _vendorStatusCache != null &&
+          now.difference(_vendorStatusCache!.lastUpdated) < _vendorStatusCacheTtl;
+
+      Map<String, Map<String, dynamic>> statusMap;
+      if (cacheValid) {
+        statusMap = Map.from(_vendorStatusCache!.statusMap);
+        final missing = uniqueVendorIds
+            .where((id) => !statusMap.containsKey(id))
+            .toList();
+        if (missing.isNotEmpty) {
           try {
-            if (s != null) {
-              vendorStatuses[vid] = {
-                'isOpen': s['isOpen'] as bool? ?? false,
-                'vendorName': (s['vendorName'] ?? 'Restaurant').toString(),
-                'lastChecked': FieldValue.serverTimestamp(),
-              };
-            } else {
-              vendorStatuses[vid] = {
-                'isOpen': false,
-                'error': 'No status',
-                'lastChecked': FieldValue.serverTimestamp(),
-              };
-            }
+            final fresh =
+                await RestaurantStatusService
+                    .checkMultipleVendorsStatus(missing);
+            statusMap.addAll(fresh);
           } catch (e) {
+            log('[CART_SYNC] Status check for missing vendors failed: $e');
+          }
+        }
+      } else {
+        try {
+          statusMap = await RestaurantStatusService
+              .checkMultipleVendorsStatus(uniqueVendorIds);
+          _vendorStatusCache =
+              _VendorStatusCacheEntry(Map.from(statusMap), now);
+        } catch (e) {
+          log('[CART_SYNC] Status check failed (sync continues): $e');
+          statusMap = {};
+        }
+      }
+
+      for (final vid in uniqueVendorIds) {
+        final s = statusMap[vid];
+        try {
+          if (s != null) {
+            vendorStatuses[vid] = {
+              'isOpen': s['isOpen'] as bool? ?? false,
+              'vendorName': (s['vendorName'] ?? 'Restaurant').toString(),
+              'lastChecked': FieldValue.serverTimestamp(),
+            };
+          } else {
             vendorStatuses[vid] = {
               'isOpen': false,
-              'error': e.toString(),
+              'error': 'No status',
               'lastChecked': FieldValue.serverTimestamp(),
             };
           }
+        } catch (e) {
+          vendorStatuses[vid] = {
+            'isOpen': false,
+            'error': e.toString(),
+            'lastChecked': FieldValue.serverTimestamp(),
+          };
         }
-        log('[CART_SYNC] Syncing with vendor statuses: $vendorStatuses');
-      } catch (e) {
-        log('[CART_SYNC] Status check failed (sync continues): $e');
       }
+      log('[CART_SYNC] Syncing with vendor statuses: $vendorStatuses');
     }
 
     await FirebaseFirestore.instance
@@ -137,6 +203,8 @@ class CartSyncService {
       'lastModified': Timestamp.fromDate(lastModified),
       'lastSyncedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+    stopwatch.stop();
+    PerformanceLogger.logCartSync(stopwatch.elapsed);
   }
 
   static Map<String, dynamic> _serializeVendorGroups(

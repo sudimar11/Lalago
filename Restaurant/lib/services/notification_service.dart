@@ -19,6 +19,7 @@ class NotificationService {
   static void Function(String orderId, String minutes)? onPrepTimeReminder;
   static void Function(String orderId)? onNewOrder;
   static void Function(String orderId)? onDeclineOrder;
+  static void Function(String orderId)? onOpenOrderCommunication;
   static bool _notificationPermissionDialogShown = false;
 
   static Future<bool> isNotificationPermissionGranted() async {
@@ -105,6 +106,11 @@ class NotificationService {
               final orderId = payload.substring('order_acceptance|'.length);
               if (orderId.isNotEmpty) onNewOrder?.call(orderId);
             }
+            final orderId = data?['orderId']?.toString() ?? '';
+            final type = data?['type']?.toString() ?? '';
+            if (type == 'order_communication' && orderId.isNotEmpty) {
+              onOpenOrderCommunication?.call(orderId);
+            }
           } catch (_) {
             if (payload.startsWith('order_acceptance|')) {
               final orderId = payload.substring('order_acceptance|'.length);
@@ -185,6 +191,9 @@ class NotificationService {
       final minutes =
           data['minutesLeft']?.toString() ?? data['minutesUntilReady'] ?? '';
       if (orderId.isNotEmpty) onPrepTimeReminder?.call(orderId, minutes);
+    } else if (type == 'order_communication') {
+      final orderId = (data['orderId'] ?? '').toString();
+      if (orderId.isNotEmpty) onOpenOrderCommunication?.call(orderId);
     } else {
       display(message);
     }
@@ -206,6 +215,12 @@ class NotificationService {
       final orderId = (data['orderId'] ?? '').toString();
       if (orderId.isNotEmpty) {
         onNewOrder?.call(orderId);
+      }
+    }
+    if (data['type'] == 'order_communication') {
+      final orderId = (data['orderId'] ?? '').toString();
+      if (orderId.isNotEmpty) {
+        onOpenOrderCommunication?.call(orderId);
       }
     }
     log('Got a message whilst in the foreground!');

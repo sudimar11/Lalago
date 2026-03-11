@@ -328,6 +328,14 @@ class FireStoreUtils {
       'driver_performance',
     };
     serverOwnedKeys.forEach(sanitized.remove);
+    if (user.role == USER_ROLE_DRIVER) {
+      sanitized['statusSchemaVersion'] = 2;
+      final hasMaxOrders = sanitized['maxOrders'] is num &&
+          (sanitized['maxOrders'] as num) > 0;
+      if (!hasMaxOrders) {
+        sanitized['maxOrders'] = user.multipleOrders ? 2 : 1;
+      }
+    }
 
     return await firestore
         .collection(USERS)

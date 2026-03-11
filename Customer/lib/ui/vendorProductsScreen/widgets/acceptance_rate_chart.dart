@@ -7,7 +7,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:intl/intl.dart';
 
 /// Mini line chart of acceptance rate over last 30 days.
-class AcceptanceRateChart extends StatelessWidget {
+class AcceptanceRateChart extends StatefulWidget {
   final VendorModel vendorModel;
 
   const AcceptanceRateChart({
@@ -16,12 +16,25 @@ class AcceptanceRateChart extends StatelessWidget {
   });
 
   @override
+  State<AcceptanceRateChart> createState() => _AcceptanceRateChartState();
+}
+
+class _AcceptanceRateChartState extends State<AcceptanceRateChart> {
+  late final Future<Map<String, double>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = FireStoreUtils.getVendorDailyAcceptanceRates(
+      widget.vendorModel.id,
+      lastDays: 30,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<Map<String, double>>(
-      future: FireStoreUtils.getVendorDailyAcceptanceRates(
-        vendorModel.id,
-        lastDays: 30,
-      ),
+      future: _future,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const SizedBox(

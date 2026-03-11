@@ -12,6 +12,7 @@ import 'package:foodie_restaurant/services/helper.dart';
 import 'package:foodie_restaurant/utils/analytics_helper.dart';
 import 'package:foodie_restaurant/utils/date_utils.dart' as app_date_utils;
 import 'package:foodie_restaurant/ui/driver_performance/driver_performance_screen.dart';
+import 'package:foodie_restaurant/ui/widgets/TodayPerformanceCard.dart';
 import 'package:intl/intl.dart';
 
 class InsightsScreen extends StatefulWidget {
@@ -279,6 +280,8 @@ class _InsightsScreenState extends State<InsightsScreen>
                             ),
                           ),
                         ),
+                        const SizedBox(height: 16),
+                        const TodayPerformanceCard(),
                         const SizedBox(height: 16),
                         if (_orders == null || _orders!.isEmpty)
                           Center(

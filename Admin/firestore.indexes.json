@@ -891,6 +891,15 @@
       ]
     },
     {
+      "collectionGroup": "notification_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "triggeredBy", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "gift_cards",
       "queryScope": "COLLECTION",
       "fields": [
@@ -978,13 +987,6 @@
       "fields": [
         { "fieldPath": "userId", "order": "ASCENDING" },
         { "fieldPath": "expiresAt", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "incentive_rules",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "vendorId", "order": "ASCENDING" }
       ]
     },
     {

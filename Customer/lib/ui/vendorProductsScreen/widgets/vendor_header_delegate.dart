@@ -173,7 +173,52 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                                   ],
                                 ),
                               ),
-                              _buildTiming(isOpen),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _buildTiming(isOpen),
+                                  const SizedBox(width: 8),
+                                  InkWell(
+                                    onTap: () {
+                                      showModalBottomSheet(
+                                        isScrollControlled: true,
+                                        isDismissible: true,
+                                        context: context,
+                                        backgroundColor: Colors.transparent,
+                                        enableDrag: true,
+                                        builder: (ctx) => showTiming(ctx),
+                                      );
+                                    },
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 4,
+                                        horizontal: 4,
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.schedule_outlined,
+                                            size: 14,
+                                            color: Color(COLOR_PRIMARY),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            "Schedule",
+                                            style: TextStyle(
+                                              fontFamily: "Poppinsm",
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500,
+                                              color: Color(COLOR_PRIMARY),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ],
                           ),
                           const SizedBox(height: 8),
@@ -252,47 +297,6 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                                 ),
                               ),
                             ],
-                          ),
-                          const SizedBox(height: 6),
-                          // View Schedule
-                          InkWell(
-                            onTap: () {
-                              showModalBottomSheet(
-                                isScrollControlled: true,
-                                isDismissible: true,
-                                context: context,
-                                backgroundColor: Colors.transparent,
-                                enableDrag: true,
-                                builder: (context) => showTiming(context),
-                              );
-                            },
-                            borderRadius: BorderRadius.circular(6),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 4,
-                                horizontal: 2,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.schedule_outlined,
-                                    size: 16,
-                                    color: Color(COLOR_PRIMARY),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    "View Schedule",
-                                    style: TextStyle(
-                                      fontFamily: "Poppinsm",
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
-                                      color: Color(COLOR_PRIMARY),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
                           ),
                           const SizedBox(height: 2),
                           if (searchController != null &&
@@ -677,7 +681,7 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 
   @override
-  double get maxExtent => 440;
+  double get maxExtent => 700;
 
   @override
   double get minExtent => kToolbarHeight + 20;

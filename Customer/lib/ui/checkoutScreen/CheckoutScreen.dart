@@ -1,6 +1,8 @@
 import 'dart:developer';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_remote_config/firebase_remote_config.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
@@ -14,12 +16,14 @@ import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/placeOrderScreen/PlaceOrderScreen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../model/TaxModel.dart';
 import 'package:foodie_customer/services/happy_hour_helper.dart';
 import 'package:foodie_customer/services/happy_hour_service.dart';
 import 'package:foodie_customer/services/network_safe_api.dart';
 import 'package:foodie_customer/services/restaurant_status_service.dart';
+import 'package:foodie_customer/services/coupon_service.dart';
 import 'package:foodie_customer/services/gift_card_service.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -663,38 +667,30 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
 
       print('[CHECKOUT] ===== PLACE ORDER STARTED =====');
-      statusNotifier.value =
-          'Checking if we can deliver to your address...';
-      print('[CHECKOUT] Calling DispatchPrecheckService...');
-      print('[CHECKOUT] Address: '
-          '${widget.address?.getFullAddress()}');
-      print('[CHECKOUT] Location: '
-          'lat=${widget.address?.location?.latitude}, '
-          'lng=${widget.address?.location?.longitude}');
-      print('[CHECKOUT] Locality: '
-          '${widget.address?.locality}');
+      final useUnified = await _useUnifiedOrderPlacement();
+      print('[CHECKOUT] useUnifiedOrderPlacement=$useUnified');
 
-      final precheck = await _dispatchPrecheckService.runPrecheck(
-        customerId: MyAppState.currentUser?.userID ?? '',
-        vendorId: widget.products.first.vendorID,
-        deliveryLat: widget.address?.location?.latitude,
-        deliveryLng: widget.address?.location?.longitude,
-        deliveryLocality: widget.address?.locality,
-      );
-
-      print('[CHECKOUT] Precheck result: '
-          'canCheckout=${precheck.canCheckout}, '
-          'orders=${precheck.activeOrders}, '
-          'riders=${precheck.activeRiders}');
-
-      if (!precheck.canCheckout) {
-        print('[CHECKOUT] BLOCKED by capacity precheck');
-        closeProgress();
-        await _showCheckoutBlockedDialog(
-          message: precheck.blockedMessage ??
-            'We are unable to process checkout at the moment. Please try again shortly.',
+      if (!useUnified) {
+        statusNotifier.value =
+            'Checking if we can deliver to your address...';
+        print('[CHECKOUT] Calling DispatchPrecheckService...');
+        final precheck = await _dispatchPrecheckService.runPrecheck(
+          customerId: MyAppState.currentUser?.userID ?? '',
+          vendorId: widget.products.first.vendorID,
+          deliveryLat: widget.address?.location?.latitude,
+          deliveryLng: widget.address?.location?.longitude,
+          deliveryLocality: widget.address?.locality,
         );
-        return;
+        print('[CHECKOUT] Precheck: canCheckout=${precheck.canCheckout}');
+        if (!precheck.canCheckout) {
+          closeProgress();
+          await _showCheckoutBlockedDialog(
+            message: precheck.blockedMessage ??
+              'We are unable to process checkout at the moment. '
+              'Please try again shortly.',
+          );
+          return;
+        }
       }
 
       statusNotifier.value = 'Confirming the restaurant is open...';
@@ -892,31 +888,52 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         giftCardBreakdown: widget.giftCardBreakdown,
       );
 
-      statusNotifier.value = 'Placing your order...';
-      log("Placing order with Firestore...");
-      final placedOrder = await NetworkSafeAPI.runWithNetworkCheck(
-        () => fireStoreUtils.placeOrder(orderModel),
-        onOffline: () {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'No network. Please check your connection and try again.',
+      OrderModel? placedOrder;
+      if (useUnified) {
+        placedOrder = await _placeOrderViaCallable(
+          orderModel,
+          statusNotifier,
+          closeProgress,
+        );
+        if (placedOrder == null) return;
+        final manualCouponId = orderModel.manualCouponId;
+        if (manualCouponId != null && manualCouponId.isNotEmpty) {
+          await CouponService.reserveCoupon(manualCouponId);
+        }
+        if (orderModel.authorID != null && orderModel.authorID!.isNotEmpty) {
+          await FireStoreUtils.processOrderCompletionWithBackend(
+            placedOrder.id,
+            orderModel.authorID!,
+          );
+        }
+      } else {
+        statusNotifier.value = 'Placing your order...';
+        log("Placing order with Firestore...");
+        placedOrder = await NetworkSafeAPI.runWithNetworkCheck(
+          () => fireStoreUtils.placeOrder(orderModel),
+          onOffline: () {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'No network. Please check your connection and try again.',
+                  ),
+                  backgroundColor: Colors.red,
                 ),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-        },
-      );
-      log("Order placed successfully: ${placedOrder.id}");
+              );
+            }
+          },
+        );
+      }
+      final order = placedOrder!;
+      log("Order placed successfully: ${order.id}");
 
       final userId = MyAppState.currentUser?.userID;
       if (userId != null && userId.isNotEmpty) {
         AnalyticsService.trackFunnelStep(
           userId,
           'order_place',
-          metadata: {'orderId': placedOrder.id},
+          metadata: {'orderId': order.id},
         );
       }
 
@@ -973,8 +990,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             'userId': currentUser.userID,
             'type': 'debit',
             'amount': widget.referralWalletAmountUsed,
-            'orderId': placedOrder.id,
-            'description': 'Used for order ${placedOrder.id}',
+            'orderId': order.id,
+            'description': 'Used for order ${order.id}',
             'createdAt': Timestamp.now(),
           });
 
@@ -1003,7 +1020,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               cardId: cardId,
               amount: amount,
               userId: userId,
-              orderId: placedOrder.id,
+              orderId: order.id,
             );
             log("✅ Gift card redeemed: $cardId amount=$amount");
           } catch (e) {
@@ -1038,7 +1055,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     (r['orderId'] == null || r['orderId'] == '')) {
                   rewardsClaimed[i] = {
                     ...r,
-                    'orderId': placedOrder.id,
+                    'orderId': order.id,
                   };
                   break;
                 }
@@ -1046,7 +1063,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               await userRef.update({
                 'loyalty.rewardsClaimed': rewardsClaimed,
               });
-              log("✅ Loyalty free delivery marked used for order ${placedOrder.id}");
+              log("✅ Loyalty free delivery marked used for order ${order.id}");
             }
           }
         } catch (e) {
@@ -1061,7 +1078,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         context: context,
         enableDrag: false,
         backgroundColor: Colors.transparent,
-        builder: (context) => PlaceOrderScreen(orderModel: placedOrder),
+        builder: (context) => PlaceOrderScreen(orderModel: order),
       );
     } on NetworkUnavailableException catch (e) {
       log("Place order failed: $e");
@@ -1187,6 +1204,121 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Proceed anyway'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Reads Remote Config flag for unified order placement. Defaults to false.
+  Future<bool> _useUnifiedOrderPlacement() async {
+    try {
+      final rc = FirebaseRemoteConfig.instance;
+      await rc.setDefaults({'use_unified_order_placement': false});
+      await rc.fetchAndActivate();
+      return rc.getBool('use_unified_order_placement');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<OrderModel?> _placeOrderViaCallable(
+    OrderModel orderModel,
+    ValueNotifier<String> statusNotifier,
+    void Function() closeProgress,
+  ) async {
+    final idempotencyKey = const Uuid().v4();
+    statusNotifier.value = 'Placing your order...';
+
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable(
+        'placeOrderWithDispatch',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 60)),
+      );
+      final result = await callable.call({
+        'order': orderModel.toJson(),
+        'idempotencyKey': idempotencyKey,
+      });
+
+      final data = result.data as Map<String, dynamic>? ?? {};
+      final success = data['success'] as bool? ?? false;
+
+      if (success) {
+        final orderId = data['orderId'] as String? ?? '';
+        final driverAssigned = data['driverAssigned'] as bool? ?? false;
+        if (orderId.isEmpty) return null;
+        orderModel.id = orderId;
+        if (!driverAssigned && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Order received. You\'ll be notified when a driver is assigned.',
+              ),
+            ),
+          );
+        }
+        return orderModel;
+      }
+
+      final code = data['code'] as String? ?? '';
+      final message = (data['message'] as String?) ?? 'Something went wrong.';
+      closeProgress();
+      if (!mounted) return null;
+      await _showUnifiedOrderErrorDialog(code: code, message: message);
+      return null;
+    } on FirebaseFunctionsException catch (e) {
+      closeProgress();
+      if (!mounted) return null;
+      final code = e.code.toString();
+      final msg = e.message ?? 'Request failed. Please try again.';
+      if (code.contains('unauthenticated')) {
+        await _showUnifiedOrderErrorDialog(code: 'UNAUTHENTICATED', message: msg);
+      } else {
+        await _showUnifiedOrderErrorDialog(code: code, message: msg);
+      }
+      return null;
+    } catch (e) {
+      closeProgress();
+      if (!mounted) return null;
+      final isTimeout = e.toString().toLowerCase().contains('timeout');
+      await _showUnifiedOrderErrorDialog(
+        code: isTimeout ? 'TIMEOUT' : 'UNKNOWN',
+        message: isTimeout
+            ? 'Request took too long. Please try again.'
+            : 'Failed to place order. Please try again.',
+      );
+      return null;
+    }
+  }
+
+  Future<void> _showUnifiedOrderErrorDialog({
+    required String code,
+    required String message,
+  }) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          code == 'VALIDATION_ERROR' ? 'Cart Changed' : 'Order Unavailable',
+        ),
+        content: SelectableText(message),
+        actions: [
+          if (code == 'NO_DRIVERS_AVAILABLE' || code == 'TIMEOUT')
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Try Again'),
+            ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              if (code == 'VALIDATION_ERROR' && mounted) {
+                Navigator.of(context).pop();
+              }
+            },
+            child: const Text('OK'),
           ),
         ],
       ),

@@ -8,7 +8,7 @@ class HungerReminderAnalytics extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Hunger Reminder Performance'),
+        title: const Text('Smart Hunger Reminder Performance'),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
       ),
@@ -17,12 +17,242 @@ class HungerReminderAnalytics extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _buildSummaryMetrics(context),
+            const SizedBox(height: 24),
+            _buildPerformanceByWindow(context),
+            const SizedBox(height: 24),
             _buildTimeOfDayBreakdown(context),
             const SizedBox(height: 24),
             _buildRecentReminders(context),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildSummaryMetrics(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('ash_notification_history')
+          .where('type', isEqualTo: 'ash_hunger')
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'Error: ${snapshot.error}',
+                style: const TextStyle(color: Colors.red),
+              ),
+            ),
+          );
+        }
+        final docs = snapshot.data?.docs ?? [];
+        final sent = docs.length;
+        final opened = docs.where((d) => d.data()['openedAt'] != null).length;
+        final converted = docs.where((d) => d.data()['converted'] == true);
+        final totalRevenue = converted.fold<double>(
+          0,
+          (acc, d) =>
+              acc +
+              (double.tryParse(
+                    (d.data()['conversionValue'] ?? 0).toString(),
+                  ) ??
+                  0),
+        );
+        final openRate = sent > 0 ? opened / sent : 0.0;
+        final conversionRate = opened > 0 ? converted.length / opened : 0.0;
+        final revenuePerNotif = sent > 0 ? totalRevenue / sent : 0.0;
+
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Summary Metrics',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 16),
+                _metricRow(
+                  context,
+                  'Sent',
+                  sent.toString(),
+                ),
+                _metricRow(
+                  context,
+                  'Open Rate',
+                  '${(openRate * 100).toStringAsFixed(1)}%',
+                ),
+                _metricRow(
+                  context,
+                  'Conversion Rate (open → order)',
+                  '${(conversionRate * 100).toStringAsFixed(1)}%',
+                ),
+                _metricRow(
+                  context,
+                  'Revenue per Notification',
+                  '₱${revenuePerNotif.toStringAsFixed(2)}',
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _metricRow(
+    BuildContext context,
+    String label,
+    String value,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPerformanceByWindow(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('ash_notification_history')
+          .where('type', isEqualTo: 'ash_hunger')
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'Error: ${snapshot.error}',
+                style: const TextStyle(color: Colors.red),
+              ),
+            ),
+          );
+        }
+        final docs = snapshot.data?.docs ?? [];
+        final byWindow = <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+        for (final doc in docs) {
+          final w = doc.data()['window']?.toString() ?? 'unknown';
+          byWindow.putIfAbsent(w, () => []).add(doc);
+        }
+        final windows = ['lunch', 'snack', 'dinner'];
+
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Performance by Window',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 16),
+                if (docs.isEmpty)
+                  Text(
+                    'No hunger reminders sent yet.',
+                    style: TextStyle(color: Colors.grey[600]),
+                  )
+                else
+                  ...windows.map((w) {
+                    final list = byWindow[w] ?? [];
+                    if (list.isEmpty) return const SizedBox.shrink();
+                    final opened =
+                        list.where((d) => d.data()['openedAt'] != null).length;
+                    final convertedCount =
+                        list.where((d) => d.data()['converted'] == true).length;
+                    final rate = list.isEmpty ? 0.0 : opened / list.length;
+                    final convRate =
+                        opened > 0 ? convertedCount / opened : 0.0;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            w[0].toUpperCase() + w.substring(1),
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: LinearProgressIndicator(
+                                  value: rate,
+                                  backgroundColor: Colors.grey[200],
+                                  valueColor: const AlwaysStoppedAnimation<Color>(
+                                    Colors.green,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                '${(rate * 100).toStringAsFixed(0)}% open',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ),
+                          Text(
+                            '$convertedCount conversions '
+                            '(${(convRate * 100).toStringAsFixed(0)}%) · '
+                            '${list.length} sent',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[600],
+                            ),
+                        ),
+                        ],
+                      ),
+                    );
+                  }),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
