@@ -2,6 +2,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foodie_customer/constants.dart';
+import 'package:foodie_customer/main.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
@@ -19,10 +21,14 @@ class PopularsCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: GestureDetector(
-        onTap: () => push(
-          context,
-          NewVendorProductsScreen(vendorModel: vendorModel),
-        ),
+        onTap: () {
+          ClickTrackingService.logClick(
+            userId: MyAppState.currentUser?.userID ?? 'guest',
+            restaurantId: vendorModel.id,
+            source: 'popular_today',
+          );
+          push(context, NewVendorProductsScreen(vendorModel: vendorModel));
+        },
         child: Container(
           width: MediaQuery.of(context).size.width * 0.75,
           decoration: BoxDecoration(
@@ -46,6 +52,8 @@ class PopularsCard extends StatelessWidget {
                         imageUrl: getImageVAlidUrl(vendorModel.photo),
                         width: double.infinity,
                         height: double.infinity,
+                        memCacheWidth: 280,
+                        memCacheHeight: 280,
                         fit: BoxFit.cover,
                         placeholder: (context, url) => Container(
                           decoration: BoxDecoration(

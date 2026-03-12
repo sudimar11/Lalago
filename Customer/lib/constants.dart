@@ -32,6 +32,19 @@ const DarkContainerBorderColor = 0xff515151;
 
 double radiusValue = 0.0;
 
+// Default location for guests without location set (Jolo, Sulu, Philippines)
+const double DEFAULT_LATITUDE = 6.0522;
+const double DEFAULT_LONGITUDE = 121.0022;
+const String DEFAULT_ADDRESS = "Jolo, Sulu";
+
+/// Returns true if the given coordinates match the default Jolo, Sulu location.
+bool isDefaultLocation(double? lat, double? lng) {
+  if (lat == null || lng == null) return false;
+  const epsilon = 0.0001;
+  return (lat - DEFAULT_LATITUDE).abs() < epsilon &&
+      (lng - DEFAULT_LONGITUDE).abs() < epsilon;
+}
+
 const STORY = 'story';
 const MENU_ITEM = 'menu_items';
 const USERS = 'users';
@@ -47,6 +60,8 @@ const FavouriteItem = "favorite_item";
 const VENDORS = 'vendors';
 const PRODUCTS = 'vendor_products';
 const ORDERS = 'restaurant_orders';
+const PAUTOS_ORDERS = 'pautos_orders';
+const ORDER_FEEDBACK = 'order_feedback';
 const ADVERTISEMENTS = 'advertisements';
 const ORDERS_TABLE = 'booked_table';
 const GIFT_CARDS = 'gift_cards';
@@ -65,11 +80,12 @@ const ORDER_STATUS_PLACED = 'Order Placed';
 const ORDER_STATUS_ACCEPTED = 'Order Accepted';
 const ORDER_STATUS_REJECTED = 'Order Rejected';
 const ORDER_STATUS_CANCELLED = "Order Cancelled";
-const ORDER_STATUS_DRIVER_PENDING = 'Driver Pending';
+const ORDER_STATUS_DRIVER_ACCEPTED = 'Driver Accepted';
 const ORDER_STATUS_DRIVER_REJECTED = 'Driver Rejected';
 const ORDER_STATUS_SHIPPED = 'Order Shipped';
 const ORDER_STATUS_IN_TRANSIT = 'In Transit';
 const ORDER_STATUS_COMPLETED = 'Order Completed';
+const ORDER_STATUS_PAYMENT_FAILED = 'Payment Failed';
 
 const USER_ROLE_DRIVER = 'driver';
 const USER_ROLE_CUSTOMER = 'customer';
@@ -85,7 +101,9 @@ const Setting = 'settings';
 const tax = 'tax';
 const FavouriteRestaurant = "favorite_restaurant";
 const SEARCH_ANALYTICS = 'search_analytics';
+const USER_CLICKS = 'user_clicks';
 const CUSTOMER_FEEDBACK = 'customer_feedback';
+const RECOMMENDATION_FEEDBACK = 'recommendation_feedback';
 const VENDOR_VIEWERS = 'vendor_viewers';
 const VENDOR_VISITS = 'vendor_visits';
 

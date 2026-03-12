@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:developer';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:foodie_customer/common/common_elevated_button.dart';
@@ -12,8 +13,11 @@ import 'package:foodie_customer/model/VendorCategoryModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/offer_model.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/model/bundle_model.dart';
+import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
+import 'package:foodie_customer/ui/bundle/bundle_card.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
@@ -26,16 +30,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../common/common_cachend_network_image.dart';
 import '../../common/common_image.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import '../../resources/assets.dart';
 import '../../resources/colors.dart';
 import 'photos.dart';
 import 'widgets/vendor_header_delegate.dart';
+import '../searchScreen/SearchScreen.dart';
+import 'package:foodie_customer/ui/orderHistory/order_history_screen.dart';
+import 'package:foodie_customer/services/ad_service.dart';
+import 'package:foodie_customer/services/reorder_service.dart';
+import 'package:foodie_customer/widgets/banner_ad_widget.dart';
 
 class NewVendorProductsScreen extends StatefulWidget {
   final VendorModel vendorModel;
+  final bool showReorderBanner;
 
-  const NewVendorProductsScreen({Key? key, required this.vendorModel})
-      : super(key: key);
+  const NewVendorProductsScreen({
+    Key? key,
+    required this.vendorModel,
+    this.showReorderBanner = false,
+  }) : super(key: key);
 
   @override
   State<NewVendorProductsScreen> createState() =>
@@ -71,21 +85,77 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   // Visitor tracking (real-time + per week)
   int _viewingNow = 0;
   int _visitorsThisWeek = 0;
+  bool _lowPerfWarningDismissed = false;
   String? _activeViewerSessionId;
   StreamSubscription<int>? _activeViewerSub;
   StreamSubscription<int>? _weeklyVisitSub;
+  bool _hasLoggedFirstFrame = false;
+
+  /// Fresh vendor from Firestore (has publicMetrics after backfill).
+  VendorModel? _freshVendorModel;
 
   @override
   void initState() {
+    super.initState();
+    log('PERF: NewVendorProductsScreen init started at '
+        '${DateTime.now().millisecondsSinceEpoch}');
+    scrollController = AutoScrollController();
+    scrollController.addListener(_onScroll);
     getFoodType();
     log("ETO: ${widget.vendorModel.categoryID}");
     statusCheck();
     _checkFavoriteStatus();
-    _startVisitorTracking();
+    _refreshVendorMetrics();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startVisitorTracking());
+  }
 
-    scrollController = AutoScrollController();
+  Future<void> _refreshVendorMetrics() async {
+    final fresh = await FireStoreUtils.getVendor(widget.vendorModel.id);
+    if (fresh != null && mounted) {
+      setState(() => _freshVendorModel = fresh);
+    }
+  }
 
-    super.initState();
+  void _onScroll() {
+    if (!_hasMoreProducts ||
+        _isLoadingMore ||
+        _lastProductDocument == null ||
+        !scrollController.hasClients) {
+      return;
+    }
+    final pos = scrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent * 0.8) {
+      _loadMoreProducts();
+    }
+  }
+
+  Future<void> _loadMoreProducts() async {
+    if (_isLoadingMore || !_hasMoreProducts || _lastProductDocument == null) {
+      return;
+    }
+    _isLoadingMore = true;
+    if (mounted) setState(() {});
+
+    final ProductPageResult result;
+    if (foodType == "Takeaway") {
+      result = await fireStoreUtils.getVendorProductsTakeAWay(
+        widget.vendorModel.id,
+        lastDocument: _lastProductDocument,
+        limit: _pageSize,
+      );
+    } else {
+      result = await fireStoreUtils.getVendorProductsDelivery(
+        widget.vendorModel.id,
+        lastDocument: _lastProductDocument,
+        limit: _pageSize,
+      );
+    }
+
+    productModel.addAll(result.products);
+    _lastProductDocument = result.lastDocument;
+    _hasMoreProducts = result.products.length >= _pageSize;
+    _isLoadingMore = false;
+    if (mounted) setState(() {});
   }
 
   Future<void> _startVisitorTracking() async {
@@ -164,6 +234,125 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
     }
   }
 
+  Widget _buildReorderBanner() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.restore, color: Colors.orange.shade700, size: 24),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Reorder from ${widget.vendorModel.title}?',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: Colors.orange.shade900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tap to see your previous items',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.orange.shade800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: () => push(context, const OrderHistoryScreen()),
+            child: const Text('View'),
+          ),
+          TextButton(
+            onPressed: () => ReorderService.reorderFromVendor(
+              context,
+              widget.vendorModel.id,
+            ),
+            child: const Text('Reorder'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool _shouldShowLowPerfWarning() {
+    if (_lowPerfWarningDismissed) return false;
+    final badge = widget.vendorModel.performanceBadge?.toLowerCase();
+    final rate = widget.vendorModel.acceptanceRate;
+    return badge == 'slow' || (rate != null && rate < 80);
+  }
+
+  Widget _buildLowPerfWarningBanner() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.amber.shade700),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.warning_amber_rounded,
+                  color: Colors.amber.shade800, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'This restaurant sometimes takes longer to confirm orders. '
+                  'You may experience delays or cancellations.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontFamily: 'Poppinsr',
+                    color: Colors.amber.shade900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () {
+                  setState(() => _lowPerfWarningDismissed = true);
+                },
+                child: const Text('Continue Anyway'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const SearchScreen(
+                        shouldAutoFocus: true,
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('Find Faster Restaurant'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   void filterProducts(String query) {
     _searchDebounceTimer?.cancel();
     _searchDebounceTimer = Timer(const Duration(milliseconds: 300), () {
@@ -198,47 +387,50 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   List<ProductModel> filteredProducts = [];
   Timer? _searchDebounceTimer;
 
-  void getFoodType() async {
-    SharedPreferences sp = await SharedPreferences.getInstance();
+  // Pagination state
+  DocumentSnapshot<Map<String, dynamic>>? _lastProductDocument;
+  bool _hasMoreProducts = true;
+  bool _isLoadingMore = false;
+  static const int _pageSize = 20;
 
+  Future<void> getFoodType() async {
+    log('PERF: Starting product fetch at '
+        '${DateTime.now().millisecondsSinceEpoch}');
+    final sp = await SharedPreferences.getInstance();
     foodType = sp.getString("foodType") ?? "Delivery";
 
+    final ProductPageResult result;
     if (foodType == "Takeaway") {
-      await fireStoreUtils
-          .getVendorProductsTakeAWay(widget.vendorModel.id)
-          .then((value) {
-        productModel.clear();
-
-        productModel.addAll(value);
-
-        getVendorCategoryById();
-
-        setState(() {});
-      });
+      result = await fireStoreUtils.getVendorProductsTakeAWay(
+        widget.vendorModel.id,
+        limit: _pageSize,
+      );
     } else {
-      await fireStoreUtils
-          .getVendorProductsDelivery(widget.vendorModel.id)
-          .then((value) {
-        productModel.clear();
-
-        productModel.addAll(value);
-
-        getVendorCategoryById();
-
-        setState(() {});
-      });
+      result = await fireStoreUtils.getVendorProductsDelivery(
+        widget.vendorModel.id,
+        limit: _pageSize,
+      );
     }
+
+    productModel.clear();
+    productModel.addAll(result.products);
+    _lastProductDocument = result.lastDocument;
+    _hasMoreProducts = result.products.length >= _pageSize;
+    log('PERF: Products loaded (${result.products.length}) at '
+        '${DateTime.now().millisecondsSinceEpoch}');
+
+    await _fetchCategoriesAndOffers();
+    if (mounted) setState(() {});
   }
 
   List<VendorCategoryModel> vendorCateoryModel = [];
 
   List<OfferModel> offerList = [];
 
-  getVendorCategoryById() async {
+  Future<void> _fetchCategoriesAndOffers() async {
     vendorCateoryModel.clear();
     a.clear();
 
-    // Collect all unique category IDs first
     final Set<String> uniqueCategoryIds = {};
     for (int i = 0; i < productModel.length; i++) {
       if (!uniqueCategoryIds.contains(productModel[i].categoryID)) {
@@ -247,34 +439,27 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
       }
     }
 
-    // Fetch all categories and offers in parallel
-    final List<Future<VendorCategoryModel?>> categoryFutures = uniqueCategoryIds
-        .map((categoryId) => fireStoreUtils.getVendorCategoryById(categoryId))
-        .toList();
-
+    final categoryIdsList = uniqueCategoryIds.toList();
+    final categoriesFuture =
+        fireStoreUtils.getVendorCategoriesByIds(categoryIdsList);
     final offerFuture =
         FireStoreUtils().getOfferByVendorID(widget.vendorModel.id);
 
-    // Wait for both categories and offers in parallel
     final results = await Future.wait([
-      Future.wait(categoryFutures),
+      categoriesFuture,
       offerFuture,
     ]);
 
-    final List<VendorCategoryModel?> categoryResults =
-        results[0] as List<VendorCategoryModel?>;
-    final List<OfferModel> offers = results[1] as List<OfferModel>;
+    final validCategories = results[0] as List<VendorCategoryModel>;
+    final offers = results[1] as List<OfferModel>;
 
-    // Filter out null results
-    final List<VendorCategoryModel> validCategories =
-        categoryResults.whereType<VendorCategoryModel>().toList();
-
-    // Batch all setState calls into one
     if (mounted) {
+      log('PERF: Categories loaded at '
+          '${DateTime.now().millisecondsSinceEpoch}');
       setState(() {
         vendorCateoryModel.addAll(validCategories);
         tabController =
-            TabController(length: vendorCateoryModel.length + 1, vsync: this);
+            TabController(length: vendorCateoryModel.length + 2, vsync: this);
         offerList = offers;
       });
     }
@@ -282,12 +467,12 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
 
   @override
   void dispose() {
+    scrollController.removeListener(_onScroll);
     _stopVisitorTracking();
     scrollController.dispose();
     _searchDebounceTimer?.cancel();
     searchController.dispose();
-    tabController!.dispose();
-
+    tabController?.dispose();
     super.dispose();
   }
 
@@ -390,13 +575,24 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
         ],
       ),
       body: tabController == null
-          ? const Center(child: CircularProgressIndicator())
-          : RectGetter(
-              key: listViewKey,
-              child: NotificationListener<ScrollNotification>(
-                child: buildSliverScrollView(),
-                onNotification: onScrollNotification,
-              ),
+          ? ShimmerWidgets.vendorProductsScreenShimmer()
+          : Builder(
+              builder: (context) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!_hasLoggedFirstFrame && mounted) {
+                    _hasLoggedFirstFrame = true;
+                    log('PERF: First frame rendered at '
+                        '${DateTime.now().millisecondsSinceEpoch}');
+                  }
+                });
+                return RectGetter(
+                  key: listViewKey,
+                  child: NotificationListener<ScrollNotification>(
+                    child: buildSliverScrollView(),
+                    onNotification: onScrollNotification,
+                  ),
+                );
+              },
             ),
       bottomNavigationBar: priceTemp > 0
           ? Container(
@@ -468,12 +664,14 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
         SliverPersistentHeader(
           delegate: VendorHeaderDelegate(
               context: context,
-              vendorModel: widget.vendorModel,
+              vendorModel: _freshVendorModel ?? widget.vendorModel,
               expandedHeight: expandedHeight,
               isOpen: isOpen,
               hideCollapsedAppBar: true,
               onViewPhotos: () => push(
-                  context, RestaurantPhotos(vendorModel: widget.vendorModel)),
+                  context,
+                  RestaurantPhotos(
+                      vendorModel: _freshVendorModel ?? widget.vendorModel)),
               searchController: searchController,
               onSearchChanged: (query) {
                 filterProducts(query);
@@ -481,6 +679,17 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
               viewingNow: _viewingNow,
               visitorsThisWeek: _visitorsThisWeek),
           pinned: true,
+        ),
+        if (widget.showReorderBanner)
+          SliverToBoxAdapter(
+            child: _buildReorderBanner(),
+          ),
+        if (_shouldShowLowPerfWarning())
+          SliverToBoxAdapter(
+            child: _buildLowPerfWarningBanner(),
+          ),
+        SliverToBoxAdapter(
+          child: BannerAdWidget(adUnitId: AdService.instance.bannerAdUnitId),
         ),
         if (searchQuery.isEmpty)
           SliverAppBar(
@@ -523,21 +732,35 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
                     ),
                   ),
                   ...vendorCateoryModel.map((e) => Tab(text: e.title)),
+                  Tab(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.inventory_2,
+                          size: 16,
+                          color: CustomColors.primary,
+                        ),
+                        const SizedBox(width: 4),
+                        const Text("Bundles"),
+                      ],
+                    ),
+                  ),
                 ],
                 onTap: animateAndScrollTo,
               ),
             ),
           ),
-        buildBody(),
+        ...buildBodySlivers(),
       ],
     );
   }
 
   @override
   void didChangeDependencies() {
-    cartDatabase = Provider.of<CartDatabase>(context);
-    updatePrice();
     super.didChangeDependencies();
+    cartDatabase = Provider.of<CartDatabase>(context, listen: false);
+    updatePrice();
   }
 
   // SliverAppBar buildAppBar() {
@@ -557,11 +780,11 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   //   );
   // }
 
-  SliverList buildBody() {
+  List<Widget> buildBodySlivers() {
     if (searchQuery.isNotEmpty) {
-      // Show unified search results
       if (filteredProducts.isEmpty) {
-        return SliverList(
+        return [
+          SliverList(
           delegate: SliverChildBuilderDelegate(
             (context, index) {
               if (index == 0) {
@@ -622,9 +845,11 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
             },
             childCount: 2,
           ),
-        );
+        ),
+        ];
       }
-      return SliverList(
+      return [
+        SliverList(
         delegate: SliverChildBuilderDelegate(
           (context, index) {
             if (index == 0) {
@@ -654,20 +879,321 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
           },
           childCount: filteredProducts.length + 1,
         ),
-      );
-    } else {
-      // Show normal category-based view
-      return SliverList(
-        delegate: SliverChildBuilderDelegate(
-          (context, index) {
-            if (index == 0) {
-              return buildPopularSection();
-            } else {
-              return buildCategoryItem(index - 1);
-            }
-          },
-          childCount: vendorCateoryModel.length + 1,
+      ),
+      ];
+    }
+    // Normal category-based view with lazy slivers
+    final popularProducts = productModel.take(10).toList();
+    final slivers = <Widget>[];
+
+    itemKeys[0] = RectGetter.createGlobalKey();
+    slivers.add(
+      SliverToBoxAdapter(
+        child: RectGetter(
+          key: itemKeys[0],
+          child: AutoScrollTag(
+            key: const ValueKey(0),
+            index: 0,
+            controller: scrollController,
+            child: Padding(
+              padding: const EdgeInsets.all(10.0),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.local_fire_department,
+                    size: 20,
+                    color: CustomColors.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    "Popular",
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
+      ),
+    );
+    slivers.add(
+      SliverGrid(
+        gridDelegate:
+            const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          childAspectRatio: 0.75,
+          crossAxisSpacing: 6.0,
+          mainAxisSpacing: 6.0,
+        ),
+        delegate: SliverChildBuilderDelegate(
+          (context, index) =>
+              buildPopularFoodItem(popularProducts[index]),
+          childCount: popularProducts.length,
+        ),
+      ),
+    );
+
+    for (int i = 0; i < vendorCateoryModel.length; i++) {
+      final category = vendorCateoryModel[i];
+      final categoryProducts = productModel
+          .where((p) => p.categoryID == category.id)
+          .toList();
+      final sectionIndex = i + 1;
+      itemKeys[sectionIndex] = RectGetter.createGlobalKey();
+      slivers.add(
+        SliverToBoxAdapter(
+          child: RectGetter(
+            key: itemKeys[sectionIndex],
+            child: AutoScrollTag(
+              key: ValueKey(sectionIndex),
+              index: sectionIndex,
+              controller: scrollController,
+              child: _buildSectionTileHeader(category),
+            ),
+          ),
+        ),
+      );
+      if (categoryProducts.isEmpty) {
+        slivers.add(
+          SliverToBoxAdapter(
+            child: showEmptyState("No Food are available.", context),
+          ),
+        );
+      } else {
+        slivers.add(
+          SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final p = categoryProducts[index];
+                return buildRow(
+                  p,
+                  false,
+                  false,
+                  p.categoryID,
+                  index == categoryProducts.length - 1,
+                );
+              },
+              childCount: categoryProducts.length,
+            ),
+          ),
+        );
+      }
+    }
+
+    final bundleIndex = vendorCateoryModel.length + 1;
+    itemKeys[bundleIndex] = RectGetter.createGlobalKey();
+    slivers.add(
+      SliverToBoxAdapter(
+        child: RectGetter(
+          key: itemKeys[bundleIndex],
+          child: AutoScrollTag(
+            key: ValueKey(bundleIndex),
+            index: bundleIndex,
+            controller: scrollController,
+            child: Padding(
+              padding: const EdgeInsets.all(4.0),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.inventory_2,
+                    size: 20,
+                    color: CustomColors.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    "Bundles",
+                    style: const TextStyle(
+                      color: Colors.black,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    slivers.add(
+      SliverToBoxAdapter(
+        child: StreamBuilder<List<BundleModel>>(
+          stream: BundleService.getActiveBundlesStream(
+            restaurantId: widget.vendorModel.id,
+            limit: 20,
+          ),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Center(
+                  child: Text(
+                    snapshot.hasError
+                        ? 'Failed to load bundles'
+                        : 'No bundles',
+                    style: TextStyle(color: Colors.grey.shade600),
+                  ),
+                ),
+              );
+            }
+            final bundles = snapshot.data!;
+            return Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final bundle in bundles)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: BundleCard(
+                        bundle: bundle,
+                        onAddToCart: () =>
+                            _addBundleToCart(context, bundle),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+
+    if (_hasMoreProducts && _isLoadingMore) {
+      slivers.add(
+        const SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(
+              child: CircularProgressIndicator(),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return slivers;
+  }
+
+  Widget buildBundlesSection() {
+    final bundleIndex = vendorCateoryModel.length + 1;
+    itemKeys[bundleIndex] = RectGetter.createGlobalKey();
+    return RectGetter(
+      key: itemKeys[bundleIndex],
+      child: AutoScrollTag(
+        key: ValueKey(bundleIndex),
+        index: bundleIndex,
+        controller: scrollController,
+        child: StreamBuilder<List<BundleModel>>(
+          stream: BundleService.getActiveBundlesStream(
+            restaurantId: widget.vendorModel.id,
+            limit: 20,
+          ),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Center(
+                  child: Text(
+                    snapshot.hasError ? 'Failed to load bundles' : 'No bundles',
+                    style: TextStyle(color: Colors.grey.shade600),
+                  ),
+                ),
+              );
+            }
+            final bundles = snapshot.data!;
+            return Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.inventory_2,
+                        size: 20,
+                        color: CustomColors.primary,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        "Bundles",
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: bundles.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      final bundle = bundles[index];
+                      return BundleCard(
+                        bundle: bundle,
+                        onAddToCart: () => _addBundleToCart(context, bundle),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addBundleToCart(BuildContext context, BundleModel bundle) async {
+    final cartDb = Provider.of<CartDatabase>(context, listen: false);
+    final products = await cartDb.allCartProducts;
+    if (products.isNotEmpty &&
+        products.first.vendorID != bundle.restaurantId) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Different restaurant'),
+          content: const Text(
+            'Your cart has items from another restaurant. '
+            'Clear cart and add this bundle?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Clear and Add'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      await cartDb.deleteAllProducts();
+    }
+    final itemsWithPhotos = await BundleService.itemsWithPhotos(
+      bundle.restaurantId,
+      bundle.items,
+    );
+    await cartDb.addBundleToCart(
+      bundleId: bundle.bundleId,
+      bundleName: bundle.name,
+      vendorID: bundle.restaurantId,
+      bundlePrice: bundle.bundlePrice,
+      items: itemsWithPhotos,
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${bundle.name} added to cart')),
       );
     }
   }
@@ -786,6 +1312,8 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
                     imageUrl: getImageVAlidUrl(product.photo),
                     fit: BoxFit.cover,
                     width: double.infinity,
+                    memCacheWidth: 300,
+                    memCacheHeight: 300,
                   ),
                 ),
                 Positioned(
@@ -1033,6 +1561,8 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
                     width: 120,
                     imageUrl: getImageVAlidUrl(productModel.photo),
                     borderRadius: BorderRadius.circular(8.0),
+                    memCacheWidth: 300,
+                    memCacheHeight: 300,
                   ),
                   AddIconButton(
                     productModel: productModel,
@@ -1060,86 +1590,51 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   bool isOpen = false;
 
   statusCheck() {
-    final now = new DateTime.now();
-
-    var day = DateFormat('EEEE', 'en_US').format(now);
-
-    var date = DateFormat('dd-MM-yyyy').format(now);
-
-    widget.vendorModel.workingHours.forEach((element) {
-      print("===>");
-
-      print(element);
-
-      if (day == element.day.toString()) {
-        print("---->1" + element.day.toString());
-
-        if (element.timeslot!.isNotEmpty) {
-          element.timeslot!.forEach((element) {
-            print("===>2");
-
-            print(element);
-
-            var start = DateFormat("dd-MM-yyyy HH:mm")
-                .parse(date + " " + element.from.toString());
-
-            var end = DateFormat("dd-MM-yyyy HH:mm")
-                .parse(date + " " + element.to.toString());
-
-            if (isCurrentDateInRange(start, end)) {
-              print("===>1");
-
-              setState(() {
-                isOpen = true;
-
-                print("===>");
-
-                print(isOpen);
-              });
-            }
-          });
+    final now = DateTime.now();
+    final day = DateFormat('EEEE', 'en_US').format(now);
+    final date = DateFormat('dd-MM-yyyy').format(now);
+    bool open = false;
+    for (final element in widget.vendorModel.workingHours) {
+      if (day != element.day.toString()) continue;
+      if (element.timeslot == null || element.timeslot!.isEmpty) continue;
+      for (final slot in element.timeslot!) {
+        final start = DateFormat("dd-MM-yyyy HH:mm")
+            .parse(date + " " + slot.from.toString());
+        final end = DateFormat("dd-MM-yyyy HH:mm")
+            .parse(date + " " + slot.to.toString());
+        if (isCurrentDateInRange(start, end)) {
+          open = true;
+          break;
         }
       }
-    });
+      if (open) break;
+    }
+    if (mounted && isOpen != open) {
+      setState(() => isOpen = open);
+    }
   }
 
   bool isCurrentDateInRange(DateTime startDate, DateTime endDate) {
-    print(startDate);
-
-    print(endDate);
-
     final currentDate = DateTime.now();
-
-    print(currentDate);
-
     return currentDate.isAfter(startDate) && currentDate.isBefore(endDate);
   }
 
   void updatePrice() {
-    List<CartProduct> cartProducts = [];
-
-    Future.delayed(const Duration(milliseconds: 500), () {
-      cartProducts.clear();
-
-      cartDatabase.allCartProducts.then((value) {
-        priceTemp = 0;
-
-        cartProducts.addAll(value);
-
-        for (int i = 0; i < cartProducts.length; i++) {
-          CartProduct e = cartProducts[i];
-
-          if (e.extras_price != null &&
-              e.extras_price != "" &&
-              double.parse(e.extras_price!) != 0) {
-            priceTemp += double.parse(e.extras_price!) * e.quantity;
-          }
-
-          priceTemp += double.parse(e.price) * e.quantity;
+    cartDatabase.allCartProducts.then((value) {
+      if (!mounted) return;
+      double total = 0;
+      for (final e in value) {
+        if (e.extras_price != null &&
+            e.extras_price!.isNotEmpty &&
+            double.tryParse(e.extras_price!) != null &&
+            double.parse(e.extras_price!) != 0) {
+          total += double.parse(e.extras_price!) * e.quantity;
         }
-
-        setState(() {});
-      });
+        total += double.parse(e.price) * e.quantity;
+      }
+      if (mounted && priceTemp != total) {
+        setState(() => priceTemp = total);
+      }
     });
   }
 }

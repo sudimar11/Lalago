@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/AppGlobal.dart';
@@ -23,6 +25,7 @@ class ViewAllPopularRestaurantScreen extends StatefulWidget {
 
 class _ViewAllPopularRestaurantScreenState extends State<ViewAllPopularRestaurantScreen> {
   Stream<List<VendorModel>>? vendorsFuture;
+  StreamSubscription<List<VendorModel>>? _popularSubscription;
   final fireStoreUtils = FireStoreUtils();
   List<VendorModel> storeAllLst = [];
 
@@ -37,7 +40,7 @@ class _ViewAllPopularRestaurantScreenState extends State<ViewAllPopularRestauran
     fireStoreUtils.getRestaurantNearBy().whenComplete(() {
       vendorsFuture = fireStoreUtils.getAllRestaurants(path: widget.isPageCallForDineIn == true ? "isDineIn" : "").asBroadcastStream();
 
-      vendorsFuture!.listen((value) {
+      _popularSubscription = vendorsFuture!.listen((value) {
         storeAllLst.clear();
         storeAllLst.addAll(value);
         List<VendorModel> temp5 = storeAllLst.where((element) => num.parse((element.reviewsSum / element.reviewsCount).toString()) == 5).toList();
@@ -62,11 +65,18 @@ class _ViewAllPopularRestaurantScreenState extends State<ViewAllPopularRestauran
         storeAllLst.addAll(temp1);
         storeAllLst.addAll(temp0);
         storeAllLst.addAll(temp0_);
-        setState(() {
-          showLoader = false;
-        });
+        if (mounted) {
+          setState(() => showLoader = false);
+        }
       });
     });
+  }
+
+  @override
+  void dispose() {
+    // Cancel stream subscription to prevent memory leaks
+    _popularSubscription?.cancel();
+    super.dispose();
   }
 
   @override
@@ -132,6 +142,8 @@ class _ViewAllPopularRestaurantScreenState extends State<ViewAllPopularRestauran
             Expanded(
                 child: CachedNetworkImage(
               imageUrl: getImageVAlidUrl(vendorModel.photo),
+              memCacheWidth: 280,
+              memCacheHeight: 280,
               imageBuilder: (context, imageProvider) => Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(20),
@@ -144,8 +156,10 @@ class _ViewAllPopularRestaurantScreenState extends State<ViewAllPopularRestauran
               )),
               errorWidget: (context, url, error) => ClipRRect(
                   borderRadius: BorderRadius.circular(15),
-                  child: Image.network(
-                    AppGlobal.placeHolderImage!,
+                  child: CachedNetworkImage(
+                    imageUrl: AppGlobal.placeHolderImage!,
+                    memCacheWidth: 200,
+                    memCacheHeight: 200,
                     fit: BoxFit.cover,
                     width: MediaQuery.of(context).size.width,
                     height: MediaQuery.of(context).size.height,
@@ -269,7 +283,7 @@ class _ViewAllPopularRestaurantScreenState extends State<ViewAllPopularRestauran
     //      .getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
 
     setState(() {
-      position = LatLng(MyAppState.selectedPosotion.location!.latitude, MyAppState.selectedPosotion.location!.longitude);
+      position = LatLng(MyAppState.selectedPosition.location!.latitude, MyAppState.selectedPosition.location!.longitude);
       // cameraPosition = CameraPosition(
       //   target: LatLng(position.latitude, position.longitude),
       //   zoom: 14.4746,

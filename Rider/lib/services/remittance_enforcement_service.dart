@@ -46,7 +46,9 @@ class RemittanceEnforcementService extends ChangeNotifier {
     }
   }
 
-  void _onUserSnapshot(DocumentSnapshot<Map<String, dynamic>> snapshot) async {
+  void _onUserSnapshot(
+    DocumentSnapshot<Map<String, dynamic>> snapshot,
+  ) async {
     if (!snapshot.exists || snapshot.data() == null) {
       _updateBlocked(false);
       return;
@@ -54,27 +56,44 @@ class RemittanceEnforcementService extends ChangeNotifier {
 
     final data = snapshot.data()!;
 
-    // Admin override
-    final overridden = data['creditWalletRemittanceEnforcementOverridden'];
+    final overridden =
+        data['creditWalletRemittanceEnforcementOverridden'];
     if (overridden == true) {
+      print('[REMITTANCE] Admin override active '
+          '-> not blocked');
       _updateBlocked(false);
       return;
     }
 
-    final walletCredit = (data['wallet_credit'] ?? 0.0).toDouble();
+    final walletCredit =
+        (data['wallet_credit'] ?? 0.0).toDouble();
     if (walletCredit <= 0) {
+      print('[REMITTANCE] wallet_credit=$walletCredit '
+          '(<= 0) -> not blocked');
       _updateBlocked(false);
       return;
     }
 
     final lastRemitDate = _getLastRemittanceDate(data);
     final now = DateTime.now();
-    final remittedToday = lastRemitDate != null &&
-        lastRemitDate.year == now.year &&
-        lastRemitDate.month == now.month &&
-        lastRemitDate.day == now.day;
+    final yesterdayStart = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(const Duration(days: 1));
 
-    _updateBlocked(!remittedToday);
+    final remittedRecently = lastRemitDate != null &&
+        !lastRemitDate.isBefore(yesterdayStart);
+    final blocked = !remittedRecently;
+
+    print('[REMITTANCE] now=$now, '
+        'yesterdayStart=$yesterdayStart');
+    print('[REMITTANCE] wallet_credit=$walletCredit, '
+        'lastRemitDate=$lastRemitDate');
+    print('[REMITTANCE] remittedRecently='
+        '$remittedRecently -> blocked=$blocked');
+
+    _updateBlocked(blocked);
   }
 
   /// Get latest confirmedAt date from transmitRequests with type
@@ -113,27 +132,54 @@ class RemittanceEnforcementService extends ChangeNotifier {
     String userId,
   ) async {
     try {
-      final doc = await firestore.collection(USERS).doc(userId).get();
+      final doc = await firestore
+          .collection(USERS)
+          .doc(userId)
+          .get();
       if (!doc.exists || doc.data() == null) return false;
 
       final data = doc.data()!;
 
-      if (data['creditWalletRemittanceEnforcementOverridden'] == true) {
+      if (data['creditWalletRemittanceEnforcementOverridden']
+          == true) {
+        print('[REMITTANCE-STATIC] Admin override '
+            '-> not blocked');
         return false;
       }
 
-      final walletCredit = (data['wallet_credit'] ?? 0.0).toDouble();
-      if (walletCredit <= 0) return false;
+      final walletCredit =
+          (data['wallet_credit'] ?? 0.0).toDouble();
+      if (walletCredit <= 0) {
+        print('[REMITTANCE-STATIC] wallet_credit='
+            '$walletCredit (<= 0) -> not blocked');
+        return false;
+      }
 
-      final lastRemitDate = _getLastRemittanceDateStatic(data);
+      final lastRemitDate =
+          _getLastRemittanceDateStatic(data);
       final now = DateTime.now();
-      final remittedToday = lastRemitDate != null &&
-          lastRemitDate.year == now.year &&
-          lastRemitDate.month == now.month &&
-          lastRemitDate.day == now.day;
+      final yesterdayStart = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(const Duration(days: 1));
 
-      return !remittedToday;
-    } catch (_) {
+      final remittedRecently = lastRemitDate != null &&
+          !lastRemitDate.isBefore(yesterdayStart);
+      final blocked = !remittedRecently;
+
+      print('[REMITTANCE-STATIC] now=$now, '
+          'yesterdayStart=$yesterdayStart');
+      print('[REMITTANCE-STATIC] wallet_credit='
+          '$walletCredit, '
+          'lastRemitDate=$lastRemitDate');
+      print('[REMITTANCE-STATIC] remittedRecently='
+          '$remittedRecently -> blocked=$blocked');
+
+      return blocked;
+    } catch (e) {
+      print('[REMITTANCE-STATIC] Error: $e '
+          '-> blocked=true');
       return true;
     }
   }

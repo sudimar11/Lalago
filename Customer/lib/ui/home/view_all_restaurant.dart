@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +13,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
+import 'package:foodie_customer/widgets/native_ad_restaurant_card.dart';
 import 'package:geoflutterfire3/geoflutterfire3.dart';
 import 'package:intl/intl.dart';
 
@@ -23,18 +26,18 @@ class ViewAllRestaurant extends StatefulWidget {
 
 class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
   List<VendorModel> vendors = [];
-
+  StreamSubscription<List<DocumentSnapshot>>? _geoSubscription;
   bool isLoading = true;
 
-  getProducts() async {
+  void getProducts() {
     setState(() {
       isLoading = true;
     });
     var collectionReference = FireStoreUtils.firestore.collection(VENDORS);
 
     GeoFirePoint center = GeoFlutterFire().point(
-        latitude: MyAppState.selectedPosotion.location!.latitude,
-        longitude: MyAppState.selectedPosotion.location!.longitude);
+        latitude: MyAppState.selectedPosition.location!.latitude,
+        longitude: MyAppState.selectedPosition.location!.longitude);
     String field = 'g';
 
     Stream<List<DocumentSnapshot>> stream = GeoFlutterFire()
@@ -44,17 +47,25 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
             radius: radiusValue,
             field: field,
             strictMode: true);
-    stream.listen((documentList) {
-      for (var document in documentList) {
-        final data = document.data() as Map<String, dynamic>;
+    _geoSubscription = stream.listen((List<DocumentSnapshot> documentList) {
+      if (mounted) {
         setState(() {
-          vendors.add(VendorModel.fromJson(data));
+          vendors.clear();
+          for (var document in documentList) {
+            final data = document.data() as Map<String, dynamic>;
+            vendors.add(VendorModel.fromJson(data));
+          }
         });
       }
     });
-    setState(() {
-      isLoading = false;
-    });
+    setState(() => isLoading = false);
+  }
+
+  @override
+  void dispose() {
+    // Cancel geo stream subscription to prevent memory leaks
+    _geoSubscription?.cancel();
+    super.dispose();
   }
 
   late Future<List<FavouriteModel>> lstFavourites;
@@ -89,11 +100,20 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
                     shrinkWrap: true,
                     scrollDirection: Axis.vertical,
                     physics: const AlwaysScrollableScrollPhysics(),
-                    itemCount: vendors.length,
-                    itemBuilder: (context, index) =>
-                        //buildVendorItem(vendors[index])
-
-                        buildAllRestaurantsData(vendors[index]),
+                    itemCount:
+                        vendors.length + (vendors.length / 5).floor(),
+                    itemBuilder: (context, index) {
+                      if ((index + 1) % 6 == 0) {
+                        return const NativeAdRestaurantCard();
+                      }
+                      final restaurantIndex =
+                          index - (index + 1) ~/ 6;
+                      if (restaurantIndex >= vendors.length) {
+                        return const SizedBox.shrink();
+                      }
+                      return buildAllRestaurantsData(
+                          vendors[restaurantIndex]);
+                    },
                   ),
           ),
           isLoading ? const CircularProgressIndicator() : Container()
@@ -144,6 +164,8 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
                           imageUrl: getImageVAlidUrl(vendorModel.photo),
                           height: 100,
                           width: 100,
+                          memCacheWidth: 200,
+                          memCacheHeight: 200,
                           imageBuilder: (context, imageProvider) => Container(
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(10),
@@ -158,11 +180,11 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
                           )),
                           errorWidget: (context, url, error) => ClipRRect(
                               borderRadius: BorderRadius.circular(10),
-                              child: Image.network(
-                                AppGlobal.placeHolderImage!,
+                              child: CachedNetworkImage(
+                                imageUrl: AppGlobal.placeHolderImage!,
+                                memCacheWidth: 200,
+                                memCacheHeight: 200,
                                 fit: BoxFit.cover,
-                                cacheHeight: 100,
-                                cacheWidth: 100,
                               )),
                           fit: BoxFit.cover,
                         ),

@@ -5,8 +5,7 @@ import 'dart:math';
 import 'package:audioplayers/audioplayers.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-
-import 'package:easy_localization/easy_localization.dart';
+import 'package:intl/intl.dart';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 
@@ -39,11 +38,13 @@ import 'package:foodie_restaurant/services/helper.dart';
 
 import 'package:foodie_restaurant/services/pushnotification.dart';
 
+import 'package:foodie_restaurant/services/acceptance_metrics_service.dart';
+import 'package:foodie_restaurant/services/eta_service.dart';
 import 'package:foodie_restaurant/ui/chat_screen/chat_screen.dart';
-
+import 'package:foodie_restaurant/ui/order_acceptance_screen.dart';
 import 'package:foodie_restaurant/ui/ordersScreen/OrderDetailsScreen.dart';
-
 import 'package:foodie_restaurant/ui/reviewScreen.dart';
+import 'package:foodie_restaurant/utils/order_ready_time_helper.dart';
 
 class OrdersScreen extends StatefulWidget {
   @override
@@ -64,6 +65,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   bool isLoading = true;
 
   Set<String> _previousOrderIds = {};
+  bool _acceptanceScreenPushed = false;
 
   String? selectedTime;
   Timer? _soundLoopTimer;
@@ -102,11 +104,22 @@ class _OrdersScreenState extends State<OrdersScreen> {
       final newIds = currentIds.difference(_previousOrderIds);
 
       if (newIds.isNotEmpty) {
-        _startSoundLoop(); // 🔊 Play sound for new orders
-      }
+        _startSoundLoop();
 
-      // Timer management is now handled by individual _PreparationTimerWidget instances
-      // No need to manage timers here anymore
+        final newPlaced =
+            orders.where((o) => o.status == ORDER_STATUS_PLACED && newIds.contains(o.id)).toList();
+        if (newPlaced.isNotEmpty && !_acceptanceScreenPushed && mounted) {
+          _acceptanceScreenPushed = true;
+          final order = newPlaced.first;
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => OrderAcceptanceScreen(orderModel: order),
+            ),
+          ).then((_) {
+            _acceptanceScreenPushed = false;
+          });
+        }
+      }
 
       _previousOrderIds = currentIds;
     }, onError: (error) {
@@ -340,8 +353,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
                     if (!snapshot.hasData || snapshot.data!.isEmpty)
                       Expanded(
                         child: Center(
-                          child: showEmptyState('No Orders'.tr(),
-                              'New order requests will show up here'.tr()),
+                          child: showEmptyState('No Orders',
+                              'New order requests will show up here'),
                         ),
                       )
                     else
@@ -454,12 +467,130 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
+  Widget _buildArrivalIndicator(OrderModel orderModel) {
+    if (orderModel.driverID == null ||
+        (orderModel.status != ORDER_STATUS_DRIVER_ACCEPTED &&
+            orderModel.status != ORDER_STATUS_SHIPPED)) {
+      return const SizedBox.shrink();
+    }
+    return StreamBuilder<int>(
+      stream: EtaService.watchEtaMinutes(
+        riderId: orderModel.driverID!,
+        restaurantLat: orderModel.vendor.latitude,
+        restaurantLng: orderModel.vendor.longitude,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data! > 5 || snapshot.data! >= 999) {
+          return const SizedBox.shrink();
+        }
+        final eta = snapshot.data!;
+        if (eta <= 2) {
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.red,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              'Rider arriving NOW',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          );
+        }
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.orange,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            'Rider arriving in $eta min',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCommunicationAttentionIndicator(OrderModel orderModel) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('order_messages')
+          .doc(orderModel.id)
+          .collection('messages')
+          .where('senderType', isEqualTo: 'rider')
+          .where('isRead', isEqualTo: false)
+          .limit(1)
+          .snapshots(),
+      builder: (context, unreadSnapshot) {
+        return StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('order_communications')
+              .doc(orderModel.id)
+              .collection('issues')
+              .where('state', whereIn: ['opened', 'acknowledged', 'resolved'])
+              .limit(1)
+              .snapshots(),
+          builder: (context, issueSnapshot) {
+            final hasUnreadDriverMessage =
+                (unreadSnapshot.data?.docs.isNotEmpty ?? false);
+            final hasActiveIssue = (issueSnapshot.data?.docs.isNotEmpty ?? false);
+            if (!hasUnreadDriverMessage && !hasActiveIssue) {
+              return const SizedBox.shrink();
+            }
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: hasActiveIssue ? Colors.red : Colors.orange,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.notifications_active,
+                    size: 14,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    hasActiveIssue
+                        ? 'Active issue needs attention'
+                        : 'Unread rider message',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget buildOrderContent(OrderModel orderModel) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _buildCommunicationAttentionIndicator(orderModel),
+          _buildArrivalIndicator(orderModel),
           // Customer & Delivery Info
           Row(
             children: [
@@ -494,9 +625,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
                     const SizedBox(height: 4),
                     Text(
                       orderModel.takeAway == true
-                          ? 'Takeaway'.tr()
-                          : 'Deliver to: ${orderModel.address.getFullAddress()}'
-                              .tr(),
+                          ? 'Takeaway'
+                          : 'Deliver to: ${orderModel.address.getFullAddress()}',
                       style: const TextStyle(
                         fontSize: 14,
                         color: Colors.grey,
@@ -561,13 +691,21 @@ class _OrdersScreenState extends State<OrdersScreen> {
           // Driver Selected
           buildDriverContent(orderModel),
 
-          const Divider(height: 24),
+          // Rider ETA when driver assigned
+          if (orderModel.driverID != null &&
+              (orderModel.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                  orderModel.status == ORDER_STATUS_SHIPPED))
+            _buildRiderEtaCard(orderModel),
+          if (orderModel.driverID != null &&
+              (orderModel.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                  orderModel.status == ORDER_STATUS_SHIPPED))
+            const Divider(height: 24),
 
           // Remarks (if any)
           if (orderModel.notes != null && orderModel.notes!.isNotEmpty)
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: Text('Remarks'.tr(), style: TextStyle(color: Colors.grey)),
+              title: Text('Remarks', style: TextStyle(color: Colors.grey)),
               subtitle: Text(
                 orderModel.notes!,
                 style: TextStyle(
@@ -581,6 +719,70 @@ class _OrdersScreenState extends State<OrdersScreen> {
           _buildOrderActions(orderModel),
         ],
       ),
+    );
+  }
+
+  Widget _buildRiderEtaCard(OrderModel orderModel) {
+    final riderId = orderModel.driverID!;
+    return StreamBuilder<int>(
+      stream: EtaService.watchEtaMinutes(
+        riderId: riderId,
+        restaurantLat: orderModel.vendor.latitude,
+        restaurantLng: orderModel.vendor.longitude,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data! >= 999) {
+          return const SizedBox.shrink();
+        }
+        final eta = snapshot.data!;
+        final baseTime =
+            orderModel.acceptedAt?.toDate() ?? orderModel.createdAt.toDate();
+        final prepMinutes =
+            OrderReadyTimeHelper.parsePreparationMinutes(
+                orderModel.estimatedTimeToPrepare);
+        final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+        final remainingPrep = readyAt.difference(DateTime.now()).inMinutes;
+        final showWarning = remainingPrep > 0 && remainingPrep > eta;
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.delivery_dining,
+                      color: Color(COLOR_PRIMARY),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Rider ETA: ~$eta min',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        color: isDarkMode(context)
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+                if (showWarning)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Food may not be ready when rider arrives',
+                      style: TextStyle(
+                        color: Colors.orange.shade700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -609,7 +811,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Order has been rejected by driver'.tr(),
+            'Order has been rejected by driver',
             style: TextStyle(
               fontSize: 14,
               color: Colors.red,
@@ -627,7 +829,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                   child: Text(
-                    'Find Another Driver'.tr(),
+                    'Find Another Driver',
                     style: const TextStyle(color: Colors.white),
                   ),
                 ),
@@ -638,7 +840,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       );
     }
 
-    // Placed (can accept)
+    // Placed (can accept or reject)
     else if (orderModel.status == "Order Placed") {
       _startSoundLoop();
       return Row(
@@ -651,7 +853,21 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
               child: Text(
-                'Accept'.tr(),
+                'Accept',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton(
+              onPressed: () => rejectOrder(orderModel),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              child: Text(
+                'Reject',
                 style: const TextStyle(color: Colors.white),
               ),
             ),
@@ -685,7 +901,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    'Waiting for driver assignment...'.tr(),
+                    'Waiting for driver assignment...',
                     style: TextStyle(
                       color: Colors.grey.shade600,
                       fontSize: 14,
@@ -706,7 +922,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
-            'Driver Assigned - Waiting for Acceptance'.tr(),
+            'Driver Assigned - Waiting for Acceptance',
             style: TextStyle(
               fontSize: 16,
               color: Colors.green,
@@ -734,7 +950,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  'Waiting for driver to accept...'.tr(),
+                  'Waiting for driver to accept...',
                   style: TextStyle(
                     color: Colors.grey.shade600,
                     fontSize: 14,
@@ -746,9 +962,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
         ],
       );
     }
-    // Driver Accepted or Driver Pending → show preparation timer
-    else if (orderModel.status == "Driver Accepted" ||
-        orderModel.status == "Driver Pending") {
+    // Driver Accepted → show preparation timer
+    else if (orderModel.status == "Driver Accepted") {
       print(
           '🕒 DEBUG: Building UI for ${orderModel.status} order: ${orderModel.id}');
       _stopSoundLoop();
@@ -760,9 +975,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
-            orderModel.status == "Driver Accepted"
-                ? 'Driver Accepted - Preparation in Progress'.tr()
-                : 'Driver Pending - Preparation in Progress'.tr(),
+            'Driver Accepted - Preparation in Progress',
             style: TextStyle(
               fontSize: 16,
               color: Colors.green,
@@ -775,6 +988,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
             orderId: orderModel.id,
             orderModel: orderModel,
             onShipOrder: () => shipOrder(orderModel),
+            acceptedAt: orderModel.acceptedAt?.toDate(),
           ),
         ],
       );
@@ -785,27 +999,39 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   void shipOrder(OrderModel orderModel) async {
     try {
-      // Update the order's status to "Order Shipped" in Firestore
       await FirebaseFirestore.instance
           .collection('restaurant_orders')
           .doc(orderModel.id)
-          .update({'status': 'Order Shipped'});
+          .update({
+        'status': 'Order Shipped',
+        'shippedAt': FieldValue.serverTimestamp(),
+      });
 
-      // Display a success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Order status updated to "Order Shipped".'),
-          backgroundColor: Colors.green,
-        ),
+      await FireStoreUtils.addDriverChatSystemMessage(
+        orderId: orderModel.id,
+        status: 'Order Shipped',
+        customerId: orderModel.author.userID,
+        customerFcmToken: orderModel.author.fcmToken,
+        restaurantId: orderModel.vendorID,
       );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Order marked as ready for pickup'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } catch (e) {
-      // Display an error message if something goes wrong
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to update order status: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update order status: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -886,14 +1112,26 @@ class _OrdersScreenState extends State<OrdersScreen> {
         return;
       }
 
-      // Update only the status and prep-time
+      final prepMinutes =
+          OrderReadyTimeHelper.parsePreparationMinutes(preparationTime);
+      final now = DateTime.now();
+      final readyAt = now.add(Duration(minutes: prepMinutes));
+
       await FirebaseFirestore.instance
           .collection("restaurant_orders")
           .doc(orderModel.id)
           .update({
         "status": "Order Accepted",
         "estimatedTimeToPrepare": preparationTime,
+        "acceptedAt": FieldValue.serverTimestamp(),
+        "readyAt": Timestamp.fromDate(readyAt),
+        "prepMinutes": prepMinutes,
       });
+
+      final vendorId = MyAppState.currentUser?.vendorID;
+      if (vendorId != null) {
+        await AcceptanceMetricsService.resetConsecutiveMisses(vendorId);
+      }
 
       // Prompt user to find a driver next
       ScaffoldMessenger.of(context).showSnackBar(
@@ -910,6 +1148,138 @@ class _OrdersScreenState extends State<OrdersScreen> {
           backgroundColor: Colors.red,
         ),
       );
+    }
+  }
+
+  static const _rejectionOptions = [
+    {'label': 'Out of stock', 'value': 'out_of_stock'},
+    {'label': 'Item not available', 'value': 'item_not_available'},
+    {'label': 'Restaurant closed', 'value': 'restaurant_closed'},
+    {'label': 'Too busy', 'value': 'too_busy'},
+    {'label': 'Distance too far', 'value': 'distance_too_far'},
+    {'label': 'Technical issues', 'value': 'technical_issues'},
+    {'label': 'Other', 'value': 'other'},
+  ];
+
+  Future<String?> _showRejectionReasonDialog() async {
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reject Order'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: _rejectionOptions
+                .map(
+                  (opt) => ListTile(
+                    title: Text(opt['label']!),
+                    onTap: () => Navigator.pop(ctx, opt['value']),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<String?> _showCustomReasonDialog() async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Other Reason'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'Enter reason',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 2,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final text = controller.text.trim();
+              Navigator.pop(ctx, text.isNotEmpty ? text : 'other');
+            },
+            child: const Text('Submit'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> rejectOrder(OrderModel orderModel) async {
+    try {
+      final reason = await _showRejectionReasonDialog();
+      if (reason == null) return;
+
+      String selectedReason = reason;
+      if (reason == 'other') {
+        final custom = await _showCustomReasonDialog();
+        if (custom == null) return;
+        selectedReason = custom;
+      }
+
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Reject Order'),
+          content: const Text(
+            'Are you sure you want to reject this order?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('CANCEL'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              child: const Text('REJECT'),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+
+      await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(orderModel.id)
+          .update({
+        'status': ORDER_STATUS_REJECTED,
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'rejectionReason': selectedReason,
+      });
+
+      final vendorId = MyAppState.currentUser?.vendorID;
+      if (vendorId != null) {
+        await AcceptanceMetricsService.incrementConsecutiveMisses(vendorId);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Order rejected'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error rejecting order: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error rejecting order'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -1133,119 +1503,25 @@ class _OrdersScreenState extends State<OrdersScreen> {
 Future<Map<String, String?>> assignOrderToDriver(
     BuildContext context, OrderModel orderModel) async {
   try {
-    List<Map<String, dynamic>> drivers = [];
-    String? nearestDriverId;
-    double? nearestDistance;
-    String? driverName;
-    String? driverPhoto;
-
-    // Haversine formula
-    double calculateDistance(
-        double lat1, double lon1, double lat2, double lon2) {
-      const R = 6371;
-      final dLat = (lat2 - lat1) * (pi / 180);
-      final dLon = (lon2 - lon1) * (pi / 180);
-      final a = sin(dLat / 2) * sin(dLat / 2) +
-          cos(lat1 * (pi / 180)) *
-              cos(lat2 * (pi / 180)) *
-              sin(dLon / 2) *
-              sin(dLon / 2);
-      final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-      return R * c;
-    }
-
-    // Fetch only active drivers
-    Future<void> fetchDrivers() async {
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection("users")
-          .where("role", isEqualTo: "driver")
-          .where("isActive", isEqualTo: true)
-          .get();
-
-      drivers = querySnapshot.docs.map((doc) {
-        final data = doc.data();
-        final dist = calculateDistance(
-          orderModel.vendor.latitude,
-          orderModel.vendor.longitude,
-          data['location']['latitude'] ?? 0.0,
-          data['location']['longitude'] ?? 0.0,
-        );
-        return {
-          "id": doc.id,
-          "data": data,
-          "distance": dist,
-        };
-      }).toList();
-
-      drivers.sort((a, b) =>
-          (a["distance"] as double).compareTo(b["distance"] as double));
-
-      if (drivers.isNotEmpty) {
-        final nearest = drivers.first;
-        nearestDriverId = nearest["id"] as String;
-        nearestDistance = nearest["distance"] as double;
-        driverName =
-            "${nearest["data"]['firstName']} ${nearest["data"]['lastName']}";
-        driverPhoto = nearest["data"]['profilePictureURL'] as String?;
-      }
-    }
-
-    // Recursive assignment
-    Future<void> assignDriver() async {
-      await fetchDrivers();
-
-      if (nearestDriverId == null) {
-        // no active drivers found; wait and retry
-        await Future.delayed(const Duration(seconds: 10));
-        return assignDriver();
-      }
-
-      // double-check that this driver is still active
-      final userSnap = await FirebaseFirestore.instance
-          .collection("users")
-          .doc(nearestDriverId)
-          .get();
-      final stillActive = (userSnap.data()?['isActive'] ?? false) as bool;
-      if (!stillActive) {
-        // remove and retry with next driver
-        drivers.removeWhere((d) => d["id"] == nearestDriverId);
-        nearestDriverId = null;
-        return assignDriver();
-      }
-
-      // perform the assignment
-      await FirebaseFirestore.instance
-          .collection("restaurant_orders")
-          .doc(orderModel.id)
-          .update({
-        "status": "Driver Assigned",
-        "driverID": nearestDriverId,
-        "driverDistance": nearestDistance,
-      });
-
-      await FirebaseFirestore.instance
-          .collection("users")
-          .doc(nearestDriverId)
-          .update({
-        "isActive": false,
-        "inProgressOrderID": FieldValue.arrayUnion([orderModel.id]),
-      });
-    }
-
-    // kick off
-    await assignDriver();
+    // Client-side direct assignment is deprecated.
+    // Trigger backend dispatcher by setting order to dispatchable state.
+    await FirebaseFirestore.instance
+        .collection("restaurant_orders")
+        .doc(orderModel.id)
+        .update({
+      "status": "Order Accepted",
+      "dispatch.lock": false,
+      "dispatch.lastRetriggerAt": FieldValue.serverTimestamp(),
+    });
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Order successfully assigned to the nearest driver!'),
+        content: Text('Order queued for automatic rider dispatch.'),
         backgroundColor: Colors.green,
       ),
     );
 
-    return {
-      "driverName": driverName,
-      "driverPhoto": driverPhoto,
-    };
+    return {};
   } catch (e, stackTrace) {
     print("Error in assignOrderToDriver: $e\n$stackTrace");
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1318,7 +1594,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
       if (snapshot.hasError) {
         return ListTile(
-          title: Text('Driver Selected'.tr(),
+          title: Text('Driver Selected',
               style: const TextStyle(color: Colors.grey)),
           subtitle: Text(
             'Error fetching order data',
@@ -1332,7 +1608,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
       if (!snapshot.hasData || !(snapshot.data?.exists ?? false)) {
         return ListTile(
-          title: Text('Driver Selected'.tr(),
+          title: Text('Driver Selected',
               style: const TextStyle(color: Colors.grey)),
           subtitle: Text(
             'No order data found',
@@ -1349,7 +1625,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
       if (driverID == null) {
         return ListTile(
-          title: Text('Driver Selected'.tr(),
+          title: Text('Driver Selected',
               style: const TextStyle(color: Colors.grey)),
           subtitle: Text(
             'No driver assigned',
@@ -1371,7 +1647,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
           if (driverSnapshot.hasError) {
             return ListTile(
-              title: Text('Driver Selected'.tr(),
+              title: Text('Driver Selected',
                   style: const TextStyle(color: Colors.grey)),
               subtitle: Text(
                 'Error fetching driver details',
@@ -1385,7 +1661,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
           if (!driverSnapshot.hasData || driverSnapshot.data == null) {
             return ListTile(
-              title: Text('Driver Selected'.tr(),
+              title: Text('Driver Selected',
                   style: const TextStyle(color: Colors.grey)),
               subtitle: Text(
                 'Driver details not available',
@@ -1404,7 +1680,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
           return ListTile(
             title: Text(
-              'Driver Selected'.tr(),
+              'Driver Selected',
               style: const TextStyle(color: Colors.grey),
             ),
             subtitle: Row(
@@ -1500,11 +1776,13 @@ class _PreparationTimerWidget extends StatefulWidget {
   final String orderId;
   final OrderModel orderModel;
   final VoidCallback onShipOrder;
+  final DateTime? acceptedAt;
 
   const _PreparationTimerWidget({
     required this.orderId,
     required this.orderModel,
     required this.onShipOrder,
+    this.acceptedAt,
   });
 
   @override
@@ -1521,7 +1799,10 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
   @override
   void initState() {
     super.initState();
-    _acceptedTime = DateTime.now();
+    _acceptedTime = widget.acceptedAt ??
+        widget.orderModel.acceptedAt?.toDate() ??
+        widget.orderModel.createdAt.toDate() ??
+        DateTime.now();
     _startTimer();
   }
 
@@ -1558,8 +1839,18 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
   }
 
   void _triggerAlarm() async {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Order will be ready in ~3 minutes. Mark as ready now!',
+          ),
+          backgroundColor: Colors.orange,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
     try {
-      // Use the device's default alarm sound
       final bytes = await rootBundle
           .load('assets/audio/mixkit-happy-bells-notification-937.mp3');
       final audioData = bytes.buffer.asUint8List();
@@ -1567,7 +1858,6 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
       final audioPlayer = AudioPlayer(playerId: "alarm_${widget.orderId}");
       await audioPlayer.play(BytesSource(audioData));
 
-      // Stop alarm after 10 seconds
       Timer(Duration(seconds: 10), () {
         audioPlayer.stop();
         audioPlayer.dispose();
@@ -1583,28 +1873,60 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
     try {
       print('🚨 EXCEEDED ALARM: Time exceeded for order ${widget.orderId}');
 
-      // Create a new audio player for the exceeded alarm
       _exceededAlarmPlayer =
           AudioPlayer(playerId: "exceeded_alarm_${widget.orderId}");
 
-      // Load and play the alarm sound
       final bytes = await rootBundle
           .load('assets/audio/mixkit-happy-bells-notification-937.mp3');
       final audioData = bytes.buffer.asUint8List();
 
-      // Play the alarm continuously
       await _exceededAlarmPlayer!.play(BytesSource(audioData));
 
-      // Set up looping for continuous alarm
       _exceededAlarmPlayer!.onPlayerComplete.listen((event) {
         if (_hasExceededAlarm && mounted) {
-          // Replay the alarm if time is still exceeded
           _exceededAlarmPlayer!.play(BytesSource(audioData));
         }
       });
+
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showExceededDialog();
+        });
+      }
     } catch (e) {
       print('🚨 Error triggering exceeded alarm: $e');
     }
+  }
+
+  void _showExceededDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Order Ready?'),
+        content: const Text(
+          'The preparation time has passed. Is the order ready for pickup?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _stopExceededAlarm();
+            },
+            child: const Text('NOT YET'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _stopExceededAlarm();
+              widget.onShipOrder();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: const Text('YES, MARK READY'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _stopExceededAlarm() {
@@ -1618,32 +1940,21 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
   }
 
   int _getRemainingMinutes() {
-    if (widget.orderModel.estimatedTimeToPrepare == null ||
-        widget.orderModel.estimatedTimeToPrepare!.isEmpty) {
-      return 0;
-    }
-
-    final timeParts = widget.orderModel.estimatedTimeToPrepare!.split(':');
-    if (timeParts.length != 2) {
-      return 0;
-    }
-
-    int estimatedMinutes;
-    if (timeParts[0].contains('.')) {
-      estimatedMinutes = (double.parse(timeParts[0]) * 60).round();
-    } else {
-      estimatedMinutes = int.parse(timeParts[0]) * 60 + int.parse(timeParts[1]);
-    }
-
-    if (_acceptedTime == null) {
-      return estimatedMinutes;
-    }
-
+    if (_acceptedTime == null) return 0;
+    final totalPrep = OrderReadyTimeHelper.parsePreparationMinutes(
+      widget.orderModel.estimatedTimeToPrepare,
+    );
     final now = DateTime.now();
     final elapsed = now.difference(_acceptedTime!).inMinutes;
-    final remaining = estimatedMinutes - elapsed;
-
+    final remaining = totalPrep - elapsed;
     return remaining > 0 ? remaining : 0;
+  }
+
+  Color _getTimerColor() {
+    final remaining = _getRemainingMinutes();
+    if (remaining <= 0) return Colors.red;
+    if (remaining <= 3) return Colors.orange;
+    return Colors.green;
   }
 
   @override
@@ -1668,31 +1979,19 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
         widget.orderModel.estimatedTimeToPrepare!.isEmpty) {
       return 'No time set';
     }
-
-    final timeParts = widget.orderModel.estimatedTimeToPrepare!.split(':');
-    if (timeParts.length != 2) {
-      return 'Invalid time format';
-    }
-
-    int estimatedMinutes;
-    if (timeParts[0].contains('.')) {
-      estimatedMinutes = (double.parse(timeParts[0]) * 60).round();
-    } else {
-      estimatedMinutes = int.parse(timeParts[0]) * 60 + int.parse(timeParts[1]);
-    }
-
     if (_acceptedTime == null) {
-      return '${estimatedMinutes}min';
+      final total =
+          OrderReadyTimeHelper.parsePreparationMinutes(
+              widget.orderModel.estimatedTimeToPrepare);
+      return '${total}min';
     }
-
+    final total =
+        OrderReadyTimeHelper.parsePreparationMinutes(
+            widget.orderModel.estimatedTimeToPrepare);
     final now = DateTime.now();
     final elapsed = now.difference(_acceptedTime!).inMinutes;
-    final remaining = estimatedMinutes - elapsed;
-
-    if (remaining <= 0) {
-      return 'Time exceeded';
-    }
-
+    final remaining = total - elapsed;
+    if (remaining <= 0) return 'Time exceeded';
     return '${remaining}min remaining';
   }
 
@@ -1703,8 +2002,16 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
     final remainingMinutes = _getRemainingMinutes();
     final isWarning = remainingMinutes <= 3 && remainingMinutes > 0;
     final isExceeded = remainingMinutes <= 0;
+    final timerColor = _getTimerColor();
 
-    return Column(
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: timerColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: timerColor),
+      ),
+      child: Column(
       children: [
         // Timer display
         Row(
@@ -1820,7 +2127,7 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
                 child: Text(
-                  'Mark as Ready'.tr(),
+                  'Mark as Ready',
                   style: const TextStyle(color: Colors.white),
                 ),
               ),
@@ -1828,6 +2135,7 @@ class _PreparationTimerWidgetState extends State<_PreparationTimerWidget> {
           ],
         ),
       ],
+      ),
     );
   }
 }

@@ -1,6 +1,7 @@
 import 'dart:io';
 
-import 'package:easy_localization/easy_localization.dart';
+import 'package:intl/intl.dart';
+
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -66,7 +67,7 @@ class _AddDineInState extends State<AddDineIn> {
         body: (MyAppState.currentUser!.vendorID.isEmpty)
             ? Container(
                 alignment: Alignment.center,
-                child: showEmptyState('', 'Please add a restaurant first'.tr()),
+                child: showEmptyState('', 'Please add a restaurant first'),
               )
             : SingleChildScrollView(
                 child: Padding(
@@ -79,7 +80,7 @@ class _AddDineInState extends State<AddDineIn> {
                             Container(
                                 alignment: AlignmentDirectional.centerStart,
                                 child: Text(
-                                  "Price (approx for two)".tr(),
+                                  "Price (approx for two)",
                                   style: TextStyle(
                                       fontSize: 17,
                                       fontFamily: "Poppinsl",
@@ -96,10 +97,10 @@ class _AddDineInState extends State<AddDineIn> {
                                   textInputAction: TextInputAction.next,
                                   validator: (text) {
                                     if (text == null || text.isEmpty) {
-                                      return "notBeEmpty".tr();
+                                      return "notBeEmpty";
                                     }
                                     if (int.parse(text) == 0) {
-                                      return 'Invalid Value'.tr();
+                                      return 'Invalid Value';
                                     }
                                     return null;
                                   },
@@ -112,7 +113,7 @@ class _AddDineInState extends State<AddDineIn> {
                                     FilteringTextInputFormatter.digitsOnly
                                   ],
                                   decoration: InputDecoration(
-                                    hintText: 'Price (approx for two)'.tr(),
+                                    hintText: 'Price (approx for two)',
                                     hintStyle: TextStyle(
                                         color: isDarkMode(context)
                                             ? Colors.white
@@ -134,7 +135,7 @@ class _AddDineInState extends State<AddDineIn> {
                             Container(
                                 alignment: AlignmentDirectional.centerStart,
                                 child: Text(
-                                  "Timing".tr(),
+                                  "Timing",
                                   style: TextStyle(
                                       fontSize: 17,
                                       fontFamily: "Poppinsl",
@@ -164,7 +165,7 @@ class _AddDineInState extends State<AddDineIn> {
                                               });
                                             } else {
                                               print(
-                                                  "Time is not selected".tr());
+                                                  "Time is not selected");
                                             }
                                           },
                                           readOnly: true,
@@ -225,7 +226,7 @@ class _AddDineInState extends State<AddDineIn> {
                                             });
                                           }
                                         } else {
-                                          print("Time is not selected".tr());
+                                          print("Time is not selected");
                                         }
                                       },
                                       readOnly: true,
@@ -296,14 +297,14 @@ class _AddDineInState extends State<AddDineIn> {
                               child: SwitchListTile.adaptive(
                                   activeColor: Color(COLOR_ACCENT),
                                   title: Text(
-                                    'Activate'.tr(),
+                                    'Activate',
                                     style: TextStyle(
                                         fontSize: 17,
                                         color: isDarkMode(context)
                                             ? Colors.white
                                             : Colors.black,
                                         fontFamily: "Poppinsm"),
-                                  ).tr(),
+                                  ),
                                   value: isDineActive,
                                   onChanged: (bool newValue) {
                                     isDineActive = newValue;
@@ -332,7 +333,7 @@ class _AddDineInState extends State<AddDineIn> {
                     validate();
                   },
                   child: Text(
-                    'CONTINUE'.tr(),
+                    'CONTINUE',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
@@ -347,7 +348,7 @@ class _AddDineInState extends State<AddDineIn> {
     if (MyAppState.currentUser!.vendorID != '') {
       if (_formKey.currentState?.validate() ?? false) {
         if (_mediaFiles.isNotEmpty) {
-          await showProgress(context, 'Updating Photo...'.tr(), false);
+          await showProgress(context, 'Updating Photo...', false);
           List menuPhotos = [];
           for (int pos = 0; pos < _mediaFiles.length; pos++) {
             if (_mediaFiles[pos] is File) {
@@ -371,7 +372,7 @@ class _AddDineInState extends State<AddDineIn> {
           vendors!.restaurantMenuPhotos = menuPhotos;
         }
 
-        await showProgress(context, 'Updating Restaurant...'.tr(), false);
+        await showProgress(context, 'Updating Restaurant...', false);
         vendors!.restaurantCost = int.parse(dineInFor2price.text);
         vendors!.enabledDiveInFuture = isDineActive;
         vendors!.openDineTime = time1.text;
@@ -390,12 +391,12 @@ class _AddDineInState extends State<AddDineIn> {
   _pickImage() {
     final action = CupertinoActionSheet(
       message: Text(
-        'Add Picture'.tr(),
+        'Add Picture',
         style: TextStyle(fontSize: 15.0),
       ),
       actions: <Widget>[
         CupertinoActionSheetAction(
-          child: Text('Choose image from gallery'.tr()),
+          child: Text('Choose image from gallery'),
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -410,7 +411,7 @@ class _AddDineInState extends State<AddDineIn> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text('Take a picture'.tr()),
+          child: Text('Take a picture'),
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -426,7 +427,7 @@ class _AddDineInState extends State<AddDineIn> {
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel'.tr()),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -483,7 +484,7 @@ class _AddDineInState extends State<AddDineIn> {
             // _mediaFiles.add(null);
             setState(() {});
           },
-          child: Text('Remove picture'.tr()),
+          child: Text('Remove picture'),
           isDestructiveAction: true,
         ),
         CupertinoActionSheetAction(
@@ -496,11 +497,11 @@ class _AddDineInState extends State<AddDineIn> {
                     : FullScreenImageViewer(imageUrl: image));
           },
           isDefaultAction: true,
-          child: Text('View picture'.tr()),
+          child: Text('View picture'),
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel'.tr()),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -514,7 +515,7 @@ class _AddDineInState extends State<AddDineIn> {
     Widget? okButton;
     if (addOkButton) {
       okButton = TextButton(
-        child: Text('OK'.tr()),
+        child: Text('OK'),
         onPressed: () {
           Navigator.pop(context);
         },

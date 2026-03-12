@@ -1,5 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
+import 'package:intl/intl.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -112,7 +112,7 @@ class WalletScreenState extends State<WalletScreen> {
                                     height: 15,
                                   ),
                                   Text(
-                                    "Total Balance".tr(),
+                                    "Total Balance",
                                     style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 18),
                                   ),
                                   Padding(
@@ -122,7 +122,7 @@ class WalletScreenState extends State<WalletScreen> {
                                       builder: (context, AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> asyncSnapshot) {
                                         if (asyncSnapshot.hasError) {
                                           return Text(
-                                            "error".tr(),
+                                            "error",
                                             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 30),
                                           );
                                         }
@@ -177,7 +177,7 @@ class WalletScreenState extends State<WalletScreen> {
           child: Row(
             children: [
               Expanded(
-                  child: buildButton(context, title: 'WITHDRAW'.tr(), onPress: () {
+                  child: buildButton(context, title: 'WITHDRAW', onPress: () {
                 if (MyAppState.currentUser!.vendorID.isNotEmpty) {
                   if (MyAppState.currentUser!.userBankDetails.accountNumber.isNotEmpty) {
                     withdrawAmount(context);
@@ -185,7 +185,7 @@ class WalletScreenState extends State<WalletScreen> {
                     final snackBar = SnackBar(
                       backgroundColor: Colors.red[400],
                       content: Text(
-                        'Please add your Bank Details first'.tr(),
+                        'Please add your Bank Details first',
                       ),
                     );
                     ScaffoldMessenger.of(context).showSnackBar(snackBar);
@@ -194,7 +194,7 @@ class WalletScreenState extends State<WalletScreen> {
                   final snackBar = SnackBar(
                     backgroundColor: Colors.red[400],
                     content: Text(
-                      'Please add your Store first'.tr(),
+                      'Please add your Store first',
                     ),
                   );
                   ScaffoldMessenger.of(context).showSnackBar(snackBar);
@@ -204,7 +204,7 @@ class WalletScreenState extends State<WalletScreen> {
                 width: 10,
               ),
               Expanded(
-                  child: buildButton(context, title: 'Withdraw history'.tr(), onPress: () {
+                  child: buildButton(context, title: 'Withdraw history', onPress: () {
                 withdrawalHistoryBottomSheet(context);
               })),
             ],
@@ -253,7 +253,7 @@ class WalletScreenState extends State<WalletScreen> {
       stream: withdrawHistoryQuery,
       builder: (BuildContext context, AsyncSnapshot<QuerySnapshot> snapshot) {
         if (snapshot.hasError) {
-          return Center(child: Text('Something went wrong'.tr()));
+          return Center(child: Text('Something went wrong'));
         }
         if (snapshot.connectionState == ConnectionState.waiting) {
           return Center(child: SizedBox(height: 35, width: 35, child: CircularProgressIndicator()));
@@ -261,7 +261,7 @@ class WalletScreenState extends State<WalletScreen> {
         if (snapshot.data!.docs.isEmpty) {
           return Center(
               child: Text(
-            "No Transaction History".tr(),
+            "No Transaction History",
             style: TextStyle(fontSize: 18),
           ));
         } else {
@@ -387,7 +387,7 @@ class WalletScreenState extends State<WalletScreen> {
       stream: topupHistoryQuery,
       builder: (BuildContext context, AsyncSnapshot<QuerySnapshot> snapshot) {
         if (snapshot.hasError) {
-          return Center(child: Text('Something went wrong'.tr()));
+          return Center(child: Text('Something went wrong'));
         }
         if (snapshot.connectionState == ConnectionState.waiting) {
           return Center(child: SizedBox(height: 35, width: 35, child: CircularProgressIndicator()));
@@ -395,7 +395,7 @@ class WalletScreenState extends State<WalletScreen> {
         if (snapshot.data!.docs.isEmpty) {
           return Center(
               child: Text(
-            "No Transaction History".tr(),
+            "No Transaction History",
             style: TextStyle(fontSize: 18),
           ));
         } else {
@@ -439,7 +439,7 @@ class WalletScreenState extends State<WalletScreen> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        topupTranHistory.isTopup ? "Order Amount".tr() : "Admin commission Deducted".tr(),
+                                        topupTranHistory.isTopup ? "Order Amount" : "Admin commission Deducted",
                                         style: TextStyle(
                                           fontWeight: FontWeight.w600,
                                         ),
@@ -515,7 +515,7 @@ class WalletScreenState extends State<WalletScreen> {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 25.0),
                   child: Text(
-                    "Transaction Details".tr(),
+                    "Transaction Details",
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 16,
@@ -537,7 +537,7 @@ class WalletScreenState extends State<WalletScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                "Transaction ID".tr(),
+                                "Transaction ID",
                                 style: TextStyle(
                                   fontWeight: FontWeight.w600,
                                   fontSize: 15,
@@ -601,7 +601,7 @@ class WalletScreenState extends State<WalletScreen> {
                                   Opacity(
                                     opacity: 0.7,
                                     child: Text(
-                                      topupTranHistory.isTopup ? "Order Amount".tr() : "Admin commission Deducted".tr(),
+                                      topupTranHistory.isTopup ? "Order Amount" : "Admin commission Deducted",
                                       style: TextStyle(
                                         fontWeight: FontWeight.w500,
                                         fontSize: 14,
@@ -647,7 +647,7 @@ class WalletScreenState extends State<WalletScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      "Date in UTC Format".tr(),
+                                      "Date in UTC Format",
                                       style: TextStyle(
                                         fontWeight: FontWeight.w600,
                                         fontSize: 14,
@@ -683,7 +683,7 @@ class WalletScreenState extends State<WalletScreen> {
                             });
                           },
                           child: Text(
-                            "View Order".tr().toUpperCase(),
+                            "View Order".toUpperCase(),
                             style: TextStyle(
                               fontWeight: FontWeight.w600,
                               color: Color(COLOR_PRIMARY),
@@ -723,7 +723,7 @@ class WalletScreenState extends State<WalletScreen> {
                     Padding(
                       padding: const EdgeInsets.only(top: 25.0, bottom: 10),
                       child: Text(
-                        "Withdraw".tr(),
+                        "Withdraw",
                         style: TextStyle(
                           fontSize: 18,
                           color: isDarkMode(context) ? Colors.white : Colors.black,
@@ -815,7 +815,7 @@ class WalletScreenState extends State<WalletScreen> {
                           padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 5),
                           child: RichText(
                             text: TextSpan(
-                              text: "Amount to Withdraw".tr(),
+                              text: "Amount to Withdraw",
                               style: TextStyle(
                                 fontSize: 16,
                                 color: isDarkMode(context) ? Colors.white70 : Colors.black.withValues(alpha: 0.7),
@@ -842,12 +842,12 @@ class WalletScreenState extends State<WalletScreen> {
                             maxLines: 1,
                             validator: (value) {
                               if (value!.isEmpty) {
-                                return "*required Field".tr();
+                                return "*required Field";
                               } else {
                                 if (double.parse(value) <= 0) {
-                                  return "*Invalid Amount".tr();
+                                  return "*Invalid Amount";
                                 } else if (double.parse(value) > double.parse(walletAmount)) {
-                                  return "*withdraw is more then wallet balance".tr();
+                                  return "*withdraw is more then wallet balance";
                                 } else {
                                   return null;
                                 }
@@ -901,13 +901,13 @@ class WalletScreenState extends State<WalletScreen> {
                         maxLines: 1,
                         validator: (value) {
                           if (value!.isEmpty) {
-                            return "*required Field".tr();
+                            return "*required Field";
                           }
                           return null;
                         },
                         keyboardType: TextInputType.text,
                         decoration: InputDecoration(
-                          hintText: 'Add note'.tr(),
+                          hintText: 'Add note',
                           fillColor: Colors.grey[200],
                           focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(5.0), borderSide: BorderSide(color: Color(COLOR_PRIMARY), width: 1.50)),
                           errorBorder: OutlineInputBorder(
@@ -927,7 +927,7 @@ class WalletScreenState extends State<WalletScreen> {
                     ),
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 10.0),
-                      child: buildButton(context, title: "WITHDRAW".tr(), onPress: () {
+                      child: buildButton(context, title: "WITHDRAW", onPress: () {
                         if (_globalKey.currentState!.validate()) {
                           withdrawRequest();
                         }
@@ -950,7 +950,7 @@ class WalletScreenState extends State<WalletScreen> {
       WithdrawHistoryModel withdrawHistory = WithdrawHistoryModel(
         amount: double.parse(_amountController.text),
         vendorID: vendorId,
-        paymentStatus: "Pending".tr(),
+        paymentStatus: "Pending",
         paidDate: Timestamp.now(),
         id: paymentID.toString(),
         note: _noteController.text,
@@ -963,7 +963,7 @@ class WalletScreenState extends State<WalletScreen> {
           Navigator.pop(_scaffoldKey.currentContext!);
           FireStoreUtils.sendPayoutMail(amount:_amountController.text ,payoutrequestid: paymentID.toString() );
           ScaffoldMessenger.of(_scaffoldKey.currentContext!).showSnackBar(SnackBar(
-            content: Text("Payment Successful!!".tr()),
+            content: Text("Payment Successful!!"),
             backgroundColor: Colors.green,
           ));
         });
@@ -999,7 +999,7 @@ class WalletScreenState extends State<WalletScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               CircularProgressIndicator(),
-              const Text('Please wait!!').tr(),
+              const Text('Please wait!!'),
             ],
           ),
           content: SingleChildScrollView(
@@ -1009,7 +1009,7 @@ class WalletScreenState extends State<WalletScreen> {
                   height: 15,
                 ),
                 Text(
-                  'Please wait!! while completing Transaction'.tr(),
+                  'Please wait!! while completing Transaction',
                   style: TextStyle(fontSize: 16),
                 ),
                 SizedBox(

@@ -1,14 +1,17 @@
 import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:foodie_driver/constants.dart';
 import 'package:foodie_driver/model/OrderModel.dart';
 import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
+import 'package:foodie_driver/services/proximity_config_service.dart';
 import 'package:geolocator/geolocator.dart';
 
-/// Service for monitoring driver proximity to order locations
+/// Service for monitoring driver proximity to order locations.
+/// Uses hysteresis, moving-average smoothing, and debounce to reduce GPS flicker.
 class OrderLocationService {
-  static const double PROXIMITY_THRESHOLD = 50.0; // meters
-  static const Duration ARRIVAL_DETECTION_DELAY = Duration(seconds: 3);
+  static const double PROXIMITY_THRESHOLD = 50.0; // legacy; prefer config
 
   static final StreamController<bool> _proximityController =
       StreamController<bool>.broadcast();
@@ -25,83 +28,142 @@ class OrderLocationService {
   static Timer? _customerArrivalDetectionTimer;
   static final Set<String> _hasShownArrivalDialog = <String>{};
   static final Set<String> _hasShownCustomerArrival = <String>{};
+  static final Set<String> _hasRecordedArrival = <String>{};
   static bool _wasNearRestaurant = false;
   static bool _wasNearCustomer = false;
 
-  /// Stream that emits proximity status (true when within 50m)
+  /// Location buffer for moving-average smoothing (max size from config).
+  static final List<UserLocation> _locationBuffer = [];
+  static UserLocation? _lastSmoothedLocation;
+  static DateTime? _lastProximityStateChangeAt;
+
+  /// Stream that emits proximity status (true when within hysteresis "near" zone)
   static Stream<bool> get proximityStream => _proximityController.stream;
 
-  /// Stream that emits order ID when arrival is detected (after delay)
   static Stream<String> get arrivalDetectedStream =>
       _arrivalDetectedController.stream;
-
-  /// Stream that emits order ID when driver departs from restaurant
   static Stream<String> get departureDetectedStream =>
       _departureDetectedController.stream;
-
-  /// Stream that emits order ID when customer arrival is detected (after delay)
   static Stream<String> get customerArrivalDetectedStream =>
       _customerArrivalDetectedController.stream;
 
-  /// Check if driver is within 50m of restaurant
+  /// Check if driver is within enter-threshold of restaurant (for UI).
   static bool isNearRestaurant(
       OrderModel order, UserLocation driverLocation) {
+    final enterT = ProximityConfigService.instance.enterThreshold;
     final distanceInMeters = Geolocator.distanceBetween(
       order.vendor.latitude,
       order.vendor.longitude,
       driverLocation.latitude,
       driverLocation.longitude,
     );
-
-    return distanceInMeters <= PROXIMITY_THRESHOLD;
+    return distanceInMeters <= enterT;
   }
 
-  /// Check if driver is within 50m of customer
+  /// Check if driver is within enter-threshold of customer (for UI).
   static bool isNearCustomer(OrderModel order, UserLocation driverLocation) {
-    if (order.address.location == null) {
-      return false;
-    }
-
+    if (order.address.location == null) return false;
+    final enterT = ProximityConfigService.instance.enterThreshold;
     final distanceInMeters = Geolocator.distanceBetween(
       order.address.location!.latitude,
       order.address.location!.longitude,
       driverLocation.latitude,
       driverLocation.longitude,
     );
-
-    return distanceInMeters <= PROXIMITY_THRESHOLD;
+    return distanceInMeters <= enterT;
   }
 
-  /// Check proximity based on order status
-  /// Returns true if driver is at the required location for current status
   static bool isAtRequiredLocation(
       OrderModel order, UserLocation driverLocation) {
-    // Monitor restaurant proximity for pickup states
-    if (order.status == ORDER_STATUS_DRIVER_PENDING ||
-        order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+    if (order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
         order.status == ORDER_STATUS_SHIPPED) {
       return isNearRestaurant(order, driverLocation);
     }
-
-    // Monitor customer proximity for delivery state
     if (order.status == ORDER_STATUS_IN_TRANSIT) {
       return isNearCustomer(order, driverLocation);
     }
+    return false;
+  }
 
+  /// Add location to buffer and return smoothed location (average of buffer).
+  static UserLocation _addAndGetSmoothed(
+      UserLocation location, int smoothingWindow) {
+    _locationBuffer.add(location);
+    if (smoothingWindow < 2 || _locationBuffer.length < 2) {
+      _lastSmoothedLocation = location;
+      return location;
+    }
+    while (_locationBuffer.length > smoothingWindow) {
+      _locationBuffer.removeAt(0);
+    }
+    double sumLat = 0.0, sumLng = 0.0;
+    for (final loc in _locationBuffer) {
+      sumLat += loc.latitude;
+      sumLng += loc.longitude;
+    }
+    final n = _locationBuffer.length;
+    final smoothed = UserLocation(
+      latitude: sumLat / n,
+      longitude: sumLng / n,
+    );
+    _lastSmoothedLocation = smoothed;
+    return smoothed;
+  }
+
+  static double _distanceToRestaurant(OrderModel order, UserLocation loc) {
+    return Geolocator.distanceBetween(
+      order.vendor.latitude,
+      order.vendor.longitude,
+      loc.latitude,
+      loc.longitude,
+    );
+  }
+
+  static double _distanceToCustomer(OrderModel order, UserLocation loc) {
+    if (order.address.location == null) return double.infinity;
+    return Geolocator.distanceBetween(
+      order.address.location!.latitude,
+      order.address.location!.longitude,
+      loc.latitude,
+      loc.longitude,
+    );
+  }
+
+  /// Hysteresis: enter when distance < enterT, exit when distance > exitT.
+  static bool _wouldBeNearWithHysteresis(
+      bool currentlyNear, double distance, double enterT, double exitT) {
+    if (currentlyNear) {
+      return distance <= exitT;
+    }
+    return distance < enterT;
+  }
+
+  static bool _debounceAllowsChange(int minSeconds) {
+    if (_lastProximityStateChangeAt == null) return true;
+    return DateTime.now()
+            .difference(_lastProximityStateChangeAt!)
+            .inSeconds >=
+        minSeconds;
+  }
+
+  static bool _isRestaurantPhase(OrderModel order) {
+    return order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+        order.status == ORDER_STATUS_SHIPPED;
+  }
+
+  static bool _getCurrentNearState(OrderModel order) {
+    if (_isRestaurantPhase(order)) return _wasNearRestaurant;
+    if (order.status == ORDER_STATUS_IN_TRANSIT) return _wasNearCustomer;
     return false;
   }
 
   /// Start monitoring proximity for an active order
   static void startMonitoring(String orderId, UserLocation driverLocation) {
-    if (_currentOrderId == orderId) {
-      // Already monitoring this order
-      return;
-    }
+    if (_currentOrderId == orderId) return;
 
     stopMonitoring();
     _currentOrderId = orderId;
 
-    // Listen to order updates
     _orderSubscription = FireStoreUtils()
         .getOrderByID(orderId)
         .listen((OrderModel? order) async {
@@ -110,7 +172,6 @@ class OrderLocationService {
         return;
       }
 
-      // Get current driver location
       final currentDriver = await FireStoreUtils.getCurrentUser(
           order.driverID ?? '');
       if (currentDriver == null) {
@@ -118,24 +179,34 @@ class OrderLocationService {
         return;
       }
 
-      final isNear = isAtRequiredLocation(order, currentDriver.location);
-      _updateProximity(isNear);
+      await ProximityConfigService.instance.getConfig();
+      final config = ProximityConfigService.instance;
+      final effectiveLocation =
+          _lastSmoothedLocation ?? currentDriver.location;
+      final enterT = config.enterThreshold;
+      final exitT = config.exitThreshold;
+      final minSec = config.minTimeBetweenChangesSeconds;
+      final delaySec = config.arrivalDelaySeconds;
 
-      // Check for restaurant arrival detection
-      if (order.status == ORDER_STATUS_DRIVER_PENDING ||
-          order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
-          order.status == ORDER_STATUS_SHIPPED) {
-        _checkRestaurantArrival(order, currentDriver.location);
+      if (_isRestaurantPhase(order)) {
+        final distance = _distanceToRestaurant(order, effectiveLocation);
+        final wouldBeNear = _wouldBeNearWithHysteresis(
+            _wasNearRestaurant, distance, enterT, exitT);
+        _applyRestaurantStateChange(
+            order, wouldBeNear, distance, enterT, exitT, minSec, delaySec);
+      } else if (order.status == ORDER_STATUS_IN_TRANSIT) {
+        final distance = _distanceToCustomer(order, effectiveLocation);
+        final wouldBeNear = _wouldBeNearWithHysteresis(
+            _wasNearCustomer, distance, enterT, exitT);
+        _applyCustomerStateChange(
+            order, wouldBeNear, distance, enterT, exitT, minSec, delaySec);
       }
 
-      // Check for customer arrival detection
-      if (order.status == ORDER_STATUS_IN_TRANSIT) {
-        _checkCustomerArrival(order, currentDriver.location);
-      }
+      _updateProximity(_getCurrentNearState(order));
     });
   }
 
-  /// Update proximity status when location changes
+  /// Update proximity status when location changes (from ContainerScreen).
   static Future<void> onLocationUpdate(
       UserLocation driverLocation, String? activeOrderId) async {
     if (activeOrderId == null || activeOrderId.isEmpty) {
@@ -143,14 +214,23 @@ class OrderLocationService {
       return;
     }
 
-    // If we're not monitoring this order yet, start monitoring
     if (_currentOrderId != activeOrderId) {
       startMonitoring(activeOrderId, driverLocation);
       return;
     }
 
-    // Get current order once
     try {
+      await ProximityConfigService.instance.getConfig();
+      final config = ProximityConfigService.instance;
+      final window = config.smoothingWindow;
+      UserLocation effectiveLocation;
+      if (window < 2) {
+        _lastSmoothedLocation = driverLocation;
+        effectiveLocation = driverLocation;
+      } else {
+        effectiveLocation = _addAndGetSmoothed(driverLocation, window);
+      }
+
       final orderStream = FireStoreUtils().getOrderByID(activeOrderId);
       final order = await orderStream.first;
       if (order == null) {
@@ -158,55 +238,99 @@ class OrderLocationService {
         return;
       }
 
-      final isNear = isAtRequiredLocation(order, driverLocation);
-      _updateProximity(isNear);
+      final enterT = config.enterThreshold;
+      final exitT = config.exitThreshold;
+      final minSec = config.minTimeBetweenChangesSeconds;
+      final delaySec = config.arrivalDelaySeconds;
 
-      // Check for restaurant arrival detection
-      if (order.status == ORDER_STATUS_DRIVER_PENDING ||
-          order.status == ORDER_STATUS_DRIVER_ACCEPTED ||
-          order.status == ORDER_STATUS_SHIPPED) {
-        _checkRestaurantArrival(order, driverLocation);
+      if (_isRestaurantPhase(order)) {
+        final distance = _distanceToRestaurant(order, effectiveLocation);
+        final wouldBeNear = _wouldBeNearWithHysteresis(
+            _wasNearRestaurant, distance, enterT, exitT);
+        _applyRestaurantStateChange(
+            order, wouldBeNear, distance, enterT, exitT, minSec, delaySec);
+      } else if (order.status == ORDER_STATUS_IN_TRANSIT) {
+        final distance = _distanceToCustomer(order, effectiveLocation);
+        final wouldBeNear = _wouldBeNearWithHysteresis(
+            _wasNearCustomer, distance, enterT, exitT);
+        _applyCustomerStateChange(
+            order, wouldBeNear, distance, enterT, exitT, minSec, delaySec);
       }
 
-      // Check for customer arrival detection
-      if (order.status == ORDER_STATUS_IN_TRANSIT) {
-        _checkCustomerArrival(order, driverLocation);
-      }
+      _updateProximity(_getCurrentNearState(order));
     } catch (e) {
       print('Error checking proximity: $e');
       _updateProximity(false);
     }
   }
 
-  /// Check for restaurant arrival and trigger detection after delay
-  static void _checkRestaurantArrival(
-      OrderModel order, UserLocation driverLocation) {
-    final nearRestaurant = isNearRestaurant(order, driverLocation);
+  static void _applyRestaurantStateChange(
+      OrderModel order,
+      bool wouldBeNear,
+      double distance,
+      double enterT,
+      double exitT,
+      int minSec,
+      int delaySec) {
+    if (wouldBeNear == _wasNearRestaurant) return;
 
-    if (nearRestaurant && !_wasNearRestaurant) {
-      // Driver just entered restaurant proximity
-      _wasNearRestaurant = true;
-      _startArrivalDetectionTimer(order.id);
-    } else if (!nearRestaurant && _wasNearRestaurant) {
-      // Driver left restaurant proximity
-      _wasNearRestaurant = false;
+    if (!_debounceAllowsChange(minSec)) return;
+
+    _lastProximityStateChangeAt = DateTime.now();
+    _wasNearRestaurant = wouldBeNear;
+
+    if (_wasNearRestaurant) {
+      if (!_hasRecordedArrival.contains(order.id)) {
+        _hasRecordedArrival.add(order.id);
+        _recordArrivedAtRestaurant(order.id);
+      }
+      _startArrivalDetectionTimer(order.id, delaySec);
+    } else {
       _cancelArrivalDetectionTimer();
-      // Emit departure event
       _departureDetectedController.add(order.id);
     }
   }
 
-  /// Start timer for arrival detection
-  static void _startArrivalDetectionTimer(String orderId) {
-    _cancelArrivalDetectionTimer();
-
-    // Check if dialog was already shown for this order
-    if (_hasShownArrivalDialog.contains(orderId)) {
-      return;
+  static Future<void> _recordArrivedAtRestaurant(String orderId) async {
+    try {
+      await FirebaseFirestore.instance
+          .collection(ORDERS)
+          .doc(orderId)
+          .update({
+        'coordination.arrivedAtRestaurant': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      print('Error recording arrivedAtRestaurant: $e');
     }
+  }
 
-    _arrivalDetectionTimer = Timer(ARRIVAL_DETECTION_DELAY, () {
-      // Check if still near restaurant
+  static void _applyCustomerStateChange(
+      OrderModel order,
+      bool wouldBeNear,
+      double distance,
+      double enterT,
+      double exitT,
+      int minSec,
+      int delaySec) {
+    if (wouldBeNear == _wasNearCustomer) return;
+
+    if (!_debounceAllowsChange(minSec)) return;
+
+    _lastProximityStateChangeAt = DateTime.now();
+    _wasNearCustomer = wouldBeNear;
+
+    if (_wasNearCustomer) {
+      _startCustomerArrivalDetectionTimer(order.id, delaySec);
+    } else {
+      _cancelCustomerArrivalDetectionTimer();
+    }
+  }
+
+  static void _startArrivalDetectionTimer(String orderId, int delaySeconds) {
+    _cancelArrivalDetectionTimer();
+    if (_hasShownArrivalDialog.contains(orderId)) return;
+
+    _arrivalDetectionTimer = Timer(Duration(seconds: delaySeconds), () {
       if (_wasNearRestaurant && !_hasShownArrivalDialog.contains(orderId)) {
         _arrivalDetectedController.add(orderId);
         _hasShownArrivalDialog.add(orderId);
@@ -214,53 +338,30 @@ class OrderLocationService {
     });
   }
 
-  /// Cancel arrival detection timer
   static void _cancelArrivalDetectionTimer() {
     _arrivalDetectionTimer?.cancel();
     _arrivalDetectionTimer = null;
   }
 
-  /// Check for customer arrival and trigger detection after delay
-  static void _checkCustomerArrival(
-      OrderModel order, UserLocation driverLocation) {
-    final nearCustomer = isNearCustomer(order, driverLocation);
-
-    if (nearCustomer && !_wasNearCustomer) {
-      // Driver just entered customer proximity
-      _wasNearCustomer = true;
-      _startCustomerArrivalDetectionTimer(order.id);
-    } else if (!nearCustomer && _wasNearCustomer) {
-      // Driver left customer proximity
-      _wasNearCustomer = false;
-      _cancelCustomerArrivalDetectionTimer();
-    }
-  }
-
-  /// Start timer for customer arrival detection
-  static void _startCustomerArrivalDetectionTimer(String orderId) {
+  static void _startCustomerArrivalDetectionTimer(
+      String orderId, int delaySeconds) {
     _cancelCustomerArrivalDetectionTimer();
+    if (_hasShownCustomerArrival.contains(orderId)) return;
 
-    // Check if arrival was already detected for this order
-    if (_hasShownCustomerArrival.contains(orderId)) {
-      return;
-    }
-
-    _customerArrivalDetectionTimer = Timer(ARRIVAL_DETECTION_DELAY, () {
-      // Check if still near customer
-      if (_wasNearCustomer && !_hasShownCustomerArrival.contains(orderId)) {
+    _customerArrivalDetectionTimer = Timer(Duration(seconds: delaySeconds), () {
+      if (_wasNearCustomer &&
+          !_hasShownCustomerArrival.contains(orderId)) {
         _customerArrivalDetectedController.add(orderId);
         _hasShownCustomerArrival.add(orderId);
       }
     });
   }
 
-  /// Cancel customer arrival detection timer
   static void _cancelCustomerArrivalDetectionTimer() {
     _customerArrivalDetectionTimer?.cancel();
     _customerArrivalDetectionTimer = null;
   }
 
-  /// Update proximity state and emit to stream
   static void _updateProximity(bool isNear) {
     if (_isNearRequiredLocation != isNear) {
       _isNearRequiredLocation = isNear;
@@ -268,10 +369,8 @@ class OrderLocationService {
     }
   }
 
-  /// Get current proximity status
   static bool get isNearRequiredLocation => _isNearRequiredLocation;
 
-  /// Stop monitoring proximity
   static void stopMonitoring() {
     _orderSubscription?.cancel();
     _orderSubscription = null;
@@ -280,30 +379,29 @@ class OrderLocationService {
     _cancelCustomerArrivalDetectionTimer();
     _wasNearRestaurant = false;
     _wasNearCustomer = false;
+    _hasRecordedArrival.clear();
+    _locationBuffer.clear();
+    _lastSmoothedLocation = null;
+    _lastProximityStateChangeAt = null;
     _updateProximity(false);
   }
 
-  /// Mark arrival dialog as shown for an order (called after confirmation)
   static void markArrivalDialogShown(String orderId) {
     _hasShownArrivalDialog.add(orderId);
   }
 
-  /// Reset arrival dialog state for an order (useful for testing or order reset)
   static void resetArrivalDialogState(String orderId) {
     _hasShownArrivalDialog.remove(orderId);
   }
 
-  /// Mark customer arrival as detected for an order (called after navigation)
   static void markCustomerArrivalDetected(String orderId) {
     _hasShownCustomerArrival.add(orderId);
   }
 
-  /// Reset customer arrival state for an order (useful for testing or order reset)
   static void resetCustomerArrivalState(String orderId) {
     _hasShownCustomerArrival.remove(orderId);
   }
 
-  /// Dispose resources
   static void dispose() {
     stopMonitoring();
     _proximityController.close();
@@ -312,4 +410,3 @@ class OrderLocationService {
     _customerArrivalDetectedController.close();
   }
 }
-

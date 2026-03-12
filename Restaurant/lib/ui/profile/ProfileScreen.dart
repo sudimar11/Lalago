@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -12,7 +11,11 @@ import 'package:foodie_restaurant/model/VendorModel.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
 import 'package:foodie_restaurant/ui/accountDetails/AccountDetailsScreen.dart';
+import 'package:foodie_restaurant/ui/add_resturant/add_resturant.dart';
 import 'package:foodie_restaurant/ui/auth/AuthScreen.dart';
+import 'package:foodie_restaurant/ui/offer/offers.dart';
+import 'package:foodie_restaurant/ui/settings/SettingsScreen.dart';
+import 'package:foodie_restaurant/ui/working_hour/working_hours_screen.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../reauthScreen/reauth_user_screen.dart';
@@ -103,13 +106,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ListTile(
                         onTap: () async {
                           if (MyAppState.currentUser!.vendorID.isNotEmpty) {
-                            vendor = (await FireStoreUtils.getVendor(MyAppState.currentUser!.vendorID))!;
+                            vendor = (await FireStoreUtils.getVendor(
+                                MyAppState.currentUser!.vendorID))!;
                           }
-                          //push(context, new AccountDetailsScreen(/*user: user,*/ vendor:vendor));
-                          Navigator.of(context).push(new MaterialPageRoute(builder: (context) => AccountDetailsScreen(/*user: user,*/ vendor: vendor))).then((value) {
+                          Navigator.of(context)
+                              .push(MaterialPageRoute(
+                                  builder: (context) =>
+                                      AccountDetailsScreen(vendor: vendor)))
+                              .then((value) {
                             if (value != null) {
                               setState(() {
-                                FireStoreUtils.getCurrentUser(MyAppState.currentUser!.userID).then((value) {
+                                FireStoreUtils.getCurrentUser(
+                                        MyAppState.currentUser!.userID)
+                                    .then((value) {
                                   setState(() {
                                     user = value!;
                                     MyAppState.currentUser = value;
@@ -118,30 +127,150 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               });
                             }
                           });
-                          print(vendor);
                         },
                         title: Text(
-                          'Account Details'.tr(),
-                          style: TextStyle(fontSize: 16),
-                        ).tr(),
+                          'Account Details',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: isDarkMode(context)
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
                         leading: Icon(
                           CupertinoIcons.person_alt,
                           color: Colors.blue,
                         ),
                       ),
-                      // ListTile(
-                      //   onTap: () {
-                      //     push(context, new SettingsScreen(/*user: user*/));
-                      //   },
-                      //   title: Text(
-                      //     'Settings',
-                      //     style: TextStyle(fontSize: 16),
-                      //   ).tr(),
-                      //   leading: Icon(
-                      //     CupertinoIcons.settings,
-                      //     color: Colors.grey,
-                      //   ),
-                      // ),
+                      Padding(
+                        padding: const EdgeInsets.only(
+                            left: 16, right: 16, top: 24, bottom: 8),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'RESTAURANT MANAGEMENT',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: isDarkMode(context)
+                                  ? Colors.white54
+                                  : Colors.black54,
+                            ),
+                          ),
+                        ),
+                      ),
+                      ListTile(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => AddRestaurantScreen(),
+                            ),
+                          );
+                        },
+                        title: Text(
+                          'Restaurant Information',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: isDarkMode(context)
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
+                        leading: Icon(
+                          Icons.restaurant_outlined,
+                          color: Color(COLOR_PRIMARY),
+                        ),
+                      ),
+                      ListTile(
+                        onTap: () => _navigateIfVendorExists(() {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => WorkingHoursScreen(),
+                            ),
+                          );
+                        }),
+                        title: Text(
+                          'Working Hours',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: isDarkMode(context)
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
+                        leading: Icon(
+                          Icons.access_time_sharp,
+                          color: Color(COLOR_PRIMARY),
+                        ),
+                      ),
+                      ListTile(
+                        onTap: () => _navigateIfVendorExists(() {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => OffersScreen(),
+                            ),
+                          );
+                        }),
+                        title: Text(
+                          'Promo Offers',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: isDarkMode(context)
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
+                        leading: Icon(
+                          Icons.local_offer_outlined,
+                          color: Color(COLOR_PRIMARY),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(
+                            left: 16, right: 16, top: 24, bottom: 8),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'SETTINGS',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: isDarkMode(context)
+                                  ? Colors.white54
+                                  : Colors.black54,
+                            ),
+                          ),
+                        ),
+                      ),
+                      ListTile(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => SettingsScreen(),
+                            ),
+                          );
+                        },
+                        title: Text(
+                          'App Settings',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: isDarkMode(context)
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
+                        leading: Icon(
+                          CupertinoIcons.settings,
+                          color: Color(COLOR_PRIMARY),
+                        ),
+                      ),
+                      Divider(
+                        color: isDarkMode(context)
+                            ? Colors.grey.shade700
+                            : Colors.grey.shade300,
+                      ),
                       ListTile(
                         onTap: () async {
                           AuthProviders? authProvider;
@@ -172,7 +301,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                           );
                           if (result != null && result) {
-                            await showProgress(context, "DeletingAccount".tr(), false);
+                            await showProgress(context, "DeletingAccount", false);
                             await FireStoreUtils.deleteUser();
                             await hideProgress();
                             MyAppState.currentUser = null;
@@ -181,8 +310,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         },
                         title: Text(
                           'Delete Account',
-                          style: TextStyle(fontSize: 16),
-                        ).tr(),
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: isDarkMode(context)
+                                ? Colors.white
+                                : Colors.black,
+                          ),
+                        ),
                         leading: Icon(
                           CupertinoIcons.delete,
                           color: Colors.red,
@@ -204,7 +338,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: Text(
                         'Logout',
                         style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: isDarkMode(context) ? Colors.white : Colors.black),
-                      ).tr(),
+                      ),
                       onPressed: () async {
                         user.fcmToken = "";
                         user.lastOnlineTimestamp = Timestamp.now();
@@ -221,19 +355,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  void _navigateIfVendorExists(VoidCallback onNavigate) {
+    if (user.vendorID.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please add restaurant first.')),
+      );
+      return;
+    }
+    onNavigate();
+  }
+
   _onCameraClick() {
     final action = CupertinoActionSheet(
       message: Text(
-        'Add Profile Picture'.tr(),
+        'Add Profile Picture',
         style: TextStyle(fontSize: 15.0),
-      ).tr(),
+      ),
       actions: <Widget>[
         CupertinoActionSheetAction(
-          child: Text('Remove picture'.tr()).tr(),
+          child: Text('Remove picture'),
           isDestructiveAction: true,
           onPressed: () async {
             Navigator.pop(context);
-            showProgress(context, "RemovingPicture".tr(), false);
+            showProgress(context, "RemovingPicture", false);
             user.profilePictureURL = '';
             await FireStoreUtils.updateCurrentUser(user);
             MyAppState.currentUser = user;
@@ -242,7 +386,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text('Choose image from gallery').tr(),
+          child: Text('Choose image from gallery'),
           onPressed: () async {
             Navigator.pop(context);
             XFile? image = await _imagePicker.pickImage(source: ImageSource.gallery);
@@ -253,7 +397,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text('Take a picture').tr(),
+          child: Text('Take a picture'),
           onPressed: () async {
             Navigator.pop(context);
             XFile? image = await _imagePicker.pickImage(source: ImageSource.camera);
@@ -265,7 +409,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel').tr(),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -275,7 +419,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _imagePicked(File image) async {
-    showProgress(context, "UploadingImage".tr(), false);
+    showProgress(context, "UploadingImage", false);
     user.profilePictureURL = await FireStoreUtils.uploadUserImageToFireStorage(image, user.userID);
     await FireStoreUtils.updateCurrentUser(user);
     MyAppState.currentUser = user;

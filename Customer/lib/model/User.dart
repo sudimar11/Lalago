@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/AddressModel.dart';
+import 'package:foodie_customer/model/LoyaltyData.dart';
 
 class User with ChangeNotifier {
   String email;
@@ -47,6 +48,9 @@ class User with ChangeNotifier {
   // Referral wallet amount (separate from regular wallet)
   double referralWalletAmount; // Referral credits usable only for orders
 
+  // Loyalty program data (backend-managed)
+  LoyaltyData? loyalty;
+
   User(
       {this.email = '',
       this.userID = '',
@@ -64,6 +68,7 @@ class User with ChangeNotifier {
       this.referralRewardAmount,
       this.hasOrderedBefore = false,
       this.referralWalletAmount = 0.0,
+      this.loyalty,
       this.rotation,
       this.vendorID,
       lastOnlineTimestamp,
@@ -166,7 +171,11 @@ class User with ChangeNotifier {
                 : double.tryParse(
                         parsedJson['referralWalletAmount'].toString()) ??
                     0.0)
-            : 0.0);
+            : 0.0,
+        loyalty: parsedJson['loyalty'] != null
+            ? LoyaltyData.fromJson(
+                parsedJson['loyalty'] as Map<String, dynamic>)
+            : null);
   }
 
   Map<String, dynamic> toJson() {
@@ -199,6 +208,7 @@ class User with ChangeNotifier {
       'referralRewardAmount': this.referralRewardAmount,
       'hasOrderedBefore': this.hasOrderedBefore,
       'referralWalletAmount': this.referralWalletAmount,
+      if (loyalty != null) 'loyalty': loyalty!.toJson(),
     };
     if (this.role == USER_ROLE_DRIVER) {
       json.addAll({
@@ -228,11 +238,45 @@ class UserSettings {
 
   bool promotions;
 
-  UserSettings(
-      {this.pushNewMessages = true,
-      this.orderUpdates = true,
-      this.newArrivals = true,
-      this.promotions = true});
+  bool ashRecommendations;
+
+  bool ashReorderReminders;
+
+  bool ashHungerReminders;
+
+  bool ashCartReminders;
+
+  bool autoRetryFailedOrders;
+  bool allowAlternativeSuggestions;
+  String? backupPaymentMethod;
+  int maxRetryAttempts;
+  List<String> preferredPaymentMethods;
+
+  bool quietHoursEnabled;
+  int quietHoursStart;
+  int quietHoursEnd;
+
+  String preferredLanguage;
+
+  UserSettings({
+    this.pushNewMessages = true,
+    this.orderUpdates = true,
+    this.newArrivals = true,
+    this.promotions = true,
+    this.ashRecommendations = true,
+    this.ashReorderReminders = true,
+    this.ashHungerReminders = true,
+    this.ashCartReminders = true,
+    this.autoRetryFailedOrders = false,
+    this.allowAlternativeSuggestions = true,
+    this.backupPaymentMethod,
+    this.maxRetryAttempts = 2,
+    this.preferredPaymentMethods = const [],
+    this.quietHoursEnabled = false,
+    this.quietHoursStart = 22,
+    this.quietHoursEnd = 8,
+    this.preferredLanguage = 'en',
+  });
 
   factory UserSettings.fromJson(Map<dynamic, dynamic> parsedJson) {
     return UserSettings(
@@ -246,6 +290,38 @@ class UserSettings {
           parsedJson['newArrivals'] is bool ? parsedJson['newArrivals'] : true,
       promotions:
           parsedJson['promotions'] is bool ? parsedJson['promotions'] : true,
+      ashRecommendations: parsedJson['ashRecommendations'] is bool
+          ? parsedJson['ashRecommendations']
+          : true,
+      ashReorderReminders: parsedJson['ashReorderReminders'] is bool
+          ? parsedJson['ashReorderReminders']
+          : true,
+      ashHungerReminders: parsedJson['ashHungerReminders'] is bool
+          ? parsedJson['ashHungerReminders']
+          : true,
+      ashCartReminders: parsedJson['ashCartReminders'] is bool
+          ? parsedJson['ashCartReminders']
+          : true,
+      autoRetryFailedOrders: parsedJson['autoRetryFailedOrders'] == true,
+      allowAlternativeSuggestions:
+          parsedJson['allowAlternativeSuggestions'] != false,
+      backupPaymentMethod: parsedJson['backupPaymentMethod'] as String?,
+      maxRetryAttempts: parsedJson['maxRetryAttempts'] is int
+          ? parsedJson['maxRetryAttempts'] as int
+          : 2,
+      preferredPaymentMethods: parsedJson['preferredPaymentMethods'] is List
+          ? List<String>.from(parsedJson['preferredPaymentMethods'] as List)
+          : <String>[],
+      quietHoursEnabled: parsedJson['quietHoursEnabled'] is bool
+          ? parsedJson['quietHoursEnabled']
+          : false,
+      quietHoursStart: parsedJson['quietHoursStart'] is int
+          ? parsedJson['quietHoursStart']
+          : 22,
+      quietHoursEnd: parsedJson['quietHoursEnd'] is int
+          ? parsedJson['quietHoursEnd']
+          : 8,
+      preferredLanguage: (parsedJson['preferredLanguage'] as String?) ?? 'en',
     );
   }
 
@@ -255,6 +331,19 @@ class UserSettings {
       'orderUpdates': this.orderUpdates,
       'newArrivals': this.newArrivals,
       'promotions': this.promotions,
+      'ashRecommendations': this.ashRecommendations,
+      'ashReorderReminders': this.ashReorderReminders,
+      'ashHungerReminders': this.ashHungerReminders,
+      'ashCartReminders': this.ashCartReminders,
+      'autoRetryFailedOrders': this.autoRetryFailedOrders,
+      'allowAlternativeSuggestions': this.allowAlternativeSuggestions,
+      'backupPaymentMethod': this.backupPaymentMethod,
+      'maxRetryAttempts': this.maxRetryAttempts,
+      'preferredPaymentMethods': this.preferredPaymentMethods,
+      'quietHoursEnabled': this.quietHoursEnabled,
+      'quietHoursStart': this.quietHoursStart,
+      'quietHoursEnd': this.quietHoursEnd,
+      'preferredLanguage': this.preferredLanguage,
     };
   }
 }

@@ -4,15 +4,23 @@ import 'package:foodie_customer/services/helper.dart';
 
 class EstimatedDeliveryTimeCard extends StatelessWidget {
   final String? deliveryTime;
+  final bool isLoading;
+  final bool hasFailed;
+  final VoidCallback? onRetry;
 
   const EstimatedDeliveryTimeCard({
     Key? key,
     this.deliveryTime,
+    this.isLoading = false,
+    this.hasFailed = false,
+    this.onRetry,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return GestureDetector(
+      onTap: hasFailed && onRetry != null ? onRetry : null,
+      child: Container(
       margin: const EdgeInsets.only(left: 13, top: 13, right: 13, bottom: 0),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
@@ -56,21 +64,43 @@ class EstimatedDeliveryTimeCard extends StatelessWidget {
                           isDarkMode(context) ? Colors.white : Colors.black87,
                     ),
                   ),
-                  Text(
-                    deliveryTime ?? '30 - 45 minutes',
-                    style: TextStyle(
-                      fontFamily: 'Poppinsr',
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Color(COLOR_PRIMARY),
+                  if (isLoading)
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(COLOR_PRIMARY),
+                      ),
+                    )
+                  else if (hasFailed && onRetry != null)
+                    Text(
+                      'Tap to retry',
+                      style: TextStyle(
+                        fontFamily: 'Poppinsr',
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(COLOR_PRIMARY),
+                        decoration: TextDecoration.underline,
+                      ),
+                    )
+                  else
+                    Text(
+                      deliveryTime ?? '30 - 45 minutes',
+                      style: TextStyle(
+                        fontFamily: 'Poppinsr',
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(COLOR_PRIMARY),
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
           ],
         ),
       ),
+    ),
     );
   }
 }

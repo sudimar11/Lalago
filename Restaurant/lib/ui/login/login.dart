@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
@@ -53,12 +52,12 @@ class _LoginPageState extends State<LoginPage> {
       } else {
         // Invalid role or inactive account
         await FirebaseAuth.instance.signOut();
-        _showErrorDialog('accountDisabledContactAdmin'.tr());
+        _showErrorDialog('Account disabled. Please contact admin.');
       }
     } on FirebaseAuthException catch (e) {
       _showErrorDialog(e.message ?? e.code);
     } catch (e) {
-      _showErrorDialog('unexpectedError'.tr());
+      _showErrorDialog('An unexpected error occurred.');
     } finally {
       setState(() {
         _isLoading = false;
@@ -70,12 +69,12 @@ class _LoginPageState extends State<LoginPage> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text('Error'.tr()),
+        title: Text('Error'),
         content: Text(message),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: Text('OK'.tr()),
+            child: Text('OK'),
           ),
         ],
       ),
@@ -87,7 +86,7 @@ class _LoginPageState extends State<LoginPage> {
     return Scaffold(
       appBar: AppBar(
         centerTitle: true,
-        title: Text('Log In'.tr()),
+        title: Text('Log In'),
         backgroundColor: Colors.transparent,
         elevation: 0,
       ),
@@ -103,7 +102,7 @@ class _LoginPageState extends State<LoginPage> {
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
                 decoration: InputDecoration(
-                  labelText: 'Email Address'.tr(),
+                  labelText: 'Email Address',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
@@ -117,7 +116,7 @@ class _LoginPageState extends State<LoginPage> {
                 controller: _passwordController,
                 obscureText: _obscurePassword,
                 decoration: InputDecoration(
-                  labelText: 'Password'.tr(),
+                  labelText: 'Password',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
@@ -143,7 +142,7 @@ class _LoginPageState extends State<LoginPage> {
                   onPressed: _isLoading ? null : _login,
                   child: _isLoading
                       ? CircularProgressIndicator(color: Colors.white)
-                      : Text('Log In'.tr()),
+                      : Text('Log In'),
                   style: ElevatedButton.styleFrom(
                     padding: EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(

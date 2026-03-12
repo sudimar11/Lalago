@@ -30,6 +30,11 @@ class ProductModel {
   num reviewsCount;
   num reviewsSum;
   Map<String, dynamic>? reviewAttributes;
+  int lowStockThreshold;
+  bool trackInventory;
+  Timestamp? lastStockUpdated;
+
+  bool get isLowStock => trackInventory && quantity <= lowStockThreshold;
 
   ProductModel({
     this.categoryID = '',
@@ -58,6 +63,9 @@ class ProductModel {
     this.reviewAttributes,
     this.reviewsCount = 0,
     this.reviewsSum = 0,
+    this.lowStockThreshold = 5,
+    this.trackInventory = false,
+    this.lastStockUpdated,
   });
 
   factory ProductModel.fromJson(Map<String, dynamic> parsedJson) {
@@ -92,7 +100,10 @@ class ProductModel {
               ),
         specification: parsedJson['product_specification'] ?? {},
         itemAttributes: (parsedJson.containsKey('item_attribute') && parsedJson['item_attribute'] != null) ? ItemAttributes.fromJson(parsedJson['item_attribute']) : null,
-        veg: parsedJson['veg'] ?? false);
+        veg: parsedJson['veg'] ?? false,
+        lowStockThreshold: parsedJson['lowStockThreshold'] ?? 5,
+        trackInventory: parsedJson['trackInventory'] ?? false,
+        lastStockUpdated: parsedJson['lastStockUpdated'] as Timestamp?);
   }
 
   Map<String, dynamic> toJson() {
@@ -123,6 +134,9 @@ class ProductModel {
       'reviewAttributes': reviewAttributes,
       'reviewsCount': reviewsCount,
       'reviewsSum': reviewsSum,
+      'lowStockThreshold': lowStockThreshold,
+      'trackInventory': trackInventory,
+      'lastStockUpdated': lastStockUpdated,
     };
   }
 }

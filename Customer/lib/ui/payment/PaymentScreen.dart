@@ -8,6 +8,7 @@ import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/CodModel.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/network_safe_api.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
@@ -16,6 +17,7 @@ import 'package:foodie_customer/userPrefrence.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../model/OrderModel.dart';
+import '../../services/gift_card_service.dart';
 import '../../model/TaxModel.dart';
 import '../../model/User.dart';
 import '../../model/VendorModel.dart';
@@ -50,6 +52,15 @@ class PaymentScreen extends StatefulWidget {
   // Referral wallet parameter
   final double? referralWalletAmountUsed;
 
+  // Gift card parameters
+  final double? giftCardAmountUsed;
+  final List<Map<String, dynamic>>? giftCardBreakdown;
+
+  // Loyalty free delivery
+  final double? loyaltyFreeDeliveryAmount;
+  final String? loyaltyFreeDeliveryRewardId;
+  final String? loyaltyFreeDeliveryCycle;
+
   const PaymentScreen(
       {Key? key,
       required this.total,
@@ -72,7 +83,12 @@ class PaymentScreen extends StatefulWidget {
       this.manualCouponId,
       this.manualCouponDiscountAmount,
       this.manualCouponImage,
-      this.referralWalletAmountUsed})
+      this.referralWalletAmountUsed,
+      this.giftCardAmountUsed,
+      this.giftCardBreakdown,
+      this.loyaltyFreeDeliveryAmount,
+      this.loyaltyFreeDeliveryRewardId,
+      this.loyaltyFreeDeliveryCycle})
       : super(key: key);
 
   @override
@@ -313,32 +329,32 @@ class PaymentScreenState extends State<PaymentScreen> {
                 FutureBuilder<CodModel?>(
                     future: futurecod,
                     builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting)
+                      if (snapshot.connectionState == ConnectionState.waiting) {
                         return Center(
                           child: CircularProgressIndicator.adaptive(
                             valueColor:
                                 AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
                           ),
                         );
-                      if (snapshot.hasData) {
-                        return snapshot.data!.cod == true
-                            ? CheckboxListTile(
-                                onChanged: (bool? value) {
-                                  setState(() {
-                                    wallet = false;
-                                    codPay = true;
-                                    paymentOption = 'Cash on Delivery';
-                                  });
-                                },
-                                value: codPay,
-                                contentPadding: EdgeInsets.all(0),
-                                secondary:
-                                    FaIcon(FontAwesomeIcons.handHoldingDollar),
-                                title: Text('Cash on Delivery'),
-                              )
-                            : Center();
                       }
-                      return Center();
+                      final codEnabled = snapshot.hasData && snapshot.data != null
+                          ? snapshot.data!.cod
+                          : true;
+                      if (!codEnabled) return const Center();
+                      return CheckboxListTile(
+                        onChanged: (bool? value) {
+                          setState(() {
+                            wallet = false;
+                            codPay = true;
+                            paymentOption = 'Cash on Delivery';
+                          });
+                        },
+                        value: codPay,
+                        contentPadding: EdgeInsets.zero,
+                        secondary:
+                            FaIcon(FontAwesomeIcons.handHoldingDollar),
+                        title: const Text('Cash on Delivery'),
+                      );
                     }),
               ],
             ),
@@ -474,14 +490,28 @@ class PaymentScreenState extends State<PaymentScreen> {
         manualCouponId: widget.manualCouponId,
         manualCouponDiscountAmount: widget.manualCouponDiscountAmount,
         manualCouponImage: widget.manualCouponImage,
+        referralWalletAmountUsed: widget.referralWalletAmountUsed,
+        giftCardAmountUsed: widget.giftCardAmountUsed,
+        giftCardBreakdown: widget.giftCardBreakdown,
       );
 
       if (oid != null && oid.isNotEmpty) {
         orderModel.id = oid;
       }
 
-      OrderModel placedOrder =
-          await fireStoreUtils.placeOrderWithTakeAWay(orderModel);
+      final placedOrder = await NetworkSafeAPI.runWithNetworkCheck(
+        () => fireStoreUtils.placeOrderWithTakeAWay(orderModel),
+        onOffline: () {
+          ScaffoldMessenger.of(buildContext).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'No network. Please check your connection and try again.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        },
+      );
 
       for (int i = 0; i < tempProduc.length; i++) {
         await FireStoreUtils()
@@ -516,6 +546,28 @@ class PaymentScreenState extends State<PaymentScreen> {
         });
       }
 
+      // Redeem gift cards used in this order
+      if (widget.giftCardBreakdown != null &&
+          widget.giftCardBreakdown!.isNotEmpty &&
+          MyAppState.currentUser != null) {
+        final userId = MyAppState.currentUser!.userID;
+        for (final entry in widget.giftCardBreakdown!) {
+          final cardId = entry['cardId'] as String?;
+          final amount = (entry['amount'] as num?)?.toDouble();
+          if (cardId == null || amount == null || amount <= 0) continue;
+          try {
+            await GiftCardService.redeemGiftCard(
+              cardId: cardId,
+              amount: amount,
+              userId: userId,
+              orderId: placedOrder.id,
+            );
+          } catch (e) {
+            debugPrint('Gift card redeem failed: $e');
+          }
+        }
+      }
+
       showModalBottomSheet(
         isScrollControlled: true,
         isDismissible: false,
@@ -524,6 +576,12 @@ class PaymentScreenState extends State<PaymentScreen> {
         backgroundColor: Colors.transparent,
         builder: (context) => PlaceOrderScreen(orderModel: placedOrder),
       );
+    } on NetworkUnavailableException catch (e) {
+      ScaffoldMessenger.of(buildContext).showSnackBar(SnackBar(
+        content: Text(e.message ?? 'No network. Please try again.'),
+        backgroundColor: Colors.red,
+      ));
+      print("Order placement failed (offline): $e");
     } catch (e) {
       ScaffoldMessenger.of(buildContext).showSnackBar(SnackBar(
         content: Text("Order placement failed: ${e.toString()}"),
@@ -565,6 +623,11 @@ class PaymentScreenState extends State<PaymentScreen> {
         manualCouponDiscountAmount: widget.manualCouponDiscountAmount,
         manualCouponImage: widget.manualCouponImage,
         referralWalletAmountUsed: widget.referralWalletAmountUsed,
+        giftCardAmountUsed: widget.giftCardAmountUsed,
+        giftCardBreakdown: widget.giftCardBreakdown,
+        loyaltyFreeDeliveryAmount: widget.loyaltyFreeDeliveryAmount,
+        loyaltyFreeDeliveryRewardId: widget.loyaltyFreeDeliveryRewardId,
+        loyaltyFreeDeliveryCycle: widget.loyaltyFreeDeliveryCycle,
       ),
     );
   }

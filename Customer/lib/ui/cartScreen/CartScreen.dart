@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer';
 
 import 'package:bottom_picker/bottom_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -36,15 +37,50 @@ import 'package:foodie_customer/services/happy_hour_service.dart';
 import 'package:foodie_customer/services/first_order_coupon_service.dart';
 import 'package:foodie_customer/services/coupon_service.dart';
 import 'package:foodie_customer/services/new_user_promo_service.dart';
+import 'package:foodie_customer/services/loyalty_service.dart';
+import 'package:foodie_customer/services/gift_card_service.dart';
 import 'package:foodie_customer/services/distance_service.dart';
 import 'package:foodie_customer/ui/cartScreen/voucher_screen.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:foodie_customer/ui/home/view_all_restaurant.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
+import 'package:foodie_customer/widgets/banner_ad_widget.dart';
 import 'package:foodie_customer/ui/cartScreen/estimated_delivery_time_card.dart';
 import 'package:foodie_customer/model/User.dart';
+import 'package:foodie_customer/model/addon_promo_model.dart';
+import 'package:foodie_customer/services/addon_promo_service.dart';
+import 'package:foodie_customer/ui/addon/addon_promo_card.dart';
+import 'package:foodie_customer/utils/extensions/cart_product_extension.dart';
+import 'package:foodie_customer/services/ad_service.dart';
+import 'package:foodie_customer/services/analytics_service.dart';
+import 'package:foodie_customer/services/performance_logger.dart';
+import 'package:foodie_customer/services/restaurant_status_service.dart';
 
 /// Temporarily set to false to silence cart debug logs while tracing FCM.
 const bool _kShowCartLogs = false;
+
+/// One entry in the cart list: either a bundle header or a product row.
+class _CartEntry {
+  final bool isBundleHeader;
+  final String? bundleName;
+  final CartProduct? product;
+
+  _CartEntry.bundleHeader(this.bundleName)
+      : isBundleHeader = true,
+        product = null;
+
+  _CartEntry.item(this.product)
+      : isBundleHeader = false,
+        bundleName = null;
+}
+
+/// Holds a pending quantity update for debouncing rapid +/- taps.
+class _PendingQuantityUpdate {
+  final CartProduct product;
+  final int targetQty;
+
+  const _PendingQuantityUpdate(this.product, this.targetQty);
+}
 
 class CartScreen extends StatefulWidget {
   final bool fromContainer;
@@ -164,14 +200,28 @@ class _CartScreenState extends State<CartScreen> {
   double referralWalletAmountToUse = 0.0;
   bool isReferralWalletApplied = false;
 
+  // Gift card variables
+  List<Map<String, dynamic>> activeGiftCards = [];
+  double giftCardAmountToUse = 0.0;
+  List<Map<String, dynamic>> giftCardBreakdown = [];
+  bool isGiftCardApplied = false;
+  GiftCardConfig? giftCardConfig;
+
+  // Loyalty free delivery
+  double loyaltyFreeDeliveryAmount = 0.0;
+  String? loyaltyFreeDeliveryRewardId;
+  String? loyaltyFreeDeliveryCycle;
+
   // State management variables to prevent UI flashing
   bool _isInitialized = false;
   bool _isDeliveryDataLoading = false;
   bool _isDeliveryReady = false;
+  bool _deliveryCalcFailed = false;
   bool _isDependenciesInitialized = false;
   String? _lastVendorID;
   List<CartProduct>? _lastCartProducts;
   double? _lastSubTotal;
+  String? _lastTotalsSignature;
   Map<String, ProductModel>? _productCache;
   Map<String, VendorModel>? _vendorCache;
 
@@ -186,10 +236,16 @@ class _CartScreenState extends State<CartScreen> {
   Timer? _distanceCalculationDebounceTimer;
   String? _estimatedDeliveryTimeText;
 
+  Timer? _statusCheckTimer;
+  List<Map<String, dynamic>>? _closedVendorsInCart;
+
   static const int _defaultPrepMinutes = 20;
   static const int _etaBufferMinutes = 10;
   static const double _avgSpeedKmh = 25.0;
   static const int _cacheExpiryMinutes = 10;
+
+  /// When true, next delivery calculation uses live location (no cache).
+  bool _useLiveLocationOnNextDeliveryCalc = true;
 
   /// Invalidates all delivery-related cache variables
   void _invalidateDeliveryCache() {
@@ -201,6 +257,25 @@ class _CartScreenState extends State<CartScreen> {
     _lastCalculatedLng = null;
     _cacheTimestamp = null;
     _estimatedDeliveryTimeText = null;
+  }
+
+  List<Map<String, dynamic>> _prorateGiftCardBreakdown(
+    List<Map<String, dynamic>> breakdown,
+    double maxTotal,
+  ) {
+    final total = breakdown.fold<double>(
+      0,
+      (s, e) => s + ((e['amount'] as num?)?.toDouble() ?? 0),
+    );
+    if (total <= 0 || maxTotal >= total) return breakdown;
+    final ratio = maxTotal / total;
+    return breakdown.map((e) {
+      final amt = (e['amount'] as num?)?.toDouble() ?? 0;
+      return {
+        ...e,
+        'amount': (amt * ratio).roundToDouble(),
+      };
+    }).where((e) => (e['amount'] as num) > 0).toList();
   }
 
   String? _validatePhoneNumber(String value) {
@@ -455,6 +530,12 @@ class _CartScreenState extends State<CartScreen> {
   // ValueNotifiers for cart item quantities (for display only)
   final Map<String, ValueNotifier<int>> _itemQuantityNotifiers = {};
 
+  // Debounce quantity +/- taps to reduce DB writes during rapid taps
+  static const Duration _quantityDebounceDelay =
+      Duration(milliseconds: 300);
+  Timer? _quantityDebounceTimer;
+  final Map<String, _PendingQuantityUpdate> _pendingQuantityUpdates = {};
+
   // Initialize/update quantity notifiers for cart items
   void _updateQuantityNotifiers(List<CartProduct> products) {
     // Remove notifiers for items that no longer exist
@@ -482,6 +563,32 @@ class _CartScreenState extends State<CartScreen> {
       _itemQuantityNotifiers[itemId] = ValueNotifier<int>(initialQuantity);
     }
     return _itemQuantityNotifiers[itemId]!;
+  }
+
+  /// Schedules a quantity update with 300ms debounce. Optimistic UI update
+  /// should be done by caller before calling this.
+  void _scheduleQuantityUpdate(CartProduct cartProduct, int targetQty) {
+    final key = cartProduct.id;
+    _pendingQuantityUpdates[key] =
+        _PendingQuantityUpdate(cartProduct, targetQty);
+    _quantityDebounceTimer?.cancel();
+    _quantityDebounceTimer = Timer(_quantityDebounceDelay, () {
+      _quantityDebounceTimer = null;
+      _flushPendingQuantityUpdates();
+    });
+  }
+
+  void _flushPendingQuantityUpdates() {
+    final pending =
+        Map<String, _PendingQuantityUpdate>.from(_pendingQuantityUpdates);
+    _pendingQuantityUpdates.clear();
+    for (final e in pending.values) {
+      if (e.targetQty <= 0) {
+        cartDatabase.removeProduct(e.product.id);
+      } else {
+        removetocard(e.product, e.targetQty);
+      }
+    }
   }
 
   // Diagnostic method to test database access and stream functionality
@@ -557,10 +664,27 @@ class _CartScreenState extends State<CartScreen> {
     }
   }
 
+  /// Builds a signature for memoization to skip recalculation when inputs unchanged.
+  String _totalsSignature(
+      List<CartProduct> data, String delivery, double tip) {
+    final cartPart = data
+        .map((e) => '${e.id}:${e.quantity}:${e.price}')
+        .join(';');
+    return '$cartPart|$delivery|$tip';
+  }
+
   /// Pure calculation method that computes all totals without mutating state
   /// Returns calculated values that should be applied to state via setState
   void _calculateAndUpdateTotals(
       List<CartProduct> data, List<AddAddonsDemo> lstExtras, String vendorID) {
+    final sig = _totalsSignature(data, deliveryCharges, tipValue);
+    if (_lastTotalsSignature == sig) {
+      if (_kShowCartLogs) debugPrint(
+          '🟢 [TOTALS_MEMO] Skipping recalc, signature match');
+      return;
+    }
+    _lastTotalsSignature = sig;
+
     if (_kShowCartLogs) debugPrint(
         '🟢 [SUBTOTAL_CALC] _calculateAndUpdateTotals() called OUTSIDE build');
 
@@ -670,6 +794,31 @@ class _CartScreenState extends State<CartScreen> {
       calculatedGrandTotal -= promoDiscountAmount;
     }
 
+    // Calculate gift card (payment order: gift card first)
+    double calculatedGiftCardAmountToUse = 0.0;
+    List<Map<String, dynamic>> calculatedGiftCardBreakdown = [];
+    if (isGiftCardApplied && giftCardBreakdown.isNotEmpty) {
+      for (final entry in giftCardBreakdown) {
+        final amt = (entry['amount'] as num?)?.toDouble() ?? 0;
+        if (amt > 0) {
+          calculatedGiftCardAmountToUse += amt;
+          calculatedGiftCardBreakdown.add(Map<String, dynamic>.from(entry));
+        }
+      }
+      final maxGiftCard =
+          calculatedGiftCardAmountToUse.clamp(0.0, calculatedGrandTotal);
+      if (maxGiftCard < calculatedGiftCardAmountToUse) {
+        calculatedGiftCardAmountToUse = maxGiftCard;
+        calculatedGiftCardBreakdown = _prorateGiftCardBreakdown(
+          giftCardBreakdown,
+          maxGiftCard,
+        );
+      }
+      calculatedGrandTotal =
+          (calculatedGrandTotal - calculatedGiftCardAmountToUse)
+              .clamp(0.0, double.infinity);
+    }
+
     // Calculate referral wallet
     double calculatedReferralWalletAmountToUse = 0.0;
     bool calculatedIsReferralWalletApplied = isReferralWalletApplied;
@@ -688,6 +837,17 @@ class _CartScreenState extends State<CartScreen> {
     } else {
       calculatedIsReferralWalletApplied = false;
       calculatedReferralWalletAmountToUse = 0.0;
+    }
+
+    // Loyalty free delivery (auto-applied when available)
+    double effectiveLoyaltyFreeDelivery = 0.0;
+    if (loyaltyFreeDeliveryRewardId != null && deliveryCharges != "0.0") {
+      effectiveLoyaltyFreeDelivery =
+          (double.tryParse(deliveryCharges) ?? 0.0)
+              .clamp(0.0, calculatedGrandTotal);
+      calculatedGrandTotal =
+          (calculatedGrandTotal - effectiveLoyaltyFreeDelivery)
+              .clamp(0.0, double.infinity);
     }
 
     // Calculate tax
@@ -718,7 +878,12 @@ class _CartScreenState extends State<CartScreen> {
         specialDiscountAmount = calculatedSpecialDiscountAmount;
         specialType = calculatedSpecialType;
         selectedDiscount = calculatedSelectedDiscount;
+        giftCardAmountToUse = calculatedGiftCardAmountToUse;
+        if (calculatedGiftCardBreakdown.isNotEmpty) {
+          giftCardBreakdown = calculatedGiftCardBreakdown;
+        }
         referralWalletAmountToUse = calculatedReferralWalletAmountToUse;
+        loyaltyFreeDeliveryAmount = effectiveLoyaltyFreeDelivery;
         if (isReferralWalletApplied != calculatedIsReferralWalletApplied) {
           isReferralWalletApplied = calculatedIsReferralWalletApplied;
         }
@@ -822,8 +987,12 @@ class _CartScreenState extends State<CartScreen> {
   @override
   void initState() {
     super.initState();
+    final userId = MyAppState.currentUser?.userID;
+    if (userId != null && userId.isNotEmpty) {
+      AnalyticsService.trackFunnelStep(userId, 'cart_view');
+    }
 
-    addressModel = MyAppState.selectedPosotion;
+    addressModel = MyAppState.selectedPosition;
 
     coupon = _fireStoreUtils.getAllCoupons();
 
@@ -837,6 +1006,11 @@ class _CartScreenState extends State<CartScreen> {
         _initializeData();
       }
     });
+
+    _statusCheckTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => _checkCartRestaurantStatus(),
+    );
   }
 
   // Initialize data after first frame
@@ -853,6 +1027,8 @@ class _CartScreenState extends State<CartScreen> {
     await _checkFirstOrderEligibility();
     await _checkReferralPath();
     await _loadReferralWalletBalance();
+    await _loadGiftCards();
+    await _loadLoyaltyFreeDelivery();
     await _checkNewUserPromoEligibility();
 
     if (mounted) {
@@ -915,6 +1091,35 @@ class _CartScreenState extends State<CartScreen> {
     }
   }
 
+  Future<void> _loadGiftCards() async {
+    try {
+      if (MyAppState.currentUser == null) {
+        if (!mounted) return;
+        setState(() {
+          activeGiftCards = [];
+          giftCardConfig = null;
+        });
+        return;
+      }
+      final cfg = await GiftCardService.getConfig();
+      final cards = await GiftCardService.getUserActiveGiftCards(
+        MyAppState.currentUser!.userID,
+      );
+      if (!mounted) return;
+      setState(() {
+        activeGiftCards = cards;
+        giftCardConfig = cfg;
+      });
+    } catch (e) {
+      debugPrint('Error loading gift cards: $e');
+      if (!mounted) return;
+      setState(() {
+        activeGiftCards = [];
+        giftCardConfig = null;
+      });
+    }
+  }
+
   Future<void> _loadReferralWalletBalance() async {
     try {
       if (MyAppState.currentUser == null) {
@@ -943,6 +1148,43 @@ class _CartScreenState extends State<CartScreen> {
       if (!mounted) return;
       setState(() {
         referralWalletAmountAvailable = 0.0;
+      });
+    }
+  }
+
+  Future<void> _loadLoyaltyFreeDelivery() async {
+    try {
+      if (MyAppState.currentUser == null) return;
+      final config = await LoyaltyService.getLoyaltyConfig();
+      if (config?['enabled'] != true) return;
+      final loyalty = await LoyaltyService.getLoyalty(MyAppState.currentUser!.userID);
+      if (loyalty == null || loyalty.currentCycle.isEmpty) return;
+
+      final freeDelivery = loyalty.rewardsClaimed.where((r) {
+        return r.rewardId == 'free_delivery' &&
+            !r.isExpired &&
+            !r.isUsed &&
+            r.cycle == loyalty.currentCycle;
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        if (freeDelivery.isNotEmpty) {
+          loyaltyFreeDeliveryRewardId = 'free_delivery';
+          loyaltyFreeDeliveryCycle = loyalty.currentCycle;
+        } else {
+          loyaltyFreeDeliveryRewardId = null;
+          loyaltyFreeDeliveryCycle = null;
+          loyaltyFreeDeliveryAmount = 0.0;
+        }
+      });
+    } catch (e) {
+      debugPrint('Error loading loyalty free delivery: $e');
+      if (!mounted) return;
+      setState(() {
+        loyaltyFreeDeliveryRewardId = null;
+        loyaltyFreeDeliveryCycle = null;
+        loyaltyFreeDeliveryAmount = 0.0;
       });
     }
   }
@@ -1468,41 +1710,64 @@ class _CartScreenState extends State<CartScreen> {
     return hasVendorChanged || hasAddressChanged;
   }
 
-  /// Debounced wrapper for getDeliveyData to prevent excessive API calls
-  void _debouncedGetDeliveryData({bool immediate = false}) {
-    // Cancel any pending debounce timer
+  /// Debounced wrapper for getDeliveyData to prevent excessive API calls.
+  /// [forceFresh] uses live location and bypasses distance/delivery cache.
+  void _debouncedGetDeliveryData({
+    bool immediate = false,
+    bool forceFresh = false,
+  }) {
     _distanceCalculationDebounceTimer?.cancel();
     _distanceCalculationDebounceTimer = null;
 
     if (immediate) {
-      // Immediate execution for explicit user actions (e.g., address change)
-      getDeliveyData();
+      getDeliveyData(forceFresh: true);
       return;
     }
 
-    // Debounce: wait 3 seconds before executing
+    final useFresh = forceFresh;
     _distanceCalculationDebounceTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) {
-        getDeliveyData();
+        getDeliveyData(forceFresh: useFresh);
       }
     });
   }
 
   Future<void> getDeliveyData({bool forceFresh = false}) async {
+    final stopwatch = Stopwatch()..start();
     print('🟠 [DELIVERY_DATA] getDeliveyData started');
     debugPrint("getDeliveyData started");
 
-    // Set loading state if not already set (prevents duplicate setState when called from _updateCartDependentData)
     if (mounted && !_isDeliveryDataLoading) {
       if (!mounted) return;
-      print('🟠 [DELIVERY_DATA] Setting loading state');
       setState(() {
         _isDeliveryDataLoading = true;
         _isDeliveryReady = false;
+        _deliveryCalcFailed = false;
       });
     }
 
     try {
+      // When using live location and address is current location (no saved id),
+      // fetch fresh GPS so delivery charge is based on current position.
+      if (forceFresh &&
+          addressModel.id == null &&
+          selctedOrderTypeValue == "Delivery") {
+        try {
+          final Position position = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high,
+          );
+          if (mounted) {
+            addressModel.location = UserLocation(
+              latitude: position.latitude,
+              longitude: position.longitude,
+            );
+            MyAppState.selectedPosition = addressModel;
+          }
+        } catch (_) {
+          // Keep existing location if GPS fails
+        }
+      }
+
       // Early return if no cart products or address not set
       if (cartProducts.isEmpty ||
           addressModel.location == null ||
@@ -1703,18 +1968,22 @@ class _CartScreenState extends State<CartScreen> {
           }
         });
       }
-    } finally {
-      // Always set loading state to false when done
+    } catch (e, st) {
+      debugPrint('Delivery calculation failed: $e');
+      debugPrint('StackTrace: $st');
       if (mounted) {
-        if (!mounted) return;
+        setState(() {
+          _deliveryCalcFailed = true;
+        });
+      }
+    } finally {
+      stopwatch.stop();
+      PerformanceLogger.logDeliveryCalculation(stopwatch.elapsed);
+      if (mounted) {
         setState(() {
           _isDeliveryDataLoading = false;
         });
-
-        // Recalculate totals after delivery charges are updated
         if (cartProducts.isNotEmpty) {
-          print(
-              '🟢 [DELIVERY_DATA] Triggering totals recalculation after delivery update');
           _calculateAndUpdateTotals(cartProducts, lstExtras, vendorID);
         }
       }
@@ -1847,8 +2116,9 @@ class _CartScreenState extends State<CartScreen> {
         _invalidateDeliveryCache();
       }
 
-      // Check for valid cached delivery result
-      if (!vendorChanged &&
+      // Check for valid cached delivery result (skip when using live location)
+      if (!_useLiveLocationOnNextDeliveryCalc &&
+          !vendorChanged &&
           !addressChanged &&
           _cachedDistanceKm != null &&
           _cachedDeliveryCharge != null) {
@@ -1860,13 +2130,11 @@ class _CartScreenState extends State<CartScreen> {
             cacheAge == null || cacheAge.inMinutes >= _cacheExpiryMinutes;
 
         if (isExpired) {
-          // Cache expired, invalidate and proceed with recalculation
           _invalidateDeliveryCache();
         } else {
           // Parse cached charge to verify it's greater than zero
           final cachedChargeValue = double.tryParse(_cachedDeliveryCharge!);
           if (cachedChargeValue != null && cachedChargeValue > 0) {
-            // All conditions met - use cached result and skip network calls
             if (mounted) {
               setState(() {
                 deliveryCharges = _cachedDeliveryCharge!;
@@ -1876,22 +2144,30 @@ class _CartScreenState extends State<CartScreen> {
                     _buildEstimatedDeliveryTimeText(_cachedDistanceKm!);
               });
             }
-            return; // Early return to skip _debouncedGetDeliveryData()
+            return;
           }
         }
       }
 
-      // Only trigger debounced calculation if vendor or address changed
-      if (vendorChanged || addressChanged || _cachedDistanceKm == null) {
-        // Set loading state before triggering delivery charges calculation
-        // This ensures loading indicator shows from subtotal calculation through delivery charges
+      // Trigger delivery calculation (use live location when flag is set)
+      if (vendorChanged ||
+          addressChanged ||
+          _cachedDistanceKm == null ||
+          _useLiveLocationOnNextDeliveryCalc) {
         if (mounted && !_isDeliveryDataLoading) {
           setState(() {
             _isDeliveryDataLoading = true;
             _isDeliveryReady = false;
           });
         }
-        _debouncedGetDeliveryData(immediate: false);
+        final useLive = _useLiveLocationOnNextDeliveryCalc;
+        _useLiveLocationOnNextDeliveryCalc = false;
+        // Use live location immediately when opening cart or after pull-to-refresh
+        if (useLive) {
+          getDeliveyData(forceFresh: true);
+        } else {
+          _debouncedGetDeliveryData(immediate: false, forceFresh: false);
+        }
       }
     }
 
@@ -1938,9 +2214,10 @@ class _CartScreenState extends State<CartScreen> {
 
   // Pull-to-refresh handler
   Future<void> _onRefresh() async {
-    // Force recalculation by resetting tracking variables
     _lastSubTotal = null;
+    _lastTotalsSignature = null;
     _invalidateDeliveryCache();
+    _useLiveLocationOnNextDeliveryCalc = true;
     _lastCartProducts = null;
     _lastVendorID = null;
 
@@ -1963,13 +2240,163 @@ class _CartScreenState extends State<CartScreen> {
     await Future.delayed(const Duration(milliseconds: 300));
   }
 
+  Future<void> _checkCartRestaurantStatus() async {
+    if (!mounted) return;
+    try {
+      final products = await cartDatabase.allCartProducts;
+      if (products.isEmpty) {
+        if (_closedVendorsInCart != null && _closedVendorsInCart!.isNotEmpty) {
+          setState(() => _closedVendorsInCart = null);
+        }
+        return;
+      }
+
+      final uniqueVendorIds = products
+          .map((p) => p.vendorID)
+          .where((id) => id.isNotEmpty)
+          .toSet()
+          .toList();
+      if (uniqueVendorIds.isEmpty) return;
+
+      final statusMap = await RestaurantStatusService
+          .checkMultipleVendorsStatus(uniqueVendorIds);
+      final closed = <Map<String, dynamic>>[];
+      for (final vid in uniqueVendorIds) {
+        final s = statusMap[vid];
+        if (s == null) continue;
+        if ((s['isOpen'] as bool? ?? false) != true) {
+          closed.add({
+            'vendorId': vid,
+            'vendorName': (s['vendorName'] ?? 'Restaurant').toString(),
+          });
+        }
+      }
+
+      log('[CART_STATUS] Check: vendorIds=$uniqueVendorIds, closed=$closed');
+
+      if (!mounted) return;
+      setState(() {
+        _closedVendorsInCart = closed.isEmpty ? null : closed;
+      });
+    } catch (e) {
+      log('[CART_STATUS] Error: $e');
+    }
+  }
+
+  Widget _buildClosedRestaurantBanner(BuildContext context) {
+    final closed = _closedVendorsInCart ?? [];
+    final names = closed
+        .map((v) => v['vendorName'] as String? ?? 'Restaurant')
+        .join(', ');
+    return Material(
+      color: Colors.orange.shade100,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Some restaurants in your cart have closed: $names',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.orange.shade900,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Your order may be rejected. Remove items or proceed at your own risk.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.orange.shade800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: () async {
+                      await _removeClosedVendorItems();
+                    },
+                    child: const Text('Remove closed items'),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() => _closedVendorsInCart = null);
+                    },
+                    child: const Text('Dismiss'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _removeClosedVendorItems() async {
+    final closed = _closedVendorsInCart;
+    if (closed == null || closed.isEmpty) return;
+    final closedIds = closed
+        .map((v) => v['vendorId'] as String?)
+        .where((id) => id != null && id.isNotEmpty)
+        .cast<String>()
+        .toSet();
+
+    final products = await cartDatabase.allCartProducts;
+    for (final p in products) {
+      if (closedIds.contains(p.vendorID)) {
+        await cartDatabase.removeProduct(p.id);
+      }
+    }
+    if (!mounted) return;
+    setState(() => _closedVendorsInCart = null);
+  }
+
+  Future<bool> _onPopInvoked() async {
+    final products = await cartDatabase.allCartProducts;
+    if (products.isEmpty) return true;
+    final shouldExit = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Complete your order?'),
+        content: const Text(
+          'Your cart has items. Are you sure you want to leave?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Stay'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    return shouldExit ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_kShowCartLogs) debugPrint(
         '🔵 [CART_LIFECYCLE] build() called - Rebuild #${DateTime.now().millisecondsSinceEpoch}');
     cartDatabase = Provider.of<CartDatabase>(context, listen: true);
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldExit = await _onPopInvoked();
+        if (shouldExit && mounted) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
       backgroundColor: isDarkMode(context)
           ? const Color(DARK_COLOR)
           : const Color(0xffFFFFFF),
@@ -2107,6 +2534,9 @@ class _CartScreenState extends State<CartScreen> {
 
           return Column(
             children: [
+              if (_closedVendorsInCart != null &&
+                  _closedVendorsInCart!.isNotEmpty)
+                _buildClosedRestaurantBanner(context),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: _onRefresh,
@@ -2117,18 +2547,51 @@ class _CartScreenState extends State<CartScreen> {
                       children: [
                         EstimatedDeliveryTimeCard(
                           deliveryTime: _estimatedDeliveryTimeText,
+                          isLoading: _isDeliveryDataLoading,
+                          hasFailed: _deliveryCalcFailed,
+                          onRetry: () =>
+                              getDeliveyData(forceFresh: true),
                         ),
                         if (isLoading)
                           ShimmerWidgets.cartListShimmer(
                             isDarkMode: isDarkMode(context),
                           )
                         else
-                          ListView.builder(
-                            shrinkWrap: true,
-                            physics: const ClampingScrollPhysics(),
-                            itemCount: cartProducts.length,
-                            itemBuilder: (context, index) {
+                          Builder(
+                            builder: (context) {
+                              // Cached to avoid recalculating on every
+                              // item build
+                              final entries =
+                                  _buildCartEntries(cartProducts);
+                              return ListView.builder(
+                                shrinkWrap: true,
+                                physics: const ClampingScrollPhysics(),
+                                itemCount: entries.length,
+                                itemBuilder: (context, index) {
+                                  final entry = entries[index];
+                              if (entry.isBundleHeader) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(
+                                    left: 13,
+                                    top: 16,
+                                    right: 13,
+                                    bottom: 4,
+                                  ),
+                                  child: Text(
+                                    'Bundle: ${entry.bundleName ?? "Value Meal"}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
+                                      color: isDarkMode(context)
+                                          ? Colors.grey.shade300
+                                          : Colors.grey.shade700,
+                                    ),
+                                  ),
+                                );
+                              }
+                              final product = entry.product!;
                               return Container(
+                                key: Key(product.id),
                                 margin: const EdgeInsets.only(
                                     left: 13, top: 13, right: 13, bottom: 5),
                                 decoration: BoxDecoration(
@@ -2154,12 +2617,19 @@ class _CartScreenState extends State<CartScreen> {
                                 ),
                                 child: Column(
                                   children: [
-                                    buildCartRow(
-                                        cartProducts[index], lstExtras),
+                                    buildCartRow(product, lstExtras),
                                   ],
                                 ),
                               );
                             },
+                          );
+                        },
+                      ),
+                        if (cartProducts.isNotEmpty && currentVendorID.isNotEmpty)
+                          _CartCompleteYourMealSection(
+                            cartProducts: cartProducts,
+                            vendorID: currentVendorID,
+                            cartDatabase: cartDatabase,
                           ),
                         buildTotalRow(
                             (snapshot.hasData &&
@@ -2171,6 +2641,9 @@ class _CartScreenState extends State<CartScreen> {
                                     : const []),
                             lstExtras,
                             currentVendorID),
+                        BannerAdWidget(
+                            adUnitId: AdService.instance.bannerAdUnitId),
+                        const SizedBox(height: 8),
                       ],
                     ),
                   ),
@@ -2315,12 +2788,12 @@ class _CartScreenState extends State<CartScreen> {
                                               MyAppState.currentUser!
                                                   .shippingAddress);
                                       if (resolvedDefaultAddress != null) {
-                                        MyAppState.selectedPosotion =
+                                        MyAppState.selectedPosition =
                                             resolvedDefaultAddress;
                                         addressModel = resolvedDefaultAddress;
                                       } else {
                                         // Fallback to returned address if no default found
-                                        MyAppState.selectedPosotion = value;
+                                        MyAppState.selectedPosition = value;
                                         addressModel = value;
                                       }
 
@@ -2339,7 +2812,7 @@ class _CartScreenState extends State<CartScreen> {
                                               MyAppState.currentUser!
                                                   .shippingAddress);
                                       if (resolvedDefaultAddress != null) {
-                                        MyAppState.selectedPosotion =
+                                        MyAppState.selectedPosition =
                                             resolvedDefaultAddress;
                                         addressModel = resolvedDefaultAddress;
                                         // Clear cache and recalculate
@@ -2472,6 +2945,16 @@ class _CartScreenState extends State<CartScreen> {
                               referralWalletAmountToUse > 0
                                   ? referralWalletAmountToUse
                                   : null,
+                          giftCardAmountUsed:
+                              giftCardAmountToUse > 0 ? giftCardAmountToUse : null,
+                          giftCardBreakdown:
+                              giftCardBreakdown.isNotEmpty ? giftCardBreakdown : null,
+                          loyaltyFreeDeliveryAmount:
+                              loyaltyFreeDeliveryAmount > 0
+                                  ? loyaltyFreeDeliveryAmount
+                                  : null,
+                          loyaltyFreeDeliveryRewardId: loyaltyFreeDeliveryRewardId,
+                          loyaltyFreeDeliveryCycle: loyaltyFreeDeliveryCycle,
                         ),
                       );
                     } else {
@@ -2504,6 +2987,16 @@ class _CartScreenState extends State<CartScreen> {
                               referralWalletAmountToUse > 0
                                   ? referralWalletAmountToUse
                                   : null,
+                          giftCardAmountUsed:
+                              giftCardAmountToUse > 0 ? giftCardAmountToUse : null,
+                          giftCardBreakdown:
+                              giftCardBreakdown.isNotEmpty ? giftCardBreakdown : null,
+                          loyaltyFreeDeliveryAmount:
+                              loyaltyFreeDeliveryAmount > 0
+                                  ? loyaltyFreeDeliveryAmount
+                                  : null,
+                          loyaltyFreeDeliveryRewardId: loyaltyFreeDeliveryRewardId,
+                          loyaltyFreeDeliveryCycle: loyaltyFreeDeliveryCycle,
                         ),
                       );
                     }
@@ -2525,74 +3018,31 @@ class _CartScreenState extends State<CartScreen> {
           );
         },
       ),
+    ),
     );
   }
 
+  static List<_CartEntry> _buildCartEntries(List<CartProduct> products) {
+    final List<_CartEntry> entries = [];
+    for (int i = 0; i < products.length; i++) {
+      final p = products[i];
+      final bid = p.bundleId;
+      final bname = p.bundleName;
+      if (bid != null &&
+          bid.isNotEmpty &&
+          (i == 0 || products[i - 1].bundleId != bid)) {
+        entries.add(_CartEntry.bundleHeader(bname ?? 'Bundle'));
+      }
+      entries.add(_CartEntry.item(p));
+    }
+    return entries;
+  }
+
   buildCartRow(CartProduct cartProduct, List<AddAddonsDemo> addons) {
-    List addOnVal = [];
-
     var quen = cartProduct.quantity;
-
-    double priceTotalValue = 0.0;
-
-    // priceTotalValue   = double.parse(cartProduct.price);
-
-    double addOnValDoule = 0;
-
-    for (int i = 0; i < lstExtras.length; i++) {
-      AddAddonsDemo addAddonsDemo = lstExtras[i];
-
-      if (addAddonsDemo.categoryID == cartProduct.id) {
-        addOnValDoule = addOnValDoule + double.parse(addAddonsDemo.price!);
-      }
-    }
-
-    // ProductModel will be fetched on-demand in the onTap handler to avoid side effects during build
-    VariantInfo? variantInfo;
-
-    if (cartProduct.variant_info != null) {
-      variantInfo =
-          VariantInfo.fromJson(jsonDecode(cartProduct.variant_info.toString()));
-    }
-
-    if (cartProduct.extras == null) {
-      addOnVal.clear();
-    } else {
-      if (cartProduct.extras is String) {
-        if (cartProduct.extras == '[]') {
-          addOnVal.clear();
-        } else {
-          String extraDecode = cartProduct.extras
-              .toString()
-              .replaceAll("[", "")
-              .replaceAll("]", "")
-              .replaceAll("\"", "");
-
-          if (extraDecode.contains(",")) {
-            addOnVal = extraDecode.split(",");
-          } else {
-            if (extraDecode.trim().isNotEmpty) {
-              addOnVal = [extraDecode];
-            }
-          }
-        }
-      }
-
-      if (cartProduct.extras is List) {
-        addOnVal = List.from(cartProduct.extras);
-      }
-    }
-
-    if (cartProduct.extras_price != null &&
-        cartProduct.extras_price != "" &&
-        double.parse(cartProduct.extras_price!) != 0.0) {
-      priceTotalValue +=
-          double.parse(cartProduct.extras_price!) * cartProduct.quantity;
-    }
-
-    priceTotalValue += double.parse(cartProduct.price) * cartProduct.quantity;
-
-    // VariantInfo variantInfo= cartProduct.variant_info;
+    final variantInfo = cartProduct.parseVariantInfo();
+    final priceTotalValue = cartProduct.computeLineTotal();
+    final addOnVal = cartProduct.parseExtrasAsList();
 
     return InkWell(
       onTap: () async {
@@ -2639,8 +3089,10 @@ class _CartScreenState extends State<CartScreen> {
                           ),
                       errorWidget: (context, url, error) => ClipRRect(
                           borderRadius: BorderRadius.circular(5),
-                          child: Image.network(
-                            AppGlobal.placeHolderImage!,
+                          child: CachedNetworkImage(
+                            imageUrl: AppGlobal.placeHolderImage!,
+                            memCacheWidth: 200,
+                            memCacheHeight: 200,
                             fit: BoxFit.cover,
                           ))),
                 ),
@@ -2671,10 +3123,9 @@ class _CartScreenState extends State<CartScreen> {
                       onTap: () {
                         if (quen != 0) {
                           quen--;
-                          // Update quantity notifier for immediate UI feedback
                           _getQuantityNotifier(cartProduct.id, quen).value =
                               quen;
-                          removetocard(cartProduct, quen);
+                          _scheduleQuantityUpdate(cartProduct, quen);
                         }
                       },
                       child: Image(
@@ -2750,10 +3201,9 @@ class _CartScreenState extends State<CartScreen> {
                                         .toString()) ==
                                     -1) {
                               quen++;
-                              // Update quantity notifier for immediate UI feedback
                               _getQuantityNotifier(cartProduct.id, quen).value =
                                   quen;
-                              addtocard(cartProduct, quen);
+                              _scheduleQuantityUpdate(cartProduct, quen);
                             } else {
                               ScaffoldMessenger.of(context)
                                   .showSnackBar(SnackBar(
@@ -2764,10 +3214,9 @@ class _CartScreenState extends State<CartScreen> {
                             if (productModel.quantity > quen ||
                                 productModel.quantity == -1) {
                               quen++;
-                              // Update quantity notifier for immediate UI feedback
                               _getQuantityNotifier(cartProduct.id, quen).value =
                                   quen;
-                              addtocard(cartProduct, quen);
+                              _scheduleQuantityUpdate(cartProduct, quen);
                             } else {
                               ScaffoldMessenger.of(context)
                                   .showSnackBar(SnackBar(
@@ -2779,10 +3228,9 @@ class _CartScreenState extends State<CartScreen> {
                           if (productModel.quantity > quen ||
                               productModel.quantity == -1) {
                             quen++;
-                            // Update quantity notifier for immediate UI feedback
                             _getQuantityNotifier(cartProduct.id, quen).value =
                                 quen;
-                            addtocard(cartProduct, quen);
+                            _scheduleQuantityUpdate(cartProduct, quen);
                           } else {
                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                               content: Text("Food out of stock"),
@@ -2801,24 +3249,25 @@ class _CartScreenState extends State<CartScreen> {
               ],
             ),
 
-            variantInfo == null || variantInfo.variantOptions!.isEmpty
-                ? Container()
-                : Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 5, vertical: 10),
+            (variantInfo != null &&
+                    variantInfo.variantOptions != null &&
+                    variantInfo.variantOptions!.isNotEmpty)
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 5, vertical: 10),
                     child: Wrap(
                       spacing: 6.0,
                       runSpacing: 6.0,
-                      children: List.generate(
-                        variantInfo.variantOptions!.length,
-                        (i) {
-                          return _buildChip(
-                              "${variantInfo!.variantOptions!.keys.elementAt(i)} : ${variantInfo.variantOptions![variantInfo.variantOptions!.keys.elementAt(i)]}",
-                              i);
-                        },
-                      ).toList(),
+                      children:
+                          variantInfo.variantOptions!.entries.toList().asMap().entries
+                              .map((e) => _buildChip(
+                                    "${e.value.key} : ${e.value.value}",
+                                    e.key,
+                                  ))
+                              .toList(),
                     ),
-                  ),
+                  )
+                : const SizedBox.shrink(),
 
             SizedBox(
               height: addOnVal.isEmpty ? 0 : 30,
@@ -3008,11 +3457,11 @@ class _CartScreenState extends State<CartScreen> {
                           MyAppState.resolveDefaultAddress(
                               MyAppState.currentUser!.shippingAddress);
                       if (resolvedDefaultAddress != null) {
-                        MyAppState.selectedPosotion = resolvedDefaultAddress;
+                        MyAppState.selectedPosition = resolvedDefaultAddress;
                         addressModel = resolvedDefaultAddress;
                       } else {
                         // Fallback to returned address if no default found
-                        MyAppState.selectedPosotion = value;
+                        MyAppState.selectedPosition = value;
                         addressModel = value;
                       }
 
@@ -3030,7 +3479,7 @@ class _CartScreenState extends State<CartScreen> {
                           MyAppState.resolveDefaultAddress(
                               MyAppState.currentUser!.shippingAddress);
                       if (resolvedDefaultAddress != null) {
-                        MyAppState.selectedPosotion = resolvedDefaultAddress;
+                        MyAppState.selectedPosition = resolvedDefaultAddress;
                         addressModel = resolvedDefaultAddress;
                         // Clear cache and recalculate
                         _invalidateDeliveryCache();
@@ -3119,6 +3568,38 @@ class _CartScreenState extends State<CartScreen> {
               const Divider(
                 thickness: 1,
               ),
+
+              // Gift Card Section (above Referral Wallet per payment order)
+              if (activeGiftCards.isNotEmpty &&
+                  (giftCardConfig?.enabled ?? true))
+                _GiftCardSection(
+                  activeGiftCards: activeGiftCards,
+                  giftCardAmountToUse: giftCardAmountToUse,
+                  isGiftCardApplied: isGiftCardApplied,
+                  onApply: (cardId, amount) {
+                    setState(() {
+                      giftCardBreakdown = [
+                        {'cardId': cardId, 'amount': amount}
+                      ];
+                      isGiftCardApplied = true;
+                    });
+                    if (cartProducts.isNotEmpty) {
+                      _calculateAndUpdateTotals(
+                          cartProducts, lstExtras, vendorID);
+                    }
+                  },
+                  onRemove: () {
+                    setState(() {
+                      giftCardBreakdown = [];
+                      isGiftCardApplied = false;
+                    });
+                    if (cartProducts.isNotEmpty) {
+                      _calculateAndUpdateTotals(
+                          cartProducts, lstExtras, vendorID);
+                    }
+                  },
+                  isDarkMode: isDarkMode(context),
+                ),
 
               // Referral Wallet Section
               if (referralWalletAmountAvailable > 0 &&
@@ -3608,18 +4089,30 @@ class _CartScreenState extends State<CartScreen> {
   // }
 
   addtocard(CartProduct cartProduct, qun) async {
+    final stopwatch = Stopwatch()..start();
     await cartDatabase.updateProduct(CartProduct(
         id: cartProduct.id,
+        category_id: cartProduct.category_id,
         name: cartProduct.name,
         photo: cartProduct.photo,
         price: cartProduct.price,
         vendorID: cartProduct.vendorID,
         quantity: qun,
-        category_id: cartProduct.category_id,
-        discountPrice: cartProduct.discountPrice!));
+        extras_price: cartProduct.extras_price,
+        extras: cartProduct.extras,
+        discountPrice: cartProduct.discountPrice ?? "",
+        variant_info: cartProduct.variant_info,
+        bundleId: cartProduct.bundleId,
+        bundleName: cartProduct.bundleName,
+        addonPromoId: cartProduct.addonPromoId,
+        addonPromoName: cartProduct.addonPromoName,
+        addedAt: cartProduct.addedAt));
+    stopwatch.stop();
+    PerformanceLogger.logUpdateQuantity(stopwatch.elapsed);
   }
 
   removetocard(CartProduct cartProduct, qun) async {
+    final stopwatch = Stopwatch()..start();
     if (qun >= 1) {
       await cartDatabase.updateProduct(CartProduct(
           id: cartProduct.id,
@@ -3629,9 +4122,23 @@ class _CartScreenState extends State<CartScreen> {
           price: cartProduct.price,
           vendorID: cartProduct.vendorID,
           quantity: qun,
-          discountPrice: cartProduct.discountPrice));
+          extras_price: cartProduct.extras_price,
+          extras: cartProduct.extras,
+          discountPrice: cartProduct.discountPrice ?? "",
+          variant_info: cartProduct.variant_info,
+          bundleId: cartProduct.bundleId,
+          bundleName: cartProduct.bundleName,
+          addonPromoId: cartProduct.addonPromoId,
+        addonPromoName: cartProduct.addonPromoName,
+        addedAt: cartProduct.addedAt));
     } else {
-      cartDatabase.removeProduct(cartProduct.id);
+      await cartDatabase.removeProduct(cartProduct.id);
+    }
+    stopwatch.stop();
+    if (qun >= 1) {
+      PerformanceLogger.logUpdateQuantity(stopwatch.elapsed);
+    } else {
+      PerformanceLogger.logRemoveFromCart(stopwatch.elapsed);
     }
   }
 
@@ -4112,7 +4619,11 @@ class _CartScreenState extends State<CartScreen> {
 
   @override
   void dispose() {
-    // Cancel debounce timer to prevent memory leaks
+    _statusCheckTimer?.cancel();
+    _statusCheckTimer = null;
+    _quantityDebounceTimer?.cancel();
+    _quantityDebounceTimer = null;
+    _flushPendingQuantityUpdates();
     _distanceCalculationDebounceTimer?.cancel();
     _distanceCalculationDebounceTimer = null;
     // Dispose ValueNotifiers
@@ -4877,6 +5388,154 @@ class _DeliveryChargesRow extends StatelessWidget {
   }
 }
 
+class _GiftCardSection extends StatefulWidget {
+  final List<Map<String, dynamic>> activeGiftCards;
+  final double giftCardAmountToUse;
+  final bool isGiftCardApplied;
+  final void Function(String cardId, double amount) onApply;
+  final VoidCallback onRemove;
+  final bool isDarkMode;
+
+  const _GiftCardSection({
+    required this.activeGiftCards,
+    required this.giftCardAmountToUse,
+    required this.isGiftCardApplied,
+    required this.onApply,
+    required this.onRemove,
+    required this.isDarkMode,
+  });
+
+  @override
+  State<_GiftCardSection> createState() => _GiftCardSectionState();
+}
+
+class _GiftCardSectionState extends State<_GiftCardSection> {
+  int _selectedIndex = 0;
+  final _amountController = TextEditingController();
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cards = widget.activeGiftCards;
+    if (cards.isEmpty) return const SizedBox.shrink();
+
+    final selected = cards[_selectedIndex.clamp(0, cards.length - 1)];
+    final balance = (selected['remainingBalance'] as num?)?.toDouble() ?? 0.0;
+    final cardId = selected['cardId'] as String? ?? '';
+    final maskedCode = selected['maskedCode'] as String? ?? '****';
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.orange.shade200, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.card_giftcard,
+                  color: Colors.orange.shade700, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Gift Card',
+                style: TextStyle(
+                  fontFamily: 'Poppinsm',
+                  fontWeight: FontWeight.w600,
+                  color: Colors.orange.shade900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (!widget.isGiftCardApplied) ...[
+            if (cards.length > 1)
+              DropdownButton<int>(
+                value: _selectedIndex.clamp(0, cards.length - 1),
+                items: List.generate(cards.length, (i) {
+                  final c = cards[i];
+                  final m = c['maskedCode'] ?? '****';
+                  final b = (c['remainingBalance'] as num?)?.toDouble() ?? 0;
+                  return DropdownMenuItem(
+                    value: i,
+                    child: Text('$m - ${amountShow(amount: b.toStringAsFixed(0))}'),
+                  );
+                }),
+                onChanged: (v) {
+                  if (v != null) setState(() => _selectedIndex = v);
+                },
+              ),
+            TextField(
+              controller: _amountController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                hintText: 'Amount (max ${amountShow(amount: balance.toStringAsFixed(0))})',
+                border: const OutlineInputBorder(),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    final amt = double.tryParse(_amountController.text.trim());
+                    if (amt == null || amt <= 0 || amt > balance) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Enter amount between 1 and ${balance.toStringAsFixed(0)}',
+                          ),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+                    widget.onApply(cardId, amt);
+                    _amountController.clear();
+                  },
+                  child: const Text('Apply'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ] else ...[
+            Text(
+              'Applied: ${amountShow(amount: widget.giftCardAmountToUse.toStringAsFixed(2))}',
+              style: TextStyle(
+                fontFamily: 'Poppinsm',
+                color: Colors.orange.shade800,
+                fontSize: 14,
+              ),
+            ),
+            TextButton(
+              onPressed: widget.onRemove,
+              child: Text(
+                'Remove',
+                style: TextStyle(color: Colors.orange.shade800),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _ReferralWalletCard extends StatelessWidget {
   final double referralWalletAmountAvailable;
   final double referralWalletAmountToUse;
@@ -5417,6 +6076,104 @@ class _ManualCouponSection extends StatelessWidget {
           const SizedBox(height: 8),
         ],
       ),
+    );
+  }
+}
+
+class _CartCompleteYourMealSection extends StatelessWidget {
+  final List<CartProduct> cartProducts;
+  final String vendorID;
+  final CartDatabase cartDatabase;
+
+  const _CartCompleteYourMealSection({
+    required this.cartProducts,
+    required this.vendorID,
+    required this.cartDatabase,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<AddonPromoModel>>(
+      future: AddonPromoService.getActiveAddonPromos(
+        restaurantId: vendorID,
+        limit: 50,
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done ||
+            !snapshot.hasData) {
+          return const SizedBox.shrink();
+        }
+        final allPromos = snapshot.data!;
+        final cartProductIds =
+            cartProducts.map((p) => p.id.split('~').first).toSet();
+        final addonCountByPromo = <String, int>{};
+        for (final p in cartProducts) {
+          if (p.addonPromoId != null && p.addonPromoId!.isNotEmpty) {
+            addonCountByPromo[p.addonPromoId!] =
+                (addonCountByPromo[p.addonPromoId!] ?? 0) + p.quantity;
+          }
+        }
+        final promos = allPromos.where((promo) {
+          if (promo.triggerType != 'product') return false;
+          if (!cartProductIds.contains(promo.triggerProductId)) return false;
+          final count = addonCountByPromo[promo.addonPromoId] ?? 0;
+          return count < promo.maxQuantityPerOrder;
+        }).toList();
+        if (promos.isEmpty) return const SizedBox.shrink();
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(13, 16, 13, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Complete your meal',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 200,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: promos.length,
+                  itemBuilder: (context, index) {
+                    final promo = promos[index];
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: AddonPromoCard(
+                        promo: promo,
+                        onAdd: () async {
+                          await cartDatabase.addAddonToCart(
+                            addonPromoId: promo.addonPromoId,
+                            addonPromoName: promo.addonName,
+                            productId: promo.addonProductId,
+                            productName: promo.addonProductName,
+                            photo: promo.imageUrl ?? '',
+                            addonPrice: promo.addonPrice,
+                            vendorID: vendorID,
+                            quantity: 1,
+                          );
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  '${promo.addonName} added to cart',
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

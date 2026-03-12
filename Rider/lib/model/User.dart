@@ -16,6 +16,7 @@ class User with ChangeNotifier {
 
   Timestamp? lastOnlineTimestamp;
   Timestamp? locationUpdatedAt;
+  Timestamp? lastActivityTimestamp;
   Timestamp? createdAt;
   String userID;
   String profilePictureURL;
@@ -45,6 +46,11 @@ class User with ChangeNotifier {
   num? totalVouchers;
   num? todayVoucherEarned;
   double? driverPerformance;
+  double? acceptanceRate;
+  double? averageRating;
+  double? attendanceScore;
+  String? performanceTier;
+  Map<String, dynamic>? performanceBreakdown;
   int? remainingExcuses;
   List<String>? excusedDays;
   bool? suspended;
@@ -57,6 +63,11 @@ class User with ChangeNotifier {
   String? lastAdminOverrideBy;
   String? lastAdminOverrideReason;
   String? lastAdminOverrideAction;
+  String? selectedPresetLocationId;
+  String? riderAvailability;
+  String? riderDisplayStatus;
+  bool? pautosEligible;
+  List<dynamic>? pautosOrderRequestData;
 
   User(
       {this.email = '',
@@ -69,6 +80,7 @@ class User with ChangeNotifier {
       this.active = true,
       lastOnlineTimestamp,
       this.locationUpdatedAt,
+      this.lastActivityTimestamp,
       settings,
       this.fcmToken = '',
       location,
@@ -95,7 +107,12 @@ class User with ChangeNotifier {
       this.isOnline,
       this.totalVouchers = 0.0,
       this.todayVoucherEarned = 0.0,
-      this.driverPerformance = 100.0,
+      this.driverPerformance = 75.0,
+      this.acceptanceRate,
+      this.averageRating,
+      this.attendanceScore,
+      this.performanceTier,
+      this.performanceBreakdown,
       this.remainingExcuses,
       this.excusedDays,
       this.suspended,
@@ -107,7 +124,12 @@ class User with ChangeNotifier {
       this.lastAdminOverrideDate,
       this.lastAdminOverrideBy,
       this.lastAdminOverrideReason,
-      this.lastAdminOverrideAction})
+      this.lastAdminOverrideAction,
+      this.selectedPresetLocationId,
+      this.riderAvailability,
+      this.riderDisplayStatus,
+      this.pautosEligible,
+      this.pautosOrderRequestData})
       : this.lastOnlineTimestamp = lastOnlineTimestamp ?? Timestamp.now(),
         this.settings = settings ?? UserSettings(),
         this.appIdentifier =
@@ -232,6 +254,7 @@ class User with ChangeNotifier {
       active: parsedJson['active'] ?? false,
       lastOnlineTimestamp: parsedJson['lastOnlineTimestamp'],
       locationUpdatedAt: parsedJson['locationUpdatedAt'],
+      lastActivityTimestamp: parsedJson['lastActivityTimestamp'],
       settings: settings,
       phoneNumber: parsedJson['phoneNumber'] ?? '',
       userID: parsedJson['id'] ?? parsedJson['userID'] ?? '',
@@ -258,7 +281,23 @@ class User with ChangeNotifier {
       todayVoucherEarned: parsedJson['todayVoucherEarned'] ?? 0.0,
       driverPerformance: parsedJson['driver_performance'] != null
           ? (parsedJson['driver_performance'] as num).toDouble()
-          : 100.0,
+          : 75.0,
+      acceptanceRate: parsedJson['acceptance_rate'] != null
+          ? (parsedJson['acceptance_rate'] as num).toDouble()
+          : null,
+      averageRating: parsedJson['average_rating'] != null
+          ? (parsedJson['average_rating'] as num).toDouble()
+          : null,
+      attendanceScore: parsedJson['attendance_score'] != null
+          ? (parsedJson['attendance_score'] as num).toDouble()
+          : null,
+      performanceTier: parsedJson['performance_tier'],
+      performanceBreakdown:
+          parsedJson['performance_breakdown'] != null
+              ? Map<String, dynamic>.from(
+                  parsedJson['performance_breakdown'],
+                )
+              : null,
       remainingExcuses: parsedJson['remainingExcuses'] != null
           ? (parsedJson['remainingExcuses'] as num).toInt()
           : null,
@@ -279,6 +318,11 @@ class User with ChangeNotifier {
       lastAdminOverrideBy: parsedJson['lastAdminOverrideBy'],
       lastAdminOverrideReason: parsedJson['lastAdminOverrideReason'],
       lastAdminOverrideAction: parsedJson['lastAdminOverrideAction'],
+      selectedPresetLocationId: parsedJson['selectedPresetLocationId'],
+      riderAvailability: parsedJson['riderAvailability'],
+      riderDisplayStatus: parsedJson['riderDisplayStatus'],
+      pautosEligible: parsedJson['pautosEligible'] ?? true,
+      pautosOrderRequestData: parsedJson['pautosOrderRequestData'] ?? [],
     );
   }
 
@@ -296,6 +340,7 @@ class User with ChangeNotifier {
       'active': this.active,
       'lastOnlineTimestamp': this.lastOnlineTimestamp,
       'locationUpdatedAt': this.locationUpdatedAt,
+      'lastActivityTimestamp': this.lastActivityTimestamp,
       'profilePictureURL': this.profilePictureURL,
       'appIdentifier': this.appIdentifier,
       'fcmToken': this.fcmToken,
@@ -316,6 +361,11 @@ class User with ChangeNotifier {
       'totalVouchers': this.totalVouchers,
       'todayVoucherEarned': this.todayVoucherEarned,
       'driver_performance': this.driverPerformance,
+      'acceptance_rate': this.acceptanceRate,
+      'average_rating': this.averageRating,
+      'attendance_score': this.attendanceScore,
+      'performance_tier': this.performanceTier,
+      'performance_breakdown': this.performanceBreakdown,
       'remainingExcuses': this.remainingExcuses,
       'excusedDays': this.excusedDays,
       'suspended': this.suspended,
@@ -328,6 +378,9 @@ class User with ChangeNotifier {
       'lastAdminOverrideBy': this.lastAdminOverrideBy,
       'lastAdminOverrideReason': this.lastAdminOverrideReason,
       'lastAdminOverrideAction': this.lastAdminOverrideAction,
+      'selectedPresetLocationId': this.selectedPresetLocationId,
+      'riderAvailability': this.riderAvailability,
+      'riderDisplayStatus': this.riderDisplayStatus,
     };
     if (this.role == USER_ROLE_DRIVER) {
       json.addAll({
@@ -338,6 +391,8 @@ class User with ChangeNotifier {
         'rotation': this.rotation,
         'orderRequestData': this.orderRequestData,
         'inProgressOrderID': this.inProgressOrderID,
+        'pautosEligible': this.pautosEligible,
+        'pautosOrderRequestData': this.pautosOrderRequestData,
       });
     }
     return json;

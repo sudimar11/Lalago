@@ -6,6 +6,7 @@ import 'dart:developer';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
@@ -19,6 +20,7 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/services/BackendService.dart';
@@ -34,10 +36,12 @@ import 'package:foodie_customer/model/FavouriteItemModel.dart';
 import 'package:foodie_customer/model/FavouriteModel.dart';
 //import 'package:foodie_customer/model/FlutterWaveSettingDataModel.dart';
 import 'package:foodie_customer/model/OrderModel.dart';
+import 'package:foodie_customer/model/PautosOrderModel.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/Ratingmodel.dart';
 import 'package:foodie_customer/model/ReviewAttributeModel.dart';
 import 'package:foodie_customer/model/User.dart';
+import 'package:foodie_customer/utils/session_manager.dart';
 import 'package:foodie_customer/model/VendorCategoryModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/conversation_model.dart';
@@ -250,6 +254,14 @@ Future<void> _appendCursorDebugLog({
   }
 }
 
+/// Result of a paginated product query.
+class ProductPageResult {
+  final List<ProductModel> products;
+  final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
+
+  const ProductPageResult(this.products, this.lastDocument);
+}
+
 class FireStoreUtils {
   static const bool isMessagingEnabled = true;
   static FirebaseMessaging firebaseMessaging = FirebaseMessaging.instance;
@@ -373,7 +385,11 @@ class FireStoreUtils {
     }
     user.fcmToken = token;
     try {
-      await updateCurrentUser(user);
+      await firestore.collection(USERS).doc(user.userID).update({
+        'fcmToken': token,
+        'fcmTokens': FieldValue.arrayUnion([token]),
+        'lastTokenUpdate': FieldValue.serverTimestamp(),
+      });
       debugPrint(
           '[FCM_DEBUG] token saved to Firestore: users/${user.userID} '
           'preview=${_tokenPreview(token)}');
@@ -394,12 +410,25 @@ class FireStoreUtils {
       String customerId, String token) =>
       _updateActiveOrdersFcmToken(customerId, token);
 
+  /// Removes token from user's fcmTokens array. Call on logout.
+  static Future<void> removeFcmToken(String userId, String token) async {
+    try {
+      if (userId.isEmpty || token.isEmpty) return;
+      await firestore.collection(USERS).doc(userId).update({
+        'fcmTokens': FieldValue.arrayRemove([token]),
+      });
+      debugPrint('[FCM_DEBUG] Token removed from array for user: $userId');
+    } catch (e) {
+      debugPrint('[FCM_DEBUG] removeFcmToken failed: $e');
+    }
+  }
+
   static Future<void> _updateActiveOrdersFcmToken(String customerId, String token) async {
     try {
       final activeStatuses = {
         ORDER_STATUS_PLACED,
         ORDER_STATUS_ACCEPTED,
-        ORDER_STATUS_DRIVER_PENDING,
+        ORDER_STATUS_DRIVER_ACCEPTED,
         ORDER_STATUS_SHIPPED,
         ORDER_STATUS_IN_TRANSIT,
       };
@@ -485,6 +514,19 @@ class FireStoreUtils {
     yield* ordersByIdStreamController.stream;
   }
 
+  static Future<OrderModel?> getOrderByIdOnce(String orderId) async {
+    try {
+      final doc = await firestore.collection(ORDERS).doc(orderId).get();
+      if (doc.exists && doc.data() != null) {
+        return OrderModel.fromJson(doc.data()!);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('FireStoreUtils.getOrderByIdOnce error: $e');
+      return null;
+    }
+  }
+
   Future<RatingModel?> getOrderReviewsbyID(
       String ordertId, String productId) async {
     RatingModel? ratingproduct;
@@ -531,6 +573,30 @@ class FireStoreUtils {
       }
     });
     return cuisines;
+  }
+
+  /// Optional: Batched home screen data via Cloud Function. Use as fast path
+  /// in HomeScreen init; fallback to individual fetches if this fails.
+  static Future<Map<String, dynamic>?> getHomeScreenInitialData(
+    String? userId,
+    double? lat,
+    double? lng,
+  ) async {
+    try {
+      final callable = FirebaseFunctions.instance
+          .httpsCallable('getHomeScreenInitialData');
+      final result = await callable.call<Map<String, dynamic>>({
+        'userId': userId,
+        'lat': lat,
+        'lng': lng,
+      });
+      return result.data;
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[HOME] getHomeScreenInitialData failed: $e');
+      }
+      return null;
+    }
   }
 
   Future<List<BannerModel>> getHomeTopBanner() async {
@@ -1222,16 +1288,55 @@ class FireStoreUtils {
     });
   }
 
+  static const _codCacheKey = 'cod_settings_enabled';
+
   Future<CodModel?> getCod() async {
-    DocumentSnapshot<Map<String, dynamic>> codQuery =
-        await firestore.collection(Setting).doc('CODSettings').get();
-    if (codQuery.data() != null) {
-      debugPrint("dataaaaaa");
-      return CodModel.fromJson(codQuery.data()!);
-    } else {
-      debugPrint("nulllll");
-      return null;
+    CodModel? result;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final codQuery = await firestore
+            .collection(Setting)
+            .doc('CODSettings')
+            .get()
+            .timeout(const Duration(seconds: 10));
+        if (codQuery.data() != null) {
+          result = CodModel.fromJson(codQuery.data()!);
+          _cacheCodEnabled(result.cod);
+          if (kDebugMode) {
+            log('COD: loaded from Firestore, enabled=${result.cod}');
+          }
+          return result;
+        }
+        result = CodModel(cod: false);
+        _cacheCodEnabled(false);
+        return result;
+      } catch (e, st) {
+        if (kDebugMode) {
+          log('COD: fetch failed (attempt ${attempt + 1}): $e', stackTrace: st);
+        }
+      }
     }
+    result = await _getCachedCodModel();
+    if (kDebugMode) {
+      log('COD: using fallback, enabled=${result?.cod ?? true}');
+    }
+    return result ?? CodModel(cod: true);
+  }
+
+  Future<void> _cacheCodEnabled(bool enabled) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_codCacheKey, enabled);
+    } catch (_) {}
+  }
+
+  Future<CodModel?> _getCachedCodModel() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = prefs.getBool(_codCacheKey);
+      if (cached != null) return CodModel(cod: cached);
+    } catch (_) {}
+    return null;
   }
 
   Future<DeliveryChargeModel?> getDeliveryCharges() async {
@@ -1310,6 +1415,48 @@ class FireStoreUtils {
     return products;
   }
 
+  /// Paginated products with publish filter for home screen.
+  /// Requires Firestore composite index: publish (ASC) + createdAt (DESC).
+  Future<List<ProductModel>> getProductsPaginatedWithPublish({
+    required int limit,
+    DocumentSnapshot? lastDocument,
+  }) async {
+    try {
+      Query<Map<String, dynamic>> query = firestore
+          .collection(PRODUCTS)
+          .where('publish', isEqualTo: true)
+          .orderBy('createdAt', descending: true);
+
+      if (lastDocument != null) {
+        query = query.startAfterDocument(lastDocument);
+      }
+
+      query = query.limit(limit);
+
+      final snapshot = await query.get();
+      final products = snapshot.docs.map((doc) {
+        final data = doc.data();
+        if (data.isEmpty) return null;
+        try {
+          return ProductModel.fromJson(data);
+        } catch (e) {
+          debugPrint('Error parsing product ${doc.id}: $e');
+          return null;
+        }
+      }).whereType<ProductModel>().toList();
+
+      return products;
+    } catch (e) {
+      debugPrint('Error loading home screen products: $e');
+      return [];
+    }
+  }
+
+  /// Load products for home screen with pagination. Default limit 50.
+  Future<List<ProductModel>> getHomeScreenProducts({int limit = 50}) async {
+    return getProductsPaginatedWithPublish(limit: limit, lastDocument: null);
+  }
+
   Future<List<String>> getMostOrderedProductIdsForToday({int limit = 30}) async {
     final DateTime now = DateTime.now();
     final DateTime startOfDay = DateTime(now.year, now.month, now.day);
@@ -1368,6 +1515,64 @@ class FireStoreUtils {
         sorted.take(limit).map((entry) => entry.key).toList();
 
     return topIds;
+  }
+
+  /// Returns popular products for today with order counts for AI chat.
+  Future<List<Map<String, dynamic>>> getPopularProductsWithCountsForToday({
+    int limit = 15,
+  }) async {
+    final now = DateTime.now();
+    final startOfDay = DateTime(now.year, now.month, now.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+
+    final ordersQuery = await firestore
+        .collection(ORDERS)
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+        )
+        .where(
+          'createdAt',
+          isLessThan: Timestamp.fromDate(endOfDay),
+        )
+        .get();
+
+    final productCounts = _extractProductCountsFromOrders(ordersQuery.docs);
+    final sorted = productCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final topEntries = sorted.take(limit).toList();
+
+    final result = <Map<String, dynamic>>[];
+    for (final entry in topEntries) {
+      try {
+        final doc = await firestore.collection(PRODUCTS).doc(entry.key).get();
+        if (!doc.exists || doc.data() == null) continue;
+
+        final data = doc.data()!;
+        final vendorID = (data['vendorID'] ?? '').toString();
+        String vendorName = '';
+        if (vendorID.isNotEmpty) {
+          final vendorDoc =
+              await firestore.collection(VENDORS).doc(vendorID).get();
+          if (vendorDoc.exists && vendorDoc.data() != null) {
+            vendorName =
+                (vendorDoc.data()!['title'] ?? '').toString();
+          }
+        }
+
+        final photo = (data['photo'] ?? '').toString();
+        result.add({
+          'id': entry.key,
+          'name': (data['name'] ?? '').toString(),
+          'price': (data['price'] ?? '0').toString(),
+          'vendorID': vendorID,
+          'vendorName': vendorName,
+          'imageUrl': getImageVAlidUrl(photo),
+          'orderCount': entry.value,
+        });
+      } catch (_) {}
+    }
+    return result;
   }
 
   /// Extracts product IDs and quantities from raw order docs without parsing
@@ -1524,7 +1729,7 @@ class FireStoreUtils {
   //   List<VendorModel> vendors = [];
   //   try {
   //     var collectionReference = (path == null || path.isEmpty) ? firestore.collection(VENDORS) : firestore.collection(VENDORS).where("enabledDiveInFuture", isEqualTo: true);
-  //     GeoFirePoint center = geo.point(latitude: MyAppState.selectedPosotion.location!.location!.latitude, longitude: MyAppState.selectedPosotion.location!.location!.longitude);
+  //     GeoFirePoint center = geo.point(latitude: MyAppState.selectedPosition.location!.location!.latitude, longitude: MyAppState.selectedPosition.location!.location!.longitude);
   //     String field = 'g';
   //     Stream<List<DocumentSnapshot>> stream = geo.collection(collectionRef: collectionReference).within(center: center, radius: radiusValue, field: field, strictMode: true);
   //
@@ -1548,6 +1753,67 @@ class FireStoreUtils {
     if (allResaturantStreamController != null) {
       allResaturantStreamController!.close();
     }
+  }
+
+  /// Fetches daily acceptance rate from vendors/{vendorId}/dailyMetrics.
+  /// Returns map of date (yyyy-MM-dd) to acceptance rate 0-100.
+  static Future<Map<String, double>> getVendorDailyAcceptanceRates(
+    String vendorId, {
+    int lastDays = 30,
+  }) async {
+    final result = <String, double>{};
+    final now = DateTime.now();
+    for (var i = 0; i < lastDays; i++) {
+      final d = now.subtract(Duration(days: i));
+      final dateStr = DateFormat('yyyy-MM-dd').format(d);
+      final doc = await FirebaseFirestore.instance
+          .collection(VENDORS)
+          .doc(vendorId)
+          .collection('dailyMetrics')
+          .doc(dateStr)
+          .get();
+      if (doc.exists && doc.data() != null) {
+        final rate = doc.data()!['acceptanceRate'];
+        if (rate != null) {
+          result[dateStr] = (rate is num) ? rate.toDouble() : 0.0;
+        }
+      }
+    }
+    return result;
+  }
+
+  /// Returns similar vendors (same category) sorted by acceptance rate desc.
+  static Future<List<VendorModel>> getSimilarVendors(
+    String excludeVendorId,
+    String? categoryId,
+    {int limit = 3}
+  ) async {
+    final all = await FirebaseFirestore.instance
+        .collection(VENDORS)
+        .limit(100)
+        .get();
+    final list = <VendorModel>[];
+    for (final doc in all.docs) {
+      if (doc.id == excludeVendorId) continue;
+      try {
+        final data = Map<String, dynamic>.from(doc.data());
+        data['id'] = doc.id;
+        final v = VendorModel.fromJson(data);
+        if (v.id.isEmpty) continue;
+        if (categoryId != null &&
+            categoryId.isNotEmpty &&
+            v.categoryID != categoryId) {
+          continue;
+        }
+        list.add(v);
+      } catch (_) {}
+    }
+    list.sort((a, b) {
+      final ra = a.acceptanceRate ?? 0;
+      final rb = b.acceptanceRate ?? 0;
+      return rb.compareTo(ra);
+    });
+    return list.take(limit).toList();
   }
 
   Future<List<VendorModel>> getVendors() async {
@@ -1739,8 +2005,8 @@ class FireStoreUtils {
               .collection(VENDORS)
               .where("enabledDiveInFuture", isEqualTo: true);
       GeoFirePoint center = geo.point(
-          latitude: MyAppState.selectedPosotion.location!.latitude,
-          longitude: MyAppState.selectedPosotion.location!.longitude);
+          latitude: MyAppState.selectedPosition.location!.latitude,
+          longitude: MyAppState.selectedPosition.location!.longitude);
 
       String field = 'g';
       Stream<List<DocumentSnapshot>> stream = geo
@@ -1757,7 +2023,7 @@ class FireStoreUtils {
           return;
         }
 
-        final userLocation = MyAppState.selectedPosotion.location;
+        final userLocation = MyAppState.selectedPosition.location;
         if (userLocation == null) {
           for (var document in documentList) {
             final data = document.data() as Map<String, dynamic>;
@@ -1815,8 +2081,8 @@ class FireStoreUtils {
           .where('categoryID', isEqualTo: categoryId);
 
       GeoFirePoint center = geo.point(
-          latitude: MyAppState.selectedPosotion.location!.latitude,
-          longitude: MyAppState.selectedPosotion.location!.longitude);
+          latitude: MyAppState.selectedPosition.location!.latitude,
+          longitude: MyAppState.selectedPosition.location!.longitude);
 
       debugPrint(
           '📍 getCategoryRestaurants(categoryId="$categoryId"): Starting query with location filter (radius=$radiusValue km)');
@@ -1847,7 +2113,7 @@ class FireStoreUtils {
         debugPrint(
             '✅ getCategoryRestaurants(categoryId="$categoryId"): Found ${vendors.length} restaurants within radius, emitting stream');
         categoryStreamController
-            .add(List.from(vendors)); // Create a copy to avoid reference issues
+            .add(vendors.take(20).toList()); // Limit for low-memory devices
       });
     } catch (e) {
       debugPrint(
@@ -1872,8 +2138,8 @@ class FireStoreUtils {
             .collection(VENDORS)
             .where("enabledDiveInFuture", isEqualTo: true);
     GeoFirePoint center = geo.point(
-        latitude: MyAppState.selectedPosotion.location!.latitude,
-        longitude: MyAppState.selectedPosotion.location!.longitude);
+        latitude: MyAppState.selectedPosition.location!.latitude,
+        longitude: MyAppState.selectedPosition.location!.longitude);
     String field = 'g';
     Stream<List<DocumentSnapshot>> stream = geo
         .collection(collectionRef: collectionReference)
@@ -1889,7 +2155,7 @@ class FireStoreUtils {
           vendors.add(VendorModel.fromJson(data));
         }
         // Sort by distance so Nearby Restaurants shows nearest first
-        final loc = MyAppState.selectedPosotion.location;
+        final loc = MyAppState.selectedPosition.location;
         if (loc != null && vendors.length > 1) {
           vendors.sort((VendorModel a, VendorModel b) {
             final distA = Geolocator.distanceBetween(
@@ -1902,7 +2168,8 @@ class FireStoreUtils {
           });
         }
         if (!newArrivalStreamController!.isClosed) {
-          newArrivalStreamController!.add(List.from(vendors));
+          newArrivalStreamController!
+              .add(vendors.take(20).toList()); // Limit for low-memory devices
         }
       });
 
@@ -1952,8 +2219,8 @@ class FireStoreUtils {
             .collection(VENDORS)
             .where('categoryID', isEqualTo: cuisineID);
     GeoFirePoint center = geo.point(
-        latitude: MyAppState.selectedPosotion.location!.latitude,
-        longitude: MyAppState.selectedPosotion.location!.longitude);
+        latitude: MyAppState.selectedPosition.location!.latitude,
+        longitude: MyAppState.selectedPosition.location!.longitude);
     String field = 'g';
     Stream<List<DocumentSnapshot>> stream = geo
         .collection(collectionRef: collectionReference)
@@ -2086,46 +2353,61 @@ class FireStoreUtils {
     return story;
   }
 
-  Future<List<ProductModel>> getVendorProductsTakeAWay(String vendorID) async {
+  Future<ProductPageResult> getVendorProductsTakeAWay(
+    String vendorID, {
+    DocumentSnapshot<Map<String, dynamic>>? lastDocument,
+    int limit = 20,
+  }) async {
     List<ProductModel> products = [];
-
-    QuerySnapshot<Map<String, dynamic>> productsQuery = await firestore
+    Query<Map<String, dynamic>> q = firestore
         .collection(PRODUCTS)
         .where('vendorID', isEqualTo: vendorID)
         .where('publish', isEqualTo: true)
-        .get();
-    await Future.forEach(productsQuery.docs,
-        (QueryDocumentSnapshot<Map<String, dynamic>> document) {
+        .limit(limit);
+    if (lastDocument != null) {
+      q = q.startAfterDocument(lastDocument);
+    }
+    final productsQuery = await q.get();
+    for (final document in productsQuery.docs) {
       try {
         products.add(ProductModel.fromJson(document.data()));
-        //print('=====TP+++++ ${document.data().toString()}');
       } catch (e) {
-        print('FireStoreUtils.getVendorProducts Parse error $e');
+        if (kDebugMode) {
+          debugPrint('FireStoreUtils.getVendorProducts Parse error $e');
+        }
       }
-    });
-    print("=====IDDDDDD" + products.length.toString());
-    return products;
+    }
+    final lastDoc = productsQuery.docs.isNotEmpty ? productsQuery.docs.last : null;
+    return ProductPageResult(products, lastDoc);
   }
 
-  Future<List<ProductModel>> getVendorProductsDelivery(String vendorID) async {
+  Future<ProductPageResult> getVendorProductsDelivery(
+    String vendorID, {
+    DocumentSnapshot<Map<String, dynamic>>? lastDocument,
+    int limit = 20,
+  }) async {
     List<ProductModel> products = [];
-
-    QuerySnapshot<Map<String, dynamic>> productsQuery = await firestore
+    Query<Map<String, dynamic>> q = firestore
         .collection(PRODUCTS)
         .where('vendorID', isEqualTo: vendorID)
-        .where("takeawayOption", isEqualTo: false)
+        .where('takeawayOption', isEqualTo: false)
         .where('publish', isEqualTo: true)
-        .get();
-    await Future.forEach(productsQuery.docs,
-        (QueryDocumentSnapshot<Map<String, dynamic>> document) {
+        .limit(limit);
+    if (lastDocument != null) {
+      q = q.startAfterDocument(lastDocument);
+    }
+    final productsQuery = await q.get();
+    for (final document in productsQuery.docs) {
       try {
         products.add(ProductModel.fromJson(document.data()));
       } catch (e) {
-        print('FireStoreUtils.getVendorProducts Parse error $e');
+        if (kDebugMode) {
+          debugPrint('FireStoreUtils.getVendorProducts Parse error $e');
+        }
       }
-    });
-    print("=====IDDDDDD----" + products.length.toString());
-    return products;
+    }
+    final lastDoc = productsQuery.docs.isNotEmpty ? productsQuery.docs.last : null;
+    return ProductPageResult(products, lastDoc);
   }
 
   Future<List<OfferModel>> getOfferByVendorID(String vendorID) async {
@@ -2138,15 +2420,14 @@ class FireStoreUtils {
         .where('expiresAt', isGreaterThanOrEqualTo: Timestamp.now())
         .get();
 
-    print("-------->${bannerHomeQuery.docs}");
     await Future.forEach(bannerHomeQuery.docs,
         (QueryDocumentSnapshot<Map<String, dynamic>> document) {
       try {
-        print("-------->");
-        print(document.data());
         offers.add(OfferModel.fromJson(document.data()));
       } catch (e) {
-        print('FireStoreUtils.getCuisines Parse error $e');
+        if (kDebugMode) {
+          debugPrint('FireStoreUtils.getOfferByVendorID Parse error $e');
+        }
       }
     });
     return offers;
@@ -2154,7 +2435,6 @@ class FireStoreUtils {
 
   Future<VendorCategoryModel?> getVendorCategoryById(
       String vendorCategoryID) async {
-    print('we are enter-->');
     VendorCategoryModel? vendorCategoryModel;
     QuerySnapshot<Map<String, dynamic>> vendorsQuery = await firestore
         .collection(VENDORS_CATEGORIES)
@@ -2162,15 +2442,52 @@ class FireStoreUtils {
         .where('publish', isEqualTo: true)
         .get();
     try {
-      print('we are enter-->');
-      if (vendorsQuery.docs.length > 0) {
+      if (vendorsQuery.docs.isNotEmpty) {
         vendorCategoryModel =
             VendorCategoryModel.fromJson(vendorsQuery.docs.first.data());
       }
     } catch (e) {
-      print('FireStoreUtils.getVendorByVendorID Parse error $e');
+      if (kDebugMode) {
+        debugPrint('FireStoreUtils.getVendorCategoryById Parse error $e');
+      }
     }
     return vendorCategoryModel;
+  }
+
+  /// Fetches multiple categories by ID in batch. Firestore whereIn max is 30.
+  Future<List<VendorCategoryModel>> getVendorCategoriesByIds(
+    List<String> categoryIds,
+  ) async {
+    if (categoryIds.isEmpty) return [];
+    const chunkSize = 30;
+    final List<VendorCategoryModel> result = [];
+    final Map<String, int> orderMap = {
+      for (var i = 0; i < categoryIds.length; i++) categoryIds[i]: i,
+    };
+    for (var i = 0; i < categoryIds.length; i += chunkSize) {
+      final chunk = categoryIds
+          .skip(i)
+          .take(chunkSize)
+          .toList();
+      final query = await firestore
+          .collection(VENDORS_CATEGORIES)
+          .where('id', whereIn: chunk)
+          .where('publish', isEqualTo: true)
+          .get();
+      for (final doc in query.docs) {
+        try {
+          result.add(VendorCategoryModel.fromJson(doc.data()));
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint('getVendorCategoriesByIds Parse error $e');
+          }
+        }
+      }
+    }
+    result.sort(
+      (a, b) => (orderMap[a.id] ?? 0).compareTo(orderMap[b.id] ?? 0),
+    );
+    return result;
   }
 
   Future<VendorModel> getVendorByVendorID(String vendorID) async {
@@ -2339,7 +2656,9 @@ class FireStoreUtils {
     DocumentReference documentReference =
         firestore.collection(ORDERS).doc(UserPreference.getOrderId());
     orderModel.id = documentReference.id;
-    await documentReference.set(orderModel.toJson());
+    final json = orderModel.toJson();
+    json['sessionId'] = SessionManager.sessionId;
+    await documentReference.set(json);
 
     // Reserve manual coupon if one was applied
     final manualCouponId = orderModel.manualCouponId;
@@ -2545,7 +2864,9 @@ class FireStoreUtils {
     } else {
       documentReference = firestore.collection(ORDERS).doc(orderModel.id);
     }
-    await documentReference.set(orderModel.toJson());
+    final json = orderModel.toJson();
+    json['sessionId'] = SessionManager.sessionId;
+    await documentReference.set(json);
     return orderModel;
   }
 
@@ -2555,6 +2876,41 @@ class FireStoreUtils {
     orderModel.id = documentReference.id;
     await documentReference.set(orderModel.toJson());
     return orderModel;
+  }
+
+  Future<String> createPautosOrder(PautosOrderModel order) async {
+    final ref = firestore.collection(PAUTOS_ORDERS).doc();
+    order.id = ref.id;
+    await ref.set(order.toJson());
+    return order.id;
+  }
+
+  Stream<List<PautosOrderModel>> getPautosOrdersByAuthor(String authorID) {
+    return firestore
+        .collection(PAUTOS_ORDERS)
+        .where('authorID', isEqualTo: authorID)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((d) {
+              final data = d.data();
+              data['id'] = d.id;
+              return PautosOrderModel.fromJson(data);
+            })
+            .toList());
+  }
+
+  Stream<PautosOrderModel?> getPautosOrderStream(String orderId) {
+    return firestore
+        .collection(PAUTOS_ORDERS)
+        .doc(orderId)
+        .snapshots()
+        .map((doc) {
+          if (!doc.exists || doc.data() == null) return null;
+          final data = doc.data()!;
+          data['id'] = doc.id;
+          return PautosOrderModel.fromJson(data);
+        });
   }
 
   static createOrder() async {
@@ -2751,11 +3107,26 @@ class FireStoreUtils {
       }
       total += element.quantity * double.parse(element.price);
 
-      List<dynamic>? addon = element.extras;
+      List<dynamic>? addon;
+      final e = element.extras;
+      if (e is List) {
+        addon = e;
+      } else if (e is String && e.isNotEmpty && e != '[]') {
+        try {
+          final decoded = jsonDecode(e);
+          addon = decoded is List
+              ? List<dynamic>.from(decoded)
+              : [decoded];
+        } catch (_) {
+          addon = [e];
+        }
+      }
       String extrasDisVal = '';
-      for (int i = 0; i < addon!.length; i++) {
-        extrasDisVal +=
-            '${addon[i].toString().replaceAll("\"", "")} ${(i == addon.length - 1) ? "" : ","}';
+      if (addon != null) {
+        for (int i = 0; i < addon.length; i++) {
+          extrasDisVal +=
+              '${addon[i].toString().replaceAll("\"", "")} ${(i == addon.length - 1) ? "" : ","}';
+        }
       }
       String product = """
         <tr>
@@ -5127,6 +5498,63 @@ class FireStoreUtils {
     }
   }
 
+  /// Paginated fetch of orders by status (e.g. completed).
+  /// Requires Firestore composite index: authorID, status, createdAt.
+  Future<Map<String, dynamic>> getOrdersByStatusPaginated({
+    required String userID,
+    required String status,
+    int limit = 10,
+    DocumentSnapshot? lastDocument,
+  }) async {
+    try {
+      Query query = firestore
+          .collection(ORDERS)
+          .where('authorID', isEqualTo: userID)
+          .where('status', isEqualTo: status)
+          .orderBy('createdAt', descending: true)
+          .limit(limit);
+
+      if (lastDocument != null) {
+        query = query.startAfterDocument(lastDocument);
+      }
+
+      final snapshot = await query.get();
+
+      final orders = snapshot.docs
+          .map((doc) {
+            try {
+              final data = doc.data() as Map<String, dynamic>;
+              return OrderModel.fromJson(data);
+            } catch (e) {
+              debugPrint(
+                  'getOrdersByStatusPaginated parse error ${doc.id}: $e');
+              return null;
+            }
+          })
+          .whereType<OrderModel>()
+          .toList();
+
+      final lastDoc =
+          snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+
+      return {
+        'orders': orders,
+        'lastDocument': lastDoc,
+      };
+    } catch (e, stackTrace) {
+      debugPrint('getOrdersByStatusPaginated error: $e');
+      debugPrint('StackTrace: $stackTrace');
+      if (e.toString().contains('index')) {
+        debugPrint(
+            'Firestore index may be missing. Check console for index link.');
+      }
+      return {
+        'orders': <OrderModel>[],
+        'lastDocument': null,
+      };
+    }
+  }
+
   Future<List<VendorModel>> getPopularRestaurantsPaginated({
     required int limit,
     DocumentSnapshot? lastDocument,
@@ -5245,7 +5673,8 @@ class FireStoreUtils {
   }
 
   // Search Analytics Methods
-  Future<void> trackSearchQuery({
+  /// Returns document ID for click-update flow, or null on error.
+  Future<String?> trackSearchQuery({
     required String userId,
     required String searchQuery,
     required String searchType,
@@ -5268,11 +5697,24 @@ class FireStoreUtils {
         deviceInfo: Platform.operatingSystem,
       );
 
-      await firestore
+      final docRef = await firestore
           .collection(SEARCH_ANALYTICS)
           .add(searchAnalytics.toJson());
+      return docRef.id;
     } catch (e) {
       debugPrint('Error tracking search: $e');
+      return null;
+    }
+  }
+
+  Future<void> updateSearchClick(String docId, String restaurantId) async {
+    try {
+      await firestore.collection(SEARCH_ANALYTICS).doc(docId).update({
+        'clickedRestaurantId': restaurantId,
+        'clickedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Error updating search click: $e');
     }
   }
 

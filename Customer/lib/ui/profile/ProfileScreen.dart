@@ -9,6 +9,7 @@ import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/cart_sync_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:intl/intl.dart';
 import 'package:foodie_customer/ui/accountDetails/AccountDetailsScreen.dart';
@@ -17,6 +18,11 @@ import 'package:foodie_customer/ui/contactUs/ContactUsScreen.dart';
 import 'package:foodie_customer/ui/feedback/FeedbackScreen.dart';
 import 'package:foodie_customer/ui/reauthScreen/reauth_user_screen.dart';
 import 'package:foodie_customer/ui/referral_screen/referral_screen_new.dart';
+import 'package:foodie_customer/ui/loyalty/LoyaltyScreen.dart';
+import 'package:foodie_customer/model/LoyaltyData.dart';
+import 'package:foodie_customer/services/loyalty_service.dart';
+import 'package:foodie_customer/services/gift_card_service.dart';
+import 'package:foodie_customer/ui/gift_card/gift_card_screen.dart';
 import 'package:foodie_customer/ui/ordersScreen/OrdersScreen.dart';
 import 'package:foodie_customer/ui/home/favourite_restaurant.dart';
 import 'package:foodie_customer/ui/deliveryAddressScreen/DeliveryAddressScreen.dart';
@@ -296,6 +302,201 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       color: Colors.blue,
                     ),
                   ),
+                  // Loyalty Program Card
+                  StreamBuilder<Map<String, dynamic>?>(
+                    stream: LoyaltyService.getLoyaltyConfigStream(),
+                    builder: (context, configSnap) {
+                      if (!configSnap.hasData ||
+                          configSnap.data?['enabled'] != true) {
+                        return const SizedBox.shrink();
+                      }
+                      return StreamBuilder<LoyaltyData?>(
+                        stream: LoyaltyService.getLoyaltyStream(user.userID),
+                        builder: (context, loyaltySnap) {
+                          final loyalty = loyaltySnap.data;
+                          final config = configSnap.data;
+                          return GestureDetector(
+                            onTap: () =>
+                                push(context, LoyaltyScreen(userId: user.userID)),
+                            child: Container(
+                              margin: EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 8),
+                              padding: EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Colors.deepPurple.shade100,
+                                    Colors.amber.shade100,
+                                  ],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                    color: Colors.deepPurple.shade200),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.emoji_events,
+                                          color: Colors.amber.shade800,
+                                          size: 24),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'Loyalty Program',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.deepPurple.shade900,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  SizedBox(height: 8),
+                                  if (loyalty != null &&
+                                      loyalty.currentCycle.isNotEmpty) ...[
+                                    Row(
+                                      children: [
+                                        Container(
+                                          padding: EdgeInsets.symmetric(
+                                              horizontal: 10, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.deepPurple.shade200
+                                                .withOpacity(0.6),
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                          child: Text(
+                                            loyalty.currentTier
+                                                .toUpperCase(),
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.deepPurple.shade900,
+                                            ),
+                                          ),
+                                        ),
+                                        SizedBox(width: 12),
+                                        Text(
+                                          '${loyalty.tokensThisCycle} tokens',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.deepPurple.shade900,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    SizedBox(height: 4),
+                                    Builder(
+                                      builder: (ctx) {
+                                        final tokensNeeded = LoyaltyService
+                                            .getTokensToNextTier(
+                                                loyalty.tokensThisCycle,
+                                                config);
+                                        final nextTier = LoyaltyService
+                                            .getNextTierName(
+                                                loyalty.tokensThisCycle,
+                                                config);
+                                        if (tokensNeeded <= 0 || nextTier == null)
+                                          return Text(
+                                            'Top tier!',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.deepPurple.shade700,
+                                            ),
+                                          );
+                                        return Text(
+                                          '$tokensNeeded more orders to $nextTier',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.deepPurple.shade700,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ] else
+                                    Text(
+                                      'Start earning tokens with every order',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.deepPurple.shade700,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                  // Gift Cards tile (when enabled)
+                  StreamBuilder<GiftCardConfig>(
+                    stream: GiftCardService.getConfigStream(),
+                    builder: (context, cfgSnap) {
+                      if (!cfgSnap.hasData ||
+                          !(cfgSnap.data?.enabled ?? false)) {
+                        return const SizedBox.shrink();
+                      }
+                      return GestureDetector(
+                        onTap: () => push(context, const GiftCardScreen()),
+                        child: Container(
+                          margin: EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          padding: EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.orange.shade200,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.card_giftcard,
+                                color: Colors.orange.shade700,
+                                size: 24,
+                              ),
+                              SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Gift Cards',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.orange.shade900,
+                                      ),
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'Purchase or redeem gift cards',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.orange.shade700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_right,
+                                color: Colors.orange.shade700,
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                   // Referral Wallet Balance Display
                   if (user.referralWalletAmount > 0)
                     Container(
@@ -567,6 +768,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     //user.active = false;
                     user.lastOnlineTimestamp = Timestamp.now();
                     await FireStoreUtils.updateCurrentUser(user);
+                    if (user.fcmToken.isNotEmpty) {
+                      unawaited(FireStoreUtils.removeFcmToken(
+                          user.userID, user.fcmToken));
+                    }
+                    await CartSyncService.onLogout();
                     await auth.FirebaseAuth.instance.signOut();
                     MyAppState.currentUser = null;
                     pushAndRemoveUntil(context, LoginScreen(), false);

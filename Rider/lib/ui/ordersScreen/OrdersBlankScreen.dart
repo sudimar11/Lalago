@@ -6,20 +6,27 @@ import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/widgets/refreshable_order_list.dart';
 import 'package:foodie_driver/ui/home/orderdetails.dart';
 import 'package:foodie_driver/main.dart';
-import 'package:foodie_driver/ui/profile/ProfileScreen.dart';
-import 'package:foodie_driver/ui/group_chat/GroupChatScreen.dart';
-import 'package:foodie_driver/ui/chat_screen/admin_driver_inbox_screen.dart';
+import 'package:foodie_driver/services/FirebaseHelper.dart';
+import 'package:foodie_driver/services/driver_performance_service.dart';
+import 'package:foodie_driver/services/performance_tier_helper.dart';
+import 'package:foodie_driver/userPrefrence.dart';
+import 'package:intl/intl.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
-import 'package:foodie_driver/services/group_chat_service.dart';
+import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:foodie_driver/services/rider_preset_location_service.dart';
+import 'package:foodie_driver/services/food_ready_highlight_service.dart';
+import 'package:foodie_driver/services/user_listener_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:location/location.dart';
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'package:http/http.dart' as http;
+import 'package:foodie_driver/services/audio_service.dart';
+import 'package:foodie_driver/services/order_service.dart';
+import 'package:foodie_driver/services/array_validation_service.dart';
+import 'package:foodie_driver/ui/pautos/my_pautos_orders_screen.dart';
+import 'package:foodie_driver/ui/profile/zone_browser_screen.dart';
 
 class OrdersBlankScreen extends StatefulWidget {
   const OrdersBlankScreen({Key? key}) : super(key: key);
@@ -30,17 +37,18 @@ class OrdersBlankScreen extends StatefulWidget {
 
 class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
   static const List<String> _activeStatuses = [
-    'Driver Pending',
+    'Driver Assigned',
     'Driver Accepted',
     'Order Accepted',
     'Order Shipped',
     'In Transit',
     'Order Placed',
-    'Driver Assigned',
   ];
 
   int _refreshNonce = 0;
   bool _hasShownOfflineDialog = false;
+  double _sliderPosition = 0.0;
+  bool _isSavingGoOnline = false;
   Stream<QuerySnapshot>? _ordersStream;
   String? _ordersStreamUserId;
 
@@ -50,39 +58,22 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
   final Map<String, String> _previousOrderStatuses = <String, String>{};
   StreamSubscription<QuerySnapshot>? _orderStatusSubscription;
 
+  // New order badge: orders we haven't seen before
+  final Set<String> _newOrderIds = {};
+  final Set<String> _lastSeenOrderIds = {};
+  final Map<String, Timer> _newOrderTimers = {};
+
   @override
   void initState() {
     super.initState();
-    // #region agent log
-    final user = MyAppState.currentUser;
-    final userMap = user != null
-        ? {
-            'isOnline': user.isOnline,
-            'suspended': user.suspended,
-            'checkedInToday': (user as dynamic).checkedInToday,
-            'userId': user.userID
-          }
-        : null;
-    debugPrint('[DEBUG LOG] initState - screen initialized: $userMap');
-    http
-        .post(
-            Uri.parse(
-                'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'location': 'OrdersBlankScreen.dart:36',
-              'message': 'initState - screen initialized',
-              'data': {'user': userMap},
-              'timestamp': DateTime.now().millisecondsSinceEpoch,
-              'sessionId': 'debug-session',
-              'runId': 'run1',
-              'hypothesisId': 'C,E'
-            }))
-        .catchError((e) => http.Response('', 500));
-    // #endregion
     _initializeLocalNotifications();
     _listenForOrderStatusChanges();
     _checkOfflineStatus();
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && uid.isNotEmpty) {
+      ArrayValidationService.validate(uid);
+    }
 
     // Request permissions after UI is built to avoid blocking
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -130,127 +121,268 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
   void _checkOfflineStatus() {
     // Use postFrameCallback to show dialog after build completes
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // #region agent log
-      final user = MyAppState.currentUser;
-      final userMap = user != null
-          ? {
-              'isOnline': user.isOnline,
-              'suspended': user.suspended,
-              'checkedInToday': (user as dynamic).checkedInToday,
-              'userId': user.userID
-            }
-          : null;
-      debugPrint(
-          '[DEBUG LOG] _checkOfflineStatus called: $userMap, mounted=$mounted, hasShownDialog=$_hasShownOfflineDialog');
-      http
-          .post(
-              Uri.parse(
-                  'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'location': 'OrdersBlankScreen.dart:88',
-                'message': '_checkOfflineStatus called',
-                'data': {
-                  'user': userMap,
-                  'mounted': mounted,
-                  'hasShownDialog': _hasShownOfflineDialog
-                },
-                'timestamp': DateTime.now().millisecondsSinceEpoch,
-                'sessionId': 'debug-session',
-                'runId': 'run1',
-                'hypothesisId': 'A,C,D'
-              }))
-          .catchError((e) => http.Response('', 500));
-      // #endregion
-      // Only show offline dialog if user cannot receive orders
-      // User can receive orders only if: checked in today AND not checked out AND online
-      final isCheckedInToday =
-          (MyAppState.currentUser! as dynamic).checkedInToday == true;
-      final isCheckedOutToday =
-          (MyAppState.currentUser! as dynamic).checkedOutToday == true;
+      // Only show offline dialog if user cannot receive orders.
       final canReceiveOrders =
-          (isCheckedInToday && !isCheckedOutToday) &&
-              (MyAppState.currentUser!.isOnline == true);
+          MyAppState.currentUser!.isOnline == true &&
+              (MyAppState.currentUser!.riderAvailability == 'available' ||
+                  MyAppState.currentUser!.riderAvailability ==
+                      'on_delivery');
 
+      // Slider card is shown in body when !canReceiveOrders; no dialog.
       if (mounted &&
           MyAppState.currentUser != null &&
           MyAppState.currentUser!.suspended != true &&
-          !canReceiveOrders &&
-          !_hasShownOfflineDialog) {
-        // #region agent log
-        debugPrint(
-            '[DEBUG LOG] Showing offline dialog - condition met: isOnline=${MyAppState.currentUser!.isOnline}, checkedInToday=${(MyAppState.currentUser! as dynamic).checkedInToday}, checkedOutToday=${(MyAppState.currentUser! as dynamic).checkedOutToday}');
-        http
-            .post(
-                Uri.parse(
-                    'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-                headers: {'Content-Type': 'application/json'},
-                body: jsonEncode({
-                  'location': 'OrdersBlankScreen.dart:96',
-                  'message': 'Showing offline dialog - condition met',
-                  'data': {
-                    'isOnline': MyAppState.currentUser!.isOnline,
-                    'checkedInToday':
-                        (MyAppState.currentUser! as dynamic).checkedInToday,
-                    'checkedOutToday':
-                        (MyAppState.currentUser! as dynamic).checkedOutToday,
-                    'canReceiveOrders': canReceiveOrders
-                  },
-                  'timestamp': DateTime.now().millisecondsSinceEpoch,
-                  'sessionId': 'debug-session',
-                  'runId': 'run1',
-                  'hypothesisId': 'B,D'
-                }))
-            .catchError((e) => http.Response('', 500));
-        // #endregion
+          !canReceiveOrders) {
         _hasShownOfflineDialog = true;
-        _showOfflineDialog();
       }
     });
   }
 
-  void _showOfflineDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('You are Offline'),
-          content: const Text(
-            'You cannot receive orders unless you are checked in and online. Please check in to start receiving orders.',
+  Future<void> _showLocationPickerThenGoOnline() async {
+    if (MyAppState.currentUser == null) return;
+    setState(() => _sliderPosition = 0.0);
+
+    try {
+      final savedId = MyAppState.currentUser!.selectedPresetLocationId;
+      if (savedId != null && savedId.trim().isNotEmpty) {
+        final preset =
+            await RiderPresetLocationService.getPresetById(savedId);
+        if (preset != null && mounted) {
+          MyAppState.currentUser!.location = UserLocation(
+            latitude: preset.latitude,
+            longitude: preset.longitude,
+          );
+          MyAppState.currentUser!.locationUpdatedAt = Timestamp.now();
+          await _slideGoOnline();
+          return;
+        }
+        MyAppState.currentUser!.selectedPresetLocationId = null;
+      }
+
+      final presets =
+          await RiderPresetLocationService.getPresetLocations();
+      if (!mounted) return;
+      if (presets.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No preset locations. Contact admin.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                // Navigate to Profile screen with navigation bar
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => ProfileScreen(
-                      user: MyAppState.currentUser!,
-                      showNavigationBar: true,
-                    ),
-                  ),
-                );
-              },
-              child: const Text('Check In'),
-            ),
-          ],
         );
-      },
-    );
+        return;
+      }
+
+      final selected = await showModalBottomSheet<
+          RiderPresetLocationData>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (ctx) => DraggableScrollableSheet(
+          initialChildSize: 0.5,
+          minChildSize: 0.3,
+          maxChildSize: 0.8,
+          expand: false,
+          builder: (_, controller) => Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Saan ka mag-aantay ng order?',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  controller: controller,
+                  itemCount: presets.length,
+                  itemBuilder: (_, i) {
+                    final p = presets[i];
+                    return ListTile(
+                      leading: const Icon(Icons.place),
+                      title: Text(p.name),
+                      subtitle: Text(
+                        '${p.latitude.toStringAsFixed(5)}, '
+                        '${p.longitude.toStringAsFixed(5)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      onTap: () => Navigator.pop(ctx, p),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      if (selected == null || !mounted) return;
+
+      MyAppState.currentUser!.location = UserLocation(
+        latitude: selected.latitude,
+        longitude: selected.longitude,
+      );
+      MyAppState.currentUser!.locationUpdatedAt = Timestamp.now();
+      MyAppState.currentUser!.selectedPresetLocationId = selected.id;
+
+      await FirebaseFirestore.instance
+          .collection('service_areas')
+          .doc(selected.id)
+          .update({
+        'assignedDriverIds': FieldValue.arrayUnion(
+          [MyAppState.currentUser!.userID],
+        ),
+      });
+
+      if (savedId != null &&
+          savedId.isNotEmpty &&
+          savedId != selected.id) {
+        await FirebaseFirestore.instance
+            .collection('service_areas')
+            .doc(savedId)
+            .update({
+          'assignedDriverIds': FieldValue.arrayRemove(
+            [MyAppState.currentUser!.userID],
+          ),
+        });
+      }
+
+      await _slideGoOnline();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load locations: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _slideGoOnline() async {
+    if (MyAppState.currentUser == null) return;
+    if (_isSavingGoOnline) return;
+    _isSavingGoOnline = true;
+    setState(() {});
+
+    try {
+      final now = DateTime.now();
+      final timeString = DateFormat('h:mm a').format(now);
+      final todayString = DateFormat('yyyy-MM-dd').format(now);
+
+      MyAppState.currentUser!.isOnline = true;
+      MyAppState.currentUser!.isActive = true;
+      MyAppState.currentUser!.active = true;
+      UserListenerService.instance.markLocalMutation();
+
+      try {
+        final absentDaysMarked =
+            await DriverPerformanceService.detectAndMarkMissingAbsences(
+                MyAppState.currentUser!.userID);
+        if (absentDaysMarked > 0 && mounted) {
+          final pointsDeducted =
+              absentDaysMarked * DriverPerformanceService.ADJUSTMENT_ABSENT;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '$absentDaysMarked absent day(s) detected and marked. '
+                'Performance deducted: ${pointsDeducted.toStringAsFixed(1)} points',
+              ),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint(
+            'Error detecting missing absences during slide-go-online: $e');
+      }
+
+      if (MyAppState.currentUser!.checkInTime != null &&
+          MyAppState.currentUser!.checkInTime!.isNotEmpty) {
+        final newPerformance =
+            await DriverPerformanceService.applyCheckInAdjustment(
+                MyAppState.currentUser!.userID,
+                MyAppState.currentUser!.checkInTime!,
+                timeString);
+        MyAppState.currentUser!.driverPerformance = newPerformance;
+      }
+
+      await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
+      await OrderService.updateRiderStatus();
+      await FireStoreUtils.touchLastActivity(MyAppState.currentUser!.userID);
+      UserPreference.setLastCheckInDate(date: todayString);
+
+      if (mounted) {
+        setState(() {
+          _sliderPosition = 0.0;
+          _isSavingGoOnline = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Successfully went online!'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _sliderPosition = 0.0;
+          _isSavingGoOnline = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to go online: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  void _updateNewOrderIds(List<QueryDocumentSnapshot> docs) {
+    final currentIds = docs.map((d) => d.id).toSet();
+    final newIds = currentIds.difference(_lastSeenOrderIds);
+    if (newIds.isNotEmpty && mounted) {
+      setState(() {
+        for (final id in newIds) {
+          _newOrderIds.add(id);
+          _newOrderTimers[id]?.cancel();
+          _newOrderTimers[id] = Timer(const Duration(seconds: 30), () {
+            if (mounted) {
+              setState(() {
+                _newOrderIds.remove(id);
+                _newOrderTimers.remove(id);
+              });
+            }
+          });
+        }
+        _lastSeenOrderIds.addAll(currentIds);
+      });
+    } else if (currentIds.isNotEmpty) {
+      _lastSeenOrderIds.addAll(currentIds);
+    }
   }
 
   @override
   void dispose() {
     _orderStatusSubscription?.cancel();
+    for (final t in _newOrderTimers.values) {
+      t.cancel();
+    }
+    _newOrderTimers.clear();
     super.dispose();
   }
 
@@ -260,6 +392,54 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       _ordersStream = _createOrdersStream(uid);
       _ordersStreamUserId = uid;
     }
+  }
+
+  bool _shouldShowWorkAreaBanner() {
+    final user = MyAppState.currentUser;
+    if (user == null) return false;
+    final canReceive = user.isOnline == true &&
+        (user.riderAvailability == 'available' ||
+            user.riderAvailability == 'on_delivery');
+    return canReceive &&
+        !RiderPresetLocationService.hasValidWorkArea(user);
+  }
+
+  Widget _buildWorkAreaBanner() {
+    final bgColor = isDarkMode(context)
+        ? Colors.orange.shade900.withValues(alpha: 0.3)
+        : Colors.orange.shade100;
+    final fgColor = isDarkMode(context)
+        ? Colors.orange.shade200
+        : Colors.orange.shade900;
+    return Material(
+      color: bgColor,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: fgColor),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                "You don't have a work area set. Select one to receive orders.",
+                style: TextStyle(fontSize: 14, color: fgColor),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ZoneBrowserScreen(),
+                  ),
+                );
+              },
+              child: const Text('Select Work Area'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _initializeLocalNotifications() async {
@@ -328,6 +508,9 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
     if (orderData == null) return;
 
     final orderId = doc.id;
+    if (newStatus == 'Order Shipped') {
+      AudioService.instance.playNewOrderSound(orderId: orderId);
+    }
     final author = (orderData['author'] ?? {}) as Map<String, dynamic>;
     final vendor = (orderData['vendor'] ?? {}) as Map<String, dynamic>;
     final customerName =
@@ -393,8 +576,6 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
         return '✅ Order Accepted by Restaurant';
       case 'Driver Assigned':
         return '🚗 Order Assigned to You';
-      case 'Driver Pending':
-        return '⏳ Waiting for Your Response';
       case 'Driver Accepted':
         return '✅ Order Accepted';
       case 'Driver Rejected':
@@ -482,8 +663,12 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
     );
   }
 
-  // Build offline warning card
-  Widget _buildOfflineWarningCard() {
+  static const double _sliderTrackWidth = 280;
+  static const double _sliderTrackHeight = 48;
+  static const double _sliderKnobSize = 44;
+  static const double _sliderTriggerThreshold = 0.85;
+
+  Widget _buildSlideToGoOnlineCard() {
     return Center(
       child: SingleChildScrollView(
         child: Padding(
@@ -521,9 +706,9 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                           : Colors.red.shade900,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 8),
                   Text(
-                    'You cannot receive orders unless you are checked in and online. Please check in to start receiving orders.',
+                    'Slide to go online to receive orders.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 16,
@@ -533,33 +718,103 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      // Navigate to Profile screen with navigation bar
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ProfileScreen(
-                            user: MyAppState.currentUser!,
-                            showNavigationBar: true,
+                  GestureDetector(
+                    onHorizontalDragUpdate: _isSavingGoOnline
+                        ? null
+                        : (details) {
+                            final maxDrag =
+                                _sliderTrackWidth - _sliderKnobSize - 4;
+                            final delta = details.delta.dx / maxDrag;
+                            setState(() {
+                              _sliderPosition =
+                                  (_sliderPosition + delta).clamp(0.0, 1.0);
+                              if (_sliderPosition >= _sliderTriggerThreshold) {
+                                _showLocationPickerThenGoOnline();
+                              }
+                            });
+                          },
+                    onHorizontalDragEnd: _isSavingGoOnline
+                        ? null
+                        : (_) {
+                            if (_sliderPosition < _sliderTriggerThreshold) {
+                              setState(() => _sliderPosition = 0.0);
+                            }
+                          },
+                    child: SizedBox(
+                      width: _sliderTrackWidth,
+                      height: _sliderTrackHeight,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Container(
+                            width: _sliderTrackWidth,
+                            height: _sliderTrackHeight,
+                            decoration: BoxDecoration(
+                              color: isDarkMode(context)
+                                  ? Colors.grey.shade700
+                                  : Colors.grey.shade300,
+                              borderRadius: BorderRadius.circular(
+                                  _sliderTrackHeight / 2),
+                            ),
                           ),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.login),
-                    label: const Text('Check In Now'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.shade700,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                          Positioned(
+                            left: 2 +
+                                (_sliderPosition *
+                                    (_sliderTrackWidth -
+                                        _sliderKnobSize -
+                                        4)),
+                            top: (_sliderTrackHeight - _sliderKnobSize) / 2,
+                            child: IgnorePointer(
+                              ignoring: _isSavingGoOnline,
+                              child: Container(
+                                width: _sliderKnobSize,
+                                height: _sliderKnobSize,
+                                decoration: BoxDecoration(
+                                  color: _isSavingGoOnline
+                                      ? Colors.grey
+                                      : Color(COLOR_ACCENT),
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black26,
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: _isSavingGoOnline
+                                    ? const Padding(
+                                        padding: EdgeInsets.all(8),
+                                        child: CircularProgressIndicator
+                                            .adaptive(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : Icon(
+                                        Icons.chevron_right,
+                                        color: Colors.white,
+                                        size: _sliderKnobSize * 0.6,
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
+                  if (_isSavingGoOnline)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(
+                        'Saving...',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: isDarkMode(context)
+                              ? Colors.grey.shade400
+                              : Colors.grey.shade600,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -734,29 +989,17 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       return Scaffold(
         backgroundColor:
             isDarkMode(context) ? Color(DARK_VIEWBG_COLOR) : Colors.white,
-        body: Center(
-          child: Text(
-            'No current order',
-            style: const TextStyle(fontSize: 16),
-          ),
+        body: const Center(
+          child: CircularProgressIndicator.adaptive(),
         ),
       );
     }
 
     final FirebaseFirestore firestore = FirebaseFirestore.instance;
-    // #region agent log
     if (_ordersStream == null || _ordersStreamUserId != currentUserId) {
       _ordersStream = _createOrdersStream(currentUserId);
       _ordersStreamUserId = currentUserId;
-      try {
-        final f = File(
-            '/Users/sudimard/Downloads/Lalago/.cursor/debug.log');
-        f.writeAsStringSync(
-            '${jsonEncode(<String, dynamic>{"location": "OrdersBlankScreen.dart:build", "message": "orders stream created", "data": {"userId": currentUserId, "streamWasNull": _ordersStream == null}, "timestamp": DateTime.now().millisecondsSinceEpoch, "sessionId": "debug-session", "hypothesisId": "H1"})}\n',
-            mode: FileMode.append);
-      } catch (_) {}
     }
-    // #endregion
 
     return Scaffold(
       appBar: AppBar(
@@ -806,19 +1049,11 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                       ? '${perfValue.toStringAsFixed(0)}%'
                       : 'N/A';
 
-                  // Map performance to tier label:
-                  // < 75  -> Silver
-                  // < 85  -> Platinum
-                  // >= 85 -> Gold
                   String tierLabel = '';
                   if (perfValue != null) {
-                    if (perfValue < 75) {
-                      tierLabel = 'Silver';
-                    } else if (perfValue < 85) {
-                      tierLabel = 'Platinum';
-                    } else {
-                      tierLabel = 'Gold';
-                    }
+                    tierLabel = PerformanceTierHelper.getTier(
+                      perfValue,
+                    ).name;
                   }
 
                   final tierSuffix =
@@ -832,6 +1067,14 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                     ),
                   );
                 },
+              ),
+              const SizedBox(width: 12),
+              Text(
+                MyAppState.currentUser?.riderDisplayStatus ?? '⚪ Offline',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(width: 12),
               StreamBuilder<QuerySnapshot>(
@@ -963,64 +1206,13 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
           ),
         ),
         actions: [
-          StreamBuilder<QuerySnapshot>(
-            stream: firestore
-                .collection('chat_admin_driver')
-                .where('driverId', isEqualTo: currentUserId)
-                .snapshots(),
-            builder: (context, snapshot) {
-              int totalUnread = 0;
-              for (final doc in snapshot.data?.docs ?? const []) {
-                final data = doc.data() as Map<String, dynamic>? ?? const {};
-                final raw = data['unreadForDriver'];
-                final count = raw is num
-                    ? raw.toInt()
-                    : int.tryParse(raw?.toString() ?? '') ?? 0;
-                totalUnread += count;
-              }
-
-              return Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    IconButton(
-                      tooltip: 'Admin Messages',
-                      icon: const Icon(Icons.support_agent),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const AdminDriverInboxScreen(),
-                          ),
-                        );
-                      },
-                    ),
-                    if (totalUnread > 0)
-                      Positioned(
-                        right: 4,
-                        top: 4,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                          constraints: const BoxConstraints(
-                            minWidth: 16,
-                            minHeight: 16,
-                          ),
-                          child: Text(
-                            totalUnread > 99 ? '99+' : '$totalUnread',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
-                  ],
+          IconButton(
+            tooltip: 'My PAUTOS Orders',
+            icon: const Icon(Icons.shopping_bag_outlined),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const MyPautosOrdersScreen(),
                 ),
               );
             },
@@ -1030,95 +1222,21 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       ),
       backgroundColor:
           isDarkMode(context) ? Color(DARK_VIEWBG_COLOR) : Colors.white,
-      body: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
               children: [
+                if (_shouldShowWorkAreaBanner()) _buildWorkAreaBanner(),
                 // Orders list
                 Expanded(
                   child: StreamBuilder<QuerySnapshot>(
                     stream: _ordersStream!,
                     builder: (context, snapshot) {
-                      // #region agent log
-                      final rawCheckedIn =
-                          (MyAppState.currentUser as dynamic)?.checkedInToday;
-                      final rawCheckedOut =
-                          (MyAppState.currentUser as dynamic)?.checkedOutToday;
-                      final rawOnline = MyAppState.currentUser?.isOnline;
-                      // Only show offline card when we have explicit evidence
-                      // user cannot receive; null (unloaded) = show list/loading
-                      final cannotReceiveOrders =
-                          (rawCheckedIn == false) ||
-                              (rawCheckedOut == true) ||
-                              (rawOnline == false);
-                      final canReceiveOrders = !cannotReceiveOrders;
-                      final isCheckedInToday = rawCheckedIn == true;
-                      final isCheckedOutToday = rawCheckedOut == true;
-                      final branch = remittanceService.isBlockedByRemittance
-                          ? 'remittance'
-                          : (MyAppState.currentUser?.suspended == true)
-                              ? 'suspended'
-                              : (!canReceiveOrders)
-                                  ? 'offline'
-                                  : (snapshot.connectionState ==
-                                          ConnectionState.waiting)
-                                      ? 'waiting'
-                                      : (snapshot.hasError)
-                                          ? 'error'
-                                          : ((snapshot.data?.docs ?? []).isEmpty)
-                                              ? 'empty'
-                                              : 'list';
-                      // Log so we see in release logcat why order screen shows loading/list/error.
-                      print(
-                          '📋 Orders screen: branch=$branch '
-                          'conn=${snapshot.connectionState} '
-                          'hasData=${snapshot.hasData} hasError=${snapshot.hasError} '
-                          'docs=${snapshot.data?.docs.length ?? 0}');
-                      // #region agent log
-                      try {
-                        final f = File(
-                            '/Users/sudimard/Downloads/Lalago/.cursor/debug.log');
-                        f.writeAsStringSync(
-                            '${jsonEncode(<String, dynamic>{"location": "OrdersBlankScreen.dart:StreamBuilder", "message": "branch", "data": {"connectionState": snapshot.connectionState.toString(), "hasData": snapshot.hasData, "hasError": snapshot.hasError, "branch": branch, "docsLength": snapshot.data?.docs.length ?? 0}, "timestamp": DateTime.now().millisecondsSinceEpoch, "sessionId": "debug-session", "hypothesisId": "H2,H3,H4"})}\n',
-                            mode: FileMode.append);
-                      } catch (_) {}
-                      // #endregion
-                      http
-                          .post(
-                            Uri.parse(
-                                'http://127.0.0.1:7244/ingest/c9ab929b-94d3-40bd-8785-7deb40c047f7'),
-                            headers: {'Content-Type': 'application/json'},
-                            body: jsonEncode({
-                              'location': 'OrdersBlankScreen.dart:builder',
-                              'message': 'StreamBuilder branch',
-                              'data': {
-                                'connectionState':
-                                    snapshot.connectionState.toString(),
-                                'hasData': snapshot.hasData,
-                                'hasError': snapshot.hasError,
-                                'remittanceBlocked':
-                                    remittanceService.isBlockedByRemittance,
-                                'suspended':
-                                    MyAppState.currentUser?.suspended,
-                                'canReceiveOrders': canReceiveOrders,
-                                'isCheckedInToday': isCheckedInToday,
-                                'isCheckedOutToday': isCheckedOutToday,
-                                'isOnline': MyAppState.currentUser?.isOnline,
-                                'branch': branch,
-                                'docsLength':
-                                    snapshot.data?.docs.length ?? 0,
-                              },
-                              'timestamp':
-                                  DateTime.now().millisecondsSinceEpoch,
-                                'sessionId': 'debug-session',
-                              'runId': 'run1',
-                              'hypothesisId': 'A,B,C,D,E',
-                            }),
-                          )
-                          .catchError((_) => http.Response('', 500));
-                      // #endregion
+                      final canReceiveOrders =
+                          MyAppState.currentUser?.riderAvailability ==
+                              'available' ||
+                          MyAppState.currentUser?.riderAvailability ==
+                              'on_delivery';
                       if (remittanceService.isBlockedByRemittance) {
                         return _buildRemittanceRequiredCard();
                       }
@@ -1126,66 +1244,8 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                         return _buildSuspensionWarningCard();
                       }
 
-                      // Check if user is offline
-                      // #region agent log
-                      final user = MyAppState.currentUser;
-                      if (user != null) {
-                        debugPrint(
-                            '[DEBUG LOG] Build - checking offline status: isOnline=${user.isOnline}, checkedInToday=${(user as dynamic).checkedInToday}, suspended=${user.suspended}');
-                        http
-                            .post(
-                                Uri.parse(
-                                    'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-                                headers: {'Content-Type': 'application/json'},
-                                body: jsonEncode({
-                                  'location': 'OrdersBlankScreen.dart:767',
-                                  'message': 'Build - checking offline status',
-                                  'data': {
-                                    'isOnline': user.isOnline,
-                                    'checkedInToday':
-                                        (user as dynamic).checkedInToday,
-                                    'suspended': user.suspended
-                                  },
-                                  'timestamp':
-                                      DateTime.now().millisecondsSinceEpoch,
-                                  'sessionId': 'debug-session',
-                                  'runId': 'run1',
-                                  'hypothesisId': 'A,B,C'
-                                }))
-                            .catchError((e) => http.Response('', 500));
-                      }
-                      // #endregion
-                      // Only show offline card if user cannot receive orders
-                      // (isCheckedInToday, isCheckedOutToday, canReceiveOrders already computed above for logging)
-
                       if (!canReceiveOrders) {
-                        // #region agent log
-                        debugPrint(
-                            '[DEBUG LOG] Build - displaying offline card: isOnline=${MyAppState.currentUser!.isOnline}, checkedInToday=$isCheckedInToday, checkedOutToday=$isCheckedOutToday');
-                        http
-                            .post(
-                                Uri.parse(
-                                    'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-                                headers: {'Content-Type': 'application/json'},
-                                body: jsonEncode({
-                                  'location': 'OrdersBlankScreen.dart:773',
-                                  'message': 'Build - displaying offline card',
-                                  'data': {
-                                    'isOnline':
-                                        MyAppState.currentUser!.isOnline,
-                                    'checkedInToday': isCheckedInToday,
-                                    'checkedOutToday': isCheckedOutToday,
-                                    'canReceiveOrders': canReceiveOrders
-                                  },
-                                  'timestamp':
-                                      DateTime.now().millisecondsSinceEpoch,
-                                  'sessionId': 'debug-session',
-                                  'runId': 'run1',
-                                  'hypothesisId': 'B,D'
-                                }))
-                            .catchError((e) => http.Response('', 500));
-                        // #endregion
-                        return _buildOfflineWarningCard();
+                        return _buildSlideToGoOnlineCard();
                       }
 
                       if (snapshot.connectionState == ConnectionState.waiting) {
@@ -1207,6 +1267,9 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                       }
 
                       final docs = snapshot.data?.docs ?? const [];
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _updateNewOrderIds(docs);
+                      });
                       if (docs.isEmpty) {
                         return Center(
                           child: Padding(
@@ -1244,10 +1307,32 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                         );
                       }
 
-                      return RefreshableOrderList(
-                        docs: docs,
-                        onRefresh: () {
-                          setState(() => _recreateOrdersStream());
+                      return ValueListenableBuilder<String?>(
+                        valueListenable:
+                            FoodReadyHighlightService.instance.highlightedOrderId,
+                        builder: (context, highlightedId, _) {
+                          final highlightedIds = highlightedId != null
+                              ? {highlightedId}
+                              : <String>{};
+                          return RefreshableOrderList(
+                            docs: docs,
+                            onRefresh: () {
+                              final user = MyAppState.currentUser;
+                              if (user != null) {
+                                FireStoreUtils.touchLastActivity(
+                                    user.userID);
+                              }
+                              if (mounted) {
+                                setState(() => _recreateOrdersStream());
+                              }
+                            },
+                            newOrderIds: _newOrderIds,
+                            highlightedOrderIds: highlightedIds,
+                            onOrderViewed: (orderId) {
+                              FoodReadyHighlightService.instance
+                                  .clearHighlight(orderId);
+                            },
+                          );
                         },
                       );
                     },
@@ -1256,61 +1341,6 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
               ],
             ),
           ),
-          // Floating chat button with unread badge
-          Positioned(
-            bottom: 16,
-            right: 16,
-            child: StreamBuilder<int>(
-              stream: GroupChatService.getUnreadCountStream(),
-              builder: (context, snapshot) {
-                final unreadCount = snapshot.data ?? 0;
-                return Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    FloatingActionButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const GroupChatScreen(),
-                          ),
-                        );
-                      },
-                      backgroundColor: Color(COLOR_PRIMARY),
-                      child: const Icon(Icons.chat, color: Colors.white),
-                    ),
-                    if (unreadCount > 0)
-                      Positioned(
-                        right: -4,
-                        top: -4,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                          constraints: const BoxConstraints(
-                            minWidth: 20,
-                            minHeight: 20,
-                          ),
-                          child: Text(
-                            unreadCount > 99 ? '99+' : '$unreadCount',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

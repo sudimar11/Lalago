@@ -6,6 +6,7 @@ import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
+import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/view_all_sulit_foods_screen.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
@@ -15,6 +16,8 @@ class MealForOneSection extends StatelessWidget {
   final List<VendorModel> vendors;
   final List<ProductModel> allProducts;
   final bool isLoadingMealForOne;
+  final bool hasError;
+  final VoidCallback? onRetry;
   static const double sulitCap = 150.0;
 
   const MealForOneSection({
@@ -23,10 +26,24 @@ class MealForOneSection extends StatelessWidget {
     required this.vendors,
     required this.allProducts,
     required this.isLoadingMealForOne,
+    this.hasError = false,
+    this.onRetry,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    if (hasError && onRetry != null) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          _mealForOneHeader(context),
+          HomeSectionUtils.sectionError(
+            message: 'Failed to load meal for one',
+            onRetry: onRetry!,
+          ),
+        ],
+      );
+    }
     final List<ProductModel> displayProducts = _filteredMealForOneProducts();
     final List<ProductModel> displayWithPhotos = displayProducts
         .where((product) => _hasPhoto(product.photo))

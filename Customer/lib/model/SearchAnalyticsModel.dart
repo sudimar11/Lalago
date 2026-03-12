@@ -11,6 +11,11 @@ class SearchAnalyticsModel {
   Timestamp timestamp;
   String? location; // User's location when searching
   String? deviceInfo; // Device/platform info
+  String? clickedRestaurantId;
+  Timestamp? clickedAt;
+  bool? ordered;
+  Timestamp? orderedAt;
+  String? orderId;
 
   SearchAnalyticsModel({
     required this.id,
@@ -23,6 +28,11 @@ class SearchAnalyticsModel {
     required this.timestamp,
     this.location,
     this.deviceInfo,
+    this.clickedRestaurantId,
+    this.clickedAt,
+    this.ordered,
+    this.orderedAt,
+    this.orderId,
   });
 
   Map<String, dynamic> toJson() {
@@ -37,6 +47,11 @@ class SearchAnalyticsModel {
       'timestamp': timestamp,
       'location': location,
       'deviceInfo': deviceInfo,
+      if (clickedRestaurantId != null) 'clickedRestaurantId': clickedRestaurantId,
+      if (clickedAt != null) 'clickedAt': clickedAt,
+      if (ordered != null) 'ordered': ordered,
+      if (orderedAt != null) 'orderedAt': orderedAt,
+      if (orderId != null) 'orderId': orderId,
     };
   }
 
@@ -52,6 +67,11 @@ class SearchAnalyticsModel {
       timestamp: json['timestamp'] ?? Timestamp.now(),
       location: json['location'],
       deviceInfo: json['deviceInfo'],
+      clickedRestaurantId: json['clickedRestaurantId'],
+      clickedAt: json['clickedAt'],
+      ordered: json['ordered'],
+      orderedAt: json['orderedAt'],
+      orderId: json['orderId'],
     );
   }
 }

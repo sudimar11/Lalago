@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:brgy/constants.dart';
 import 'package:brgy/pages/customer_information_page.dart';
+import 'package:brgy/services/user_segment_service.dart';
 
 class CustomersPage extends StatefulWidget {
-  const CustomersPage({super.key});
+  const CustomersPage({super.key, this.initialSegment});
+
+  final String? initialSegment;
 
   @override
   State<CustomersPage> createState() => _CustomersPageState();
@@ -13,15 +16,28 @@ class CustomersPage extends StatefulWidget {
 class _CustomersPageState extends State<CustomersPage> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
+  String _selectedSegment = 'all';
 
   @override
   void initState() {
     super.initState();
+    _selectedSegment = widget.initialSegment ?? 'all';
     _searchController.addListener(() {
       setState(() {
         _query = _searchController.text.trim().toLowerCase();
       });
     });
+  }
+
+  Query<Map<String, dynamic>> _buildQuery() {
+    Query<Map<String, dynamic>> query = FirebaseFirestore.instance
+        .collection(USERS)
+        .where('role', isEqualTo: USER_ROLE_CUSTOMER)
+        .where('active', isEqualTo: true);
+    if (_selectedSegment != 'all') {
+      query = query.where('segment', isEqualTo: _selectedSegment);
+    }
+    return query.orderBy('engagementScore', descending: true);
   }
 
   @override
@@ -30,13 +46,53 @@ class _CustomersPageState extends State<CustomersPage> {
     super.dispose();
   }
 
+  Future<void> _confirmDelete(
+    BuildContext context,
+    String name,
+    String userId,
+  ) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete customer?'),
+        content: Text(
+          'Remove "$name" from customers? This will deactivate the account.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !context.mounted) return;
+    try {
+      await FirebaseFirestore.instance.collection(USERS).doc(userId).update({
+        'active': false,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$name has been removed')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final Query baseQuery = FirebaseFirestore.instance
-        .collection(USERS)
-        .where('role', isEqualTo: USER_ROLE_CUSTOMER)
-        .where('active', isEqualTo: true);
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Customers'),
@@ -47,25 +103,93 @@ class _CustomersPageState extends State<CustomersPage> {
         children: [
           Padding(
             padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Search name or number',
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.grey[100],
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Search name or number',
+                    prefixIcon: const Icon(Icons.search),
+                    filled: true,
+                    fillColor: Colors.grey[100],
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                  ),
                 ),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-              ),
+                const SizedBox(height: 12),
+                DropdownButton<String>(
+                  value: _selectedSegment,
+                  isExpanded: true,
+                  hint: const Text('Filter by segment'),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: 'all',
+                      child: Text('All Segments'),
+                    ),
+                    ...UserSegmentService.segments.map(
+                      (segment) => DropdownMenuItem<String>(
+                        value: segment,
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 12,
+                              height: 12,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: UserSegmentService.getSegmentColor(
+                                  segment,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              UserSegmentService.getSegmentDisplayName(
+                                segment,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'unknown',
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: UserSegmentService.getSegmentColor(
+                                'unknown',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            UserSegmentService.getSegmentDisplayName('unknown'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => _selectedSegment = value);
+                    }
+                  },
+                ),
+              ],
             ),
           ),
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: baseQuery.snapshots(),
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: _buildQuery().snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
@@ -206,6 +330,17 @@ class _CustomersPageState extends State<CustomersPage> {
                                                   ),
                                                 ),
                                               ],
+                                            ),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(
+                                              Icons.delete_outline,
+                                              color: Colors.red,
+                                            ),
+                                            onPressed: () => _confirmDelete(
+                                              context,
+                                              name,
+                                              userId,
                                             ),
                                           ),
                                           const Icon(

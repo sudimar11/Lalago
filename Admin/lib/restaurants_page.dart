@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:brgy/restaurant_info_page.dart';
 
 class RestaurantsPage extends StatefulWidget {
   const RestaurantsPage({super.key});
@@ -86,6 +87,21 @@ class _RestaurantsPageState extends State<RestaurantsPage> {
         ),
       );
     }
+  }
+
+  void _openRestaurantInfo(BuildContext context, DocumentSnapshot vendorDoc) {
+    final vData = vendorDoc.data() as Map<String, dynamic>?;
+    if (vData == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => RestaurantInfoPage(
+          vendorId: vendorDoc.id,
+          vendorData: Map<String, dynamic>.from(vData),
+        ),
+      ),
+    ).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -186,6 +202,7 @@ class _RestaurantsPageState extends State<RestaurantsPage> {
 
                 final filteredVendors = vendors.where((v) {
                   final data = v.data() as Map<String, dynamic>;
+                  if (data['isDeleted'] == true) return false;
                   final title =
                       (data['title'] ?? data['authorName'] ?? '').toString();
                   if (_query.isEmpty) return true;
@@ -233,19 +250,30 @@ class _RestaurantsPageState extends State<RestaurantsPage> {
                           ),
                           title: Text(title),
                           subtitle: Text(subtitle),
-                          trailing: IconButton(
-                            tooltip: hasLocation
-                                ? 'Open location'
-                                : 'No location available',
-                            onPressed: hasLocation
-                                ? () => _openRestaurantLocation(
-                                      context: context,
-                                      title: title,
-                                      latitude: latitude,
-                                      longitude: longitude,
-                                    )
-                                : null,
-                            icon: const Icon(Icons.location_on_outlined),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: 'View restaurant information',
+                                onPressed: () =>
+                                    _openRestaurantInfo(context, vendorDoc),
+                                icon: const Icon(Icons.info_outline),
+                              ),
+                              IconButton(
+                                tooltip: hasLocation
+                                    ? 'Open location'
+                                    : 'No location available',
+                                onPressed: hasLocation
+                                    ? () => _openRestaurantLocation(
+                                          context: context,
+                                          title: title,
+                                          latitude: latitude,
+                                          longitude: longitude,
+                                        )
+                                    : null,
+                                icon: const Icon(Icons.location_on_outlined),
+                              ),
+                            ],
                           ),
                         );
                       },

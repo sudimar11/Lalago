@@ -1,8 +1,15 @@
+/// Google Maps/Geocoding API key (same as web index.html)
+const String GOOGLE_API_KEY = 'AIzaSyBXNXXV60p-VYnIMD0mevMk8HeW9kSJnPs';
+
 const USERS = 'users';
 const USER_ROLE_CUSTOMER = 'customer';
 const USER_ROLE_ADMIN = 'admin';
 const USER_ROLE_TEACHER = 'teacher';
 const USER_ROLE_DRIVER = 'driver';
+const USER_ROLE_VENDOR = 'vendor';
+
+const ADMIN_LEVEL_SUPER = 'super';
+const ADMIN_LEVEL_LIMITED = 'limited';
 
 // Firestore collections
 const DAILY_SUMMARIES = 'daily_summaries';
@@ -17,4 +24,9 @@ const STORAGE_COUPONS = 'coupons';
 const REPORTS = 'reports';
 const CUSTOMER_SUGGESTIONS = 'customer_suggestions';
 const CUSTOMER_FEEDBACK = 'customer_feedback';
+const FOODS_REVIEW = 'foods_review';
 const SEARCH_ANALYTICS = 'search_analytics';
+const USER_CLICKS = 'user_clicks';
+const ORDER_FORECASTS = 'order_forecasts';
+const FORECAST_AGGREGATES = 'forecast_aggregates';
+const DEMAND_FORECASTS = 'demand_forecasts';

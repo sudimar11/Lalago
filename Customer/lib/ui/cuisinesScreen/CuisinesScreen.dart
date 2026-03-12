@@ -72,17 +72,23 @@ class _CuisinesScreenState extends State<CuisinesScreen> {
                                       imageUrl: getImageVAlidUrl(vendorCategoryModel.photo.toString()),
                                       fit: BoxFit.cover,
                                       placeholder: (context, url) => ClipOval(
-                                        child: Image.network(
-                                          AppGlobal.placeHolderImage!,
+                                        child: CachedNetworkImage(
+                                          imageUrl: AppGlobal.placeHolderImage!,
+                                          memCacheWidth: 120,
+                                          memCacheHeight: 120,
                                           fit: BoxFit.cover,
                                         ),
                                       ),
-                                      errorWidget: (context, url, error) => ClipRRect(
-                                          borderRadius: BorderRadius.circular(20),
-                                          child: Image.network(
-                                            AppGlobal.placeHolderImage!,
-                                            fit: BoxFit.cover,
-                                          )),
+                                      errorWidget: (context, url, error) =>
+                                          ClipRRect(
+                                        borderRadius: BorderRadius.circular(20),
+                                        child: CachedNetworkImage(
+                                          imageUrl: AppGlobal.placeHolderImage!,
+                                          memCacheWidth: 120,
+                                          memCacheHeight: 120,
+                                          fit: BoxFit.cover,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                   Padding(

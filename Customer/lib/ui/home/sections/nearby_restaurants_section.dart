@@ -8,6 +8,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/new_arrival_card.dart';
+import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/view_all_new_arrival_restaurant_screen.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
@@ -18,6 +19,7 @@ class NearbyRestaurantsSection extends StatefulWidget {
   final List<String> lstFav;
   final bool Function(VendorModel) isRestaurantOpen;
   final VoidCallback onFavoriteChanged;
+  final VoidCallback? onRetry;
 
   const NearbyRestaurantsSection({
     Key? key,
@@ -27,6 +29,7 @@ class NearbyRestaurantsSection extends StatefulWidget {
     required this.lstFav,
     required this.isRestaurantOpen,
     required this.onFavoriteChanged,
+    this.onRetry,
   }) : super(key: key);
 
   @override
@@ -91,6 +94,12 @@ class _NearbyRestaurantsSectionState extends State<NearbyRestaurantsSection> {
           stream: widget.vendorsStream,
           initialData: const [],
           builder: (context, snapshot) {
+            if (snapshot.hasError && widget.onRetry != null) {
+              return HomeSectionUtils.sectionError(
+                message: 'Failed to load nearby restaurants',
+                onRetry: widget.onRetry!,
+              );
+            }
             final nearbyAll =
                 (snapshot.data ?? const <VendorModel>[]).toList();
             final fallbackAll =
@@ -111,18 +120,18 @@ class _NearbyRestaurantsSectionState extends State<NearbyRestaurantsSection> {
               List<VendorModel> displayList = nearbyAll.isNotEmpty
                   ? List<VendorModel>.from(nearbyAll)
                   : List<VendorModel>.from(fallbackAll);
-              // Sort by distance so nearest shows first
-              final loc = MyAppState.selectedPosotion.location;
+              // Sort by distance so nearest shows first (cache distances once)
+              final loc = MyAppState.selectedPosition.location;
               if (loc != null && displayList.length > 1) {
-                displayList.sort((VendorModel a, VendorModel b) {
-                  final distA = Geolocator.distanceBetween(
-                    loc.latitude, loc.longitude, a.latitude, a.longitude,
+                final distCache = <String, double>{};
+                for (final v in displayList) {
+                  distCache[v.id] = Geolocator.distanceBetween(
+                    loc.latitude, loc.longitude, v.latitude, v.longitude,
                   );
-                  final distB = Geolocator.distanceBetween(
-                    loc.latitude, loc.longitude, b.latitude, b.longitude,
-                  );
-                  return distA.compareTo(distB);
-                });
+                }
+                displayList.sort(
+                  (a, b) => (distCache[a.id] ?? 0).compareTo(distCache[b.id] ?? 0),
+                );
               }
               final maxDisplay = min(
                 displayList.length,

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:brgy/constants.dart';
+import 'package:brgy/services/zone_capacity_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -21,6 +22,10 @@ class _DriversMapPageState extends State<DriversMapPage> {
   bool _hasFittedCamera = false;
   bool _streamLoaded = false;
   bool _mapError = false;
+  bool _showCapacityOverlay = false;
+  final Set<Circle> _capacityCircles = <Circle>{};
+  StreamSubscription<List<ZoneCapacity>>? _capacitySub;
+  List<ZoneCapacity> _zoneCapacities = [];
 
   static const CameraPosition _initialCamera = CameraPosition(
     target: LatLng(14.5995, 120.9842), // Manila fallback
@@ -61,6 +66,50 @@ class _DriversMapPageState extends State<DriversMapPage> {
         '${value.day.toString().padLeft(2, '0')} $hour:$minute';
   }
 
+  String _getRiderDisplayStatus(Map<String, dynamic> data) {
+    final availability =
+        data['riderAvailability'] as String? ?? 'offline';
+    final lastActive =
+        data['lastActivityTimestamp'] as Timestamp?;
+    final locationUpdated =
+        data['locationUpdatedAt'] as Timestamp?;
+
+    if (availability == 'offline' || availability == 'checked_out') {
+      return 'Offline';
+    }
+
+    final lastActivity = lastActive ?? locationUpdated;
+    if (lastActivity != null) {
+      final minutesSince =
+          DateTime.now().difference(lastActivity.toDate()).inMinutes;
+      if (minutesSince > 15) return 'Inactive';
+      if (minutesSince > 10) return 'Away';
+    }
+
+    switch (availability) {
+      case 'available':
+        return 'Available';
+      case 'on_delivery':
+        return 'On Delivery';
+      case 'on_break':
+        return 'On Break';
+      default:
+        return 'Unknown';
+    }
+  }
+
+  bool _hasRecentActivity(Map<String, dynamic> data) {
+    final lastActive =
+        data['lastActivityTimestamp'] as Timestamp?;
+    final locationUpdated =
+        data['locationUpdatedAt'] as Timestamp?;
+    final lastActivity = lastActive ?? locationUpdated;
+    if (lastActivity == null) return false;
+    final minutesSince =
+        DateTime.now().difference(lastActivity.toDate()).inMinutes;
+    return minutesSince <= 15;
+  }
+
   Future<void> _checkoutAllRiders(BuildContext context) async {
     if (_activeRiders.isEmpty) return;
 
@@ -71,7 +120,11 @@ class _DriversMapPageState extends State<DriversMapPage> {
         if (riderId != null && riderId.isNotEmpty) {
           final riderRef =
               FirebaseFirestore.instance.collection(USERS).doc(riderId);
-          batch.update(riderRef, {'checkedOutToday': true});
+          batch.update(riderRef, {
+            'isOnline': false,
+            'riderAvailability': 'offline',
+            'inactiveReason': 'admin_bulk_offline',
+          });
         }
       }
 
@@ -80,7 +133,7 @@ class _DriversMapPageState extends State<DriversMapPage> {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('All riders have been checked out successfully.'),
+            content: Text('All riders have been set offline successfully.'),
             backgroundColor: Colors.green,
           ),
         );
@@ -122,11 +175,12 @@ class _DriversMapPageState extends State<DriversMapPage> {
                             final name = rider['name'] as String? ?? 'Unknown';
                             final checkedIn =
                                 rider['checkedInTime'] as String? ?? 'Unknown';
-                            final bool isActive = rider['isActive'] == true;
+                            final status =
+                                rider['displayStatus'] as String? ?? '⚪ Offline';
                             return ListTile(
-                              leading: Icon(
-                                isActive ? Icons.check_circle : Icons.cancel,
-                                color: isActive ? Colors.green : Colors.grey,
+                              leading: Text(
+                                status,
+                                style: const TextStyle(fontSize: 14),
                               ),
                               title: Text(name),
                               subtitle: Text('Checked in: $checkedIn'),
@@ -171,7 +225,109 @@ class _DriversMapPageState extends State<DriversMapPage> {
   @override
   void dispose() {
     _driverSub?.cancel();
+    _capacitySub?.cancel();
     super.dispose();
+  }
+
+  void _toggleCapacityOverlay() {
+    setState(() {
+      _showCapacityOverlay = !_showCapacityOverlay;
+      if (_showCapacityOverlay) {
+        _startCapacityStream();
+      } else {
+        _capacitySub?.cancel();
+        _capacitySub = null;
+        _capacityCircles.clear();
+        _zoneCapacities = [];
+      }
+    });
+  }
+
+  void _startCapacityStream() {
+    _capacitySub?.cancel();
+    final service = ZoneCapacityService();
+    _capacitySub = service
+        .streamAllZoneCapacities()
+        .listen((capacities) {
+      if (!mounted) return;
+      _zoneCapacities = capacities;
+      final circles = <Circle>{};
+      for (final zc in capacities) {
+        final zone = zc.zone;
+        if (zone.boundaryType != 'radius') continue;
+        final lat = zone.centerLat;
+        final lng = zone.centerLng;
+        final rKm = zone.radiusKm;
+        if (lat == null || lng == null || rKm == null) continue;
+        circles.add(
+          Circle(
+            circleId: CircleId('cap_${zone.id}'),
+            center: LatLng(lat, lng),
+            radius: rKm * 1000,
+            fillColor:
+                zc.statusColor.withValues(alpha: 0.2),
+            strokeColor: zc.statusColor,
+            strokeWidth: 2,
+            consumeTapEvents: true,
+            onTap: () => _showCapacityTooltip(zc),
+          ),
+        );
+      }
+      setState(() {
+        _capacityCircles
+          ..clear()
+          ..addAll(circles);
+      });
+    });
+  }
+
+  void _showCapacityTooltip(ZoneCapacity zc) {
+    final label = zc.maxRiders != null
+        ? '${zc.currentActiveRiders}/${zc.maxRiders} riders'
+        : '${zc.currentActiveRiders} riders (unlimited)';
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(zc.zone.name),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label),
+            const SizedBox(height: 8),
+            if (zc.maxRiders != null) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value:
+                      (zc.utilizationPercentage / 100)
+                          .clamp(0.0, 1.0),
+                  backgroundColor: Colors.grey[200],
+                  valueColor: AlwaysStoppedAnimation(
+                    zc.statusColor,
+                  ),
+                  minHeight: 8,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Status: ${zc.capacityStatus.toUpperCase()}',
+                style: TextStyle(
+                  color: zc.statusColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _subscribeDrivers() {
@@ -195,9 +351,14 @@ class _DriversMapPageState extends State<DriversMapPage> {
                 '${data['firstName'] ?? ''} ${data['lastName'] ?? ''}'.trim();
             final String riderName =
                 fullName.isEmpty ? 'Unknown Rider' : fullName;
-            // Driver is active if checkedOutToday is not true (false, null, or missing)
-            final bool isActive = data['checkedOutToday'] != true;
-            // Only add to active riders list if not checked out today
+            final String displayStatus =
+                _getRiderDisplayStatus(data);
+            final String availability =
+                data['riderAvailability'] as String? ?? 'offline';
+            final bool isActive =
+                (availability == 'available' ||
+                    availability == 'on_delivery') &&
+                _hasRecentActivity(data);
             if (isActive) {
               activeCount++;
               final String riderId = doc.id;
@@ -205,10 +366,9 @@ class _DriversMapPageState extends State<DriversMapPage> {
                 'riderId': riderId,
                 'name': riderName,
                 'checkedInTime': _formatCheckedInTime(data),
-                'isActive': isActive,
+                'displayStatus': displayStatus,
               });
             }
-            // Only show markers for active drivers (not checked out today)
             if (isActive &&
                 loc is Map &&
                 loc['latitude'] != null &&
@@ -364,6 +524,9 @@ class _DriversMapPageState extends State<DriversMapPage> {
           return GoogleMap(
             initialCameraPosition: _initialCamera,
             markers: _markers,
+            circles: _showCapacityOverlay
+                ? _capacityCircles
+                : <Circle>{},
             myLocationEnabled: false,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: true,
@@ -513,9 +676,24 @@ class _DriversMapPageState extends State<DriversMapPage> {
         leading: Navigator.canPop(context)
             ? IconButton(
                 icon: const Icon(Icons.arrow_back),
-                onPressed: () => Navigator.of(context).maybePop(),
+                onPressed: () =>
+                    Navigator.of(context).maybePop(),
               )
             : null,
+        actions: [
+          IconButton(
+            icon: Icon(
+              _showCapacityOverlay
+                  ? Icons.layers
+                  : Icons.layers_outlined,
+              color: _showCapacityOverlay
+                  ? Colors.orange
+                  : Colors.white,
+            ),
+            tooltip: 'Zone Capacity',
+            onPressed: _toggleCapacityOverlay,
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showActiveRidersDialog(context),

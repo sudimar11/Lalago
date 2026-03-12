@@ -14,13 +14,16 @@ import 'package:foodie_driver/services/notification_service.dart'
     show NotificationService, firebaseMessageBackgroundHandle;
 import 'package:foodie_driver/services/enhanced_notification_manager.dart';
 import 'package:foodie_driver/services/session_service.dart';
+import 'package:foodie_driver/services/timezone_service.dart';
 import 'package:foodie_driver/services/time_tracking_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
+import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/ui/container/ContainerScreen.dart';
 import 'package:foodie_driver/ui/onBoarding/OnBoardingScreen.dart';
 import 'package:foodie_driver/userPrefrence.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:foodie_driver/utils/shared_preferences_helper.dart';
 
@@ -148,6 +151,7 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
       try {
         await FireStoreUtils.updateCurrentUser(currentUser!)
             .timeout(Duration(seconds: 10));
+        await OrderService.updateRiderStatus();
         print(
             '✅ Automatic checkout completed successfully at $timeString. Work duration: ${TimeTrackingService.formatDuration(workDuration)}');
       } catch (e) {
@@ -494,29 +498,16 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
       }
 
       if (state == AppLifecycleState.paused) {
-        //user offline
         if (MyAppState.currentUser != null) {
           MyAppState.currentUser!.lastOnlineTimestamp = Timestamp.now();
-          // Don't change isActive when app is paused if driver has active orders
-          if (MyAppState.currentUser!.inProgressOrderID != null &&
-              (MyAppState.currentUser!.inProgressOrderID as List).isNotEmpty) {
-            // Keep isActive as is when driver has active orders
-          } else {
-            // Set isActive to false when app is paused (driver goes offline)
-            if (MyAppState.currentUser!.isActive != false) {
-              MyAppState.currentUser!.isActive = false;
-              try {
-                await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!)
-                    .timeout(Duration(seconds: 10));
-              } catch (e) {
-                print('❌ Error updating user on pause: $e');
-              }
-            }
+          try {
+            await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!)
+                .timeout(Duration(seconds: 10));
+          } catch (e) {
+            print('❌ Error updating user on pause: $e');
           }
         }
       } else if (state == AppLifecycleState.resumed) {
-        //user online
-        // Check closing time when app resumes - perform checkout if passed
         bool hasPassedClosing = false;
         try {
           hasPassedClosing = await SessionService.hasPassedClosingTime()
@@ -536,28 +527,15 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
           }
         }
 
-        // Set isActive to true when app resumes (don't toggle)
         if (MyAppState.currentUser != null) {
-          if (MyAppState.currentUser!.inProgressOrderID != null &&
-              (MyAppState.currentUser!.inProgressOrderID as List).isNotEmpty) {
-            // Keep isActive as is when driver has active orders
-          } else {
-            // Set isActive to true when app resumes (driver is back online)
-            if (MyAppState.currentUser!.isActive != true) {
-              MyAppState.currentUser!.isActive = true;
-              try {
-                await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!)
-                    .timeout(Duration(seconds: 10));
-              } catch (e) {
-                print('❌ Error updating user on resume: $e');
-              }
-            }
-          }
+          MyAppState.currentUser!.lastOnlineTimestamp = Timestamp.now();
           try {
-            await AttendanceService.touchLastActiveDate(
-              MyAppState.currentUser!,
+            await FireStoreUtils.touchLastActivity(
+              MyAppState.currentUser!.userID,
             );
-          } catch (_) {}
+          } catch (e) {
+            print('Error updating activity on resume: $e');
+          }
         }
       }
     }
@@ -707,6 +685,17 @@ class OnBoardingState extends State<OnBoarding> {
 
             // user is guaranteed non-null here due to outer if (user != null) check
             if (user != null) {
+              // Reset check-in status when it's a new calendar day
+              final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+              final lastActive = user.lastActiveDate ?? '';
+              if (lastActive != today) {
+                user.checkedInToday = false;
+                user.checkedOutToday = false;
+                user.todayCheckInTime = null;
+                user.todayCheckOutTime = null;
+                user.isOnline = false;
+              }
+
               user.isActive = true;
               user.role = USER_ROLE_DRIVER;
               // Sync isOnline: if not checked in today, force isOnline false so
@@ -734,6 +723,12 @@ class OnBoardingState extends State<OnBoarding> {
 
               MyAppState.currentUser = user;
 
+              try {
+                await OrderService.updateRiderStatus();
+              } catch (e) {
+                print('❌ Error updating rider status on login: $e');
+              }
+
               // Refresh FCM token on every app start when rider is already logged in
               print('🔑 Refreshing FCM token for rider on app start...');
               final tokenRefreshed =
@@ -744,6 +739,8 @@ class OnBoardingState extends State<OnBoarding> {
                 print(
                     '⚠️ FCM token refresh skipped or failed (iOS may retry with delay)');
               }
+
+              unawaited(TimezoneService.updateUserTimezone());
             }
 
             // Start notification listeners after user is set

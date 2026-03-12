@@ -1,16 +1,23 @@
 import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:esc_pos_utils/esc_pos_utils.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:foodie_restaurant/constants.dart';
+import 'package:foodie_restaurant/constants/quick_messages.dart';
 import 'package:foodie_restaurant/model/OrderModel.dart';
 import 'package:foodie_restaurant/model/OrderProductModel.dart';
 import 'package:foodie_restaurant/model/TaxModel.dart';
 import 'package:foodie_restaurant/model/variant_info.dart';
+import 'package:foodie_restaurant/services/eta_service.dart';
+import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
+import 'package:foodie_restaurant/services/order_communication_service.dart';
+import 'package:foodie_restaurant/ui/communication/order_communication_screen.dart';
+import 'package:foodie_restaurant/utils/order_ready_time_helper.dart';
 import 'package:foodie_restaurant/ui/ordersScreen/print.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 
@@ -37,7 +44,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
   var tipAmount = "0.0";
 
-  @override
+  List<Map<String, dynamic>> _internalNotes = [];
+  bool _feedbackPromptShown = false;
+
   @override
   void initState() {
     super.initState();
@@ -82,6 +91,271 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
     // 6. Deduct commission
     total = totalAmount - adminComm;
+    _internalNotes = List<Map<String, dynamic>>.from(
+      widget.orderModel.internalNotes ?? [],
+    );
+    _bootstrapCommunication();
+  }
+
+  Future<void> _bootstrapCommunication() async {
+    final riderId = widget.orderModel.driverID ?? '';
+    if (riderId.isEmpty) return;
+    await OrderCommunicationService.ensureCommunicationDoc(
+      orderId: widget.orderModel.id,
+      riderId: riderId,
+      vendorId: widget.orderModel.vendorID,
+      customerId: widget.orderModel.authorID,
+    );
+    _listenForClosedIssueFeedback();
+  }
+
+  void _listenForClosedIssueFeedback() {
+    FirebaseFirestore.instance
+        .collection('order_communications')
+        .doc(widget.orderModel.id)
+        .collection('issues')
+        .where('state', isEqualTo: 'closed')
+        .snapshots()
+        .listen((snapshot) async {
+      if (!mounted || _feedbackPromptShown || snapshot.docs.isEmpty) return;
+      final issueDoc = snapshot.docs.first;
+      final data = issueDoc.data();
+      final feedback =
+          Map<String, dynamic>.from(data['restaurantFeedback'] ?? {});
+      if (feedback.isNotEmpty) return;
+      _feedbackPromptShown = true;
+      await _showRestaurantSatisfactionPrompt(issueDoc.id);
+    });
+  }
+
+  Future<void> _showRestaurantSatisfactionPrompt(String issueId) async {
+    int rating = 5;
+    final commentController = TextEditingController();
+    final submit = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocalState) {
+          return AlertDialog(
+            title: const Text('Issue Resolution Feedback'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('How satisfied were you with this issue handling?'),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(
+                    5,
+                    (index) => IconButton(
+                      onPressed: () => setLocalState(() => rating = index + 1),
+                      icon: Icon(
+                        index < rating ? Icons.star : Icons.star_border,
+                        color: Colors.amber,
+                      ),
+                    ),
+                  ),
+                ),
+                TextField(
+                  controller: commentController,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    hintText: 'Optional comment',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Skip'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Submit'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (submit != true) return;
+    await FirebaseFirestore.instance
+        .collection('order_communications')
+        .doc(widget.orderModel.id)
+        .collection('issues')
+        .doc(issueId)
+        .set({
+      'restaurantFeedback': {
+        'rating': rating,
+        'comment': commentController.text.trim(),
+        'submittedAt': FieldValue.serverTimestamp(),
+      },
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> _addInternalNote() async {
+    final controller = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Internal Note'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'Enter note...',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 3,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (result == true && controller.text.trim().isNotEmpty && mounted) {
+      await FireStoreUtils.addOrderNote(widget.orderModel.id, controller.text.trim());
+      final updated = await FireStoreUtils.getOrderById(widget.orderModel.id);
+      if (mounted && updated != null) {
+        setState(() => _internalNotes = List.from(updated.internalNotes ?? []));
+      }
+    }
+  }
+
+  Future<void> _editInternalNote(String noteId, String currentNote) async {
+    final controller = TextEditingController(text: currentNote);
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Internal Note'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'Enter note...',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 3,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == true && mounted) {
+      await FireStoreUtils.updateOrderInternalNote(
+        widget.orderModel.id,
+        noteId,
+        controller.text.trim(),
+      );
+      final updated = await FireStoreUtils.getOrderById(widget.orderModel.id);
+      if (mounted && updated != null) {
+        setState(() => _internalNotes = List.from(updated.internalNotes ?? []));
+      }
+    }
+  }
+
+  Widget _buildInternalNotesSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Internal Notes',
+              style: TextStyle(
+                fontFamily: 'Poppinsm',
+                fontSize: 17,
+                letterSpacing: 0.5,
+                color: isDarkMode(context)
+                    ? Colors.grey.shade300
+                    : const Color(0xff9091A4),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _addInternalNote,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add Note'),
+            ),
+          ],
+        ),
+        if (_internalNotes.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'No internal notes',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          )
+        else
+          ..._internalNotes.map((n) {
+            final id = n['id'] as String? ?? '';
+            final note = n['note'] as String? ?? '';
+            final createdAt = n['createdAt'];
+            String dateStr = '';
+            if (createdAt != null && createdAt is Timestamp) {
+              dateStr = '${createdAt.toDate().toIso8601String().substring(0, 16)}';
+            }
+            return Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          note,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDarkMode(context)
+                                ? Colors.white70
+                                : Colors.black87,
+                          ),
+                        ),
+                        if (dateStr.isNotEmpty)
+                          Text(
+                            dateStr,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit, size: 18),
+                    onPressed: () => _editInternalNote(id, note),
+                  ),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
   }
 
   @override
@@ -110,6 +384,17 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             buildOrderSummaryCard(widget.orderModel),
+            if (widget.orderModel.driverID != null &&
+                (widget.orderModel.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                    widget.orderModel.status == ORDER_STATUS_SHIPPED))
+              _buildRiderEtaCard(widget.orderModel),
+            if (widget.orderModel.driverID != null &&
+                (widget.orderModel.status == ORDER_STATUS_DRIVER_ACCEPTED ||
+                    widget.orderModel.status == ORDER_STATUS_SHIPPED))
+              _buildOrderMessagesCard(widget.orderModel),
+            if (widget.orderModel.driverID != null)
+              _buildCommunicationPanel(),
+            _buildIssueResolutionPanel(),
             Card(
               color: isDarkMode(context)
                   ? const Color(DARK_CARD_BG_COLOR)
@@ -151,6 +436,536 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildRiderEtaCard(OrderModel orderModel) {
+    final riderId = orderModel.driverID!;
+    return StreamBuilder<int>(
+      stream: EtaService.watchEtaMinutes(
+        riderId: riderId,
+        restaurantLat: orderModel.vendor.latitude,
+        restaurantLng: orderModel.vendor.longitude,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data! >= 999) {
+          return const SizedBox.shrink();
+        }
+        final eta = snapshot.data!;
+        final baseTime =
+            orderModel.acceptedAt?.toDate() ?? orderModel.createdAt.toDate();
+        final prepMinutes =
+            OrderReadyTimeHelper.parsePreparationMinutes(
+                orderModel.estimatedTimeToPrepare);
+        final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+        final remainingPrep = readyAt.difference(DateTime.now()).inMinutes;
+        final showWarning = remainingPrep > 0 && remainingPrep > eta;
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.delivery_dining, color: Color(COLOR_PRIMARY)),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Rider ETA: ~$eta min',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        color: isDarkMode(context)
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+                if (showWarning)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Food may not be ready when rider arrives',
+                      style: TextStyle(
+                        color: Colors.orange.shade700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _sendRestaurantAction({
+    required String actionKey,
+    required String actionText,
+    required String eventType,
+    bool markReady = false,
+    bool confirmPickup = false,
+  }) async {
+    final vendorUserId = MyAppState.currentUser?.userID ?? '';
+    final riderId = widget.orderModel.driverID ?? '';
+    if (vendorUserId.isEmpty || riderId.isEmpty) return;
+
+    if (markReady) {
+      await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(widget.orderModel.id)
+          .update({
+        'status': ORDER_STATUS_SHIPPED,
+        'shippedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    if (confirmPickup) {
+      await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(widget.orderModel.id)
+          .update({
+        'status': ORDER_STATUS_IN_TRANSIT,
+        'pickedUpAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    final legacyRef = FirebaseFirestore.instance
+        .collection('order_messages')
+        .doc(widget.orderModel.id)
+        .collection('messages')
+        .doc();
+    await legacyRef.set({
+      'senderId': vendorUserId,
+      'senderType': 'restaurant',
+      'messageType': 'quick',
+      'messageKey': actionKey,
+      'messageText': actionText,
+      'isRead': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    await OrderCommunicationService.sendQuickAction(
+      orderId: widget.orderModel.id,
+      senderId: vendorUserId,
+      receiverId: riderId,
+      senderRole: 'restaurant',
+      receiverRole: 'rider',
+      actionKey: actionKey,
+      actionText: actionText,
+      eventType: eventType,
+      eventPayload: {
+        'orderId': widget.orderModel.id,
+        'status': confirmPickup
+            ? ORDER_STATUS_IN_TRANSIT
+            : (markReady ? ORDER_STATUS_SHIPPED : widget.orderModel.status),
+      },
+      legacyMessageId: legacyRef.id,
+    );
+  }
+
+  Widget _buildCommunicationPanel() {
+    final riderId = widget.orderModel.driverID ?? '';
+    if (riderId.isEmpty) return const SizedBox.shrink();
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Driver Communication',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream:
+                  OrderCommunicationService.watchEvents(widget.orderModel.id),
+              builder: (context, snapshot) {
+                final docs = snapshot.data?.docs ?? [];
+                if (docs.isEmpty) {
+                  return Text(
+                    'No driver actions yet',
+                    style: TextStyle(color: Colors.grey.shade600),
+                  );
+                }
+                return Column(
+                  children: docs.take(5).map((doc) {
+                    final data = doc.data();
+                    final eventType =
+                        (data['eventType'] ?? 'update').toString();
+                    final actorRole =
+                        (data['actorRole'] ?? '').toString();
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        actorRole == 'rider'
+                            ? Icons.local_shipping
+                            : Icons.storefront,
+                        size: 18,
+                      ),
+                      title: Text(eventType.replaceAll('_', ' ')),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _RestaurantActionChip(
+                  icon: Icons.check_circle,
+                  label: 'Order Ready',
+                  onTap: () => _sendRestaurantAction(
+                    actionKey: 'order_ready',
+                    actionText: 'Order is ready for pickup',
+                    eventType: 'ready',
+                    markReady: true,
+                  ),
+                ),
+                _RestaurantActionChip(
+                  icon: Icons.inventory_2,
+                  label: 'Confirm Pickup',
+                  onTap: () => _sendRestaurantAction(
+                    actionKey: 'confirm_pickup',
+                    actionText: 'Restaurant confirmed pickup',
+                    eventType: 'pickup_confirmed',
+                    confirmPickup: true,
+                  ),
+                ),
+                _RestaurantActionChip(
+                  icon: Icons.chat_bubble_outline,
+                  label: 'Open Chat',
+                  onTap: () {
+                    push(
+                      context,
+                      OrderCommunicationScreen(
+                        orderId: widget.orderModel.id,
+                        riderId: riderId,
+                        vendorId: widget.orderModel.vendorID,
+                        customerId: widget.orderModel.authorID,
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _transitionIssueState({
+    required String issueId,
+    required String currentState,
+    required String nextState,
+    String? resolutionAction,
+  }) async {
+    await FirebaseFirestore.instance
+        .collection('order_communications')
+        .doc(widget.orderModel.id)
+        .collection('issues')
+        .doc(issueId)
+        .set({
+      'state': nextState,
+      'lastActorRole': 'restaurant',
+      'lastActorId': MyAppState.currentUser?.userID ?? '',
+      'resolutionAction': resolutionAction,
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (nextState == 'resolved') 'resolvedAt': FieldValue.serverTimestamp(),
+      if (nextState == 'confirmed') 'confirmedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Widget _buildIssueResolutionPanel() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('order_communications')
+          .doc(widget.orderModel.id)
+          .collection('issues')
+          .orderBy('createdAt', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? [];
+        if (docs.isEmpty) return const SizedBox.shrink();
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.report_problem, color: Colors.orange),
+                    SizedBox(width: 6),
+                    Text(
+                      'Issue Resolution',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ...docs.take(3).map((doc) {
+                  final d = doc.data();
+                  final issueId = doc.id;
+                  final state = (d['state'] ?? 'opened').toString();
+                  final label =
+                      (d['issueLabel'] ?? d['issueType'] ?? 'Issue').toString();
+                  final details = (d['details'] ?? '').toString();
+                  final attachments =
+                      List<Map<String, dynamic>>.from(d['attachments'] ?? []);
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.withOpacity(0.2)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$label (${state.toUpperCase()})',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        if (details.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(details),
+                        ],
+                        if (attachments.isNotEmpty &&
+                            (attachments.first['url'] ?? '').toString().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: Image.network(
+                                attachments.first['url'].toString(),
+                                height: 80,
+                                width: 80,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) =>
+                                    const Icon(Icons.broken_image),
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            if (state == 'opened')
+                              OutlinedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'acknowledged',
+                                ),
+                                child: const Text('Acknowledge'),
+                              ),
+                            if (state == 'acknowledged' || state == 'opened')
+                              ElevatedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'resolved',
+                                  resolutionAction: 'items_added',
+                                ),
+                                child: const Text('Items Added'),
+                              ),
+                            if (state == 'acknowledged' || state == 'opened')
+                              ElevatedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'resolved',
+                                  resolutionAction: 'order_replaced',
+                                ),
+                                child: const Text('Order Replaced'),
+                              ),
+                            if (state == 'acknowledged' || state == 'opened')
+                              ElevatedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'resolved',
+                                  resolutionAction: 'refund_issued',
+                                ),
+                                child: const Text('Refund Issued'),
+                              ),
+                            if (state != 'closed' && state != 'escalated')
+                              OutlinedButton(
+                                onPressed: () => _transitionIssueState(
+                                  issueId: issueId,
+                                  currentState: state,
+                                  nextState: 'escalated',
+                                ),
+                                child: const Text('Escalate'),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildOrderMessagesCard(OrderModel orderModel) {
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Messages',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () => _showQuickReplyDialog(orderModel.id),
+                  icon: const Icon(Icons.reply, size: 18),
+                  label: const Text('Quick Reply'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('order_messages')
+                  .doc(orderModel.id)
+                  .collection('messages')
+                  .orderBy('createdAt', descending: true)
+                  .limit(10)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return Text(
+                    'No messages yet',
+                    style: TextStyle(
+                      color: Colors.grey.shade600,
+                      fontSize: 13,
+                    ),
+                  );
+                }
+                return Column(
+                  children: snapshot.data!.docs.map((doc) {
+                    final d = doc.data() as Map<String, dynamic>;
+                    final isRider = d['senderType'] == 'rider';
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        isRider ? Icons.delivery_dining : Icons.restaurant,
+                        size: 20,
+                      ),
+                      title: Text(d['messageText']?.toString() ?? ''),
+                      subtitle: d['createdAt'] != null
+                          ? Text(
+                              _formatTimestamp(d['createdAt']),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey.shade600,
+                              ),
+                            )
+                          : null,
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatTimestamp(dynamic ts) {
+    if (ts == null) return '';
+    DateTime dt;
+    if (ts is Timestamp) {
+      dt = ts.toDate();
+    } else if (ts is Map && ts['_seconds'] != null) {
+      dt = DateTime.fromMillisecondsSinceEpoch(
+          (ts['_seconds'] as int) * 1000);
+    } else {
+      return '';
+    }
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _showQuickReplyDialog(String orderId) async {
+    final key = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: QuickMessages.getKeys('restaurant').map((k) {
+            return ListTile(
+              title: Text(QuickMessages.getMessage(k, 'restaurant')),
+              onTap: () => Navigator.pop(context, k),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+    if (key != null && mounted) {
+      final message = QuickMessages.getMessage(key, 'restaurant');
+      final uid = MyAppState.currentUser?.userID;
+      final riderId = widget.orderModel.driverID ?? '';
+      final legacyRef = FirebaseFirestore.instance
+          .collection('order_messages')
+          .doc(orderId)
+          .collection('messages')
+          .doc();
+      await legacyRef.set({
+        'senderId': uid ?? '',
+        'senderType': 'restaurant',
+        'messageType': 'quick',
+        'messageKey': key,
+        'messageText': message,
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      if (riderId.isNotEmpty && uid != null && uid.isNotEmpty) {
+        await OrderCommunicationService.sendQuickAction(
+          orderId: orderId,
+          senderId: uid,
+          receiverId: riderId,
+          senderRole: 'restaurant',
+          receiverRole: 'rider',
+          actionKey: key,
+          actionText: message,
+          eventType: 'quick_message',
+          eventPayload: {'orderId': orderId, 'messageKey': key},
+          legacyMessageId: legacyRef.id,
+        );
+      }
+    }
   }
 
   Widget buildOrderSummaryCard(OrderModel orderModel) {
@@ -339,7 +1154,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                 title: Text(
-                  'Subtotal'.tr(),
+                  'Subtotal',
                   style: TextStyle(
                     fontFamily: 'Poppinsm',
                     fontSize: 16,
@@ -368,7 +1183,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                   title: Text(
-                    'Special Discount'.tr() +
+                    'Special Discount' +
                         "(${specialDiscount['special_discount_label'] ?? ''}${specialDiscount['specialType'] == "amount" ? currencyModel!.symbol : "%"})",
                     style: TextStyle(
                       fontFamily: 'Poppinsm',
@@ -393,7 +1208,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                 title: Text(
-                  'Discount'.tr(),
+                  'Discount',
                   style: TextStyle(
                     fontFamily: 'Poppinsm',
                     fontSize: 16,
@@ -461,7 +1276,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 0, vertical: 0),
                       title: Text(
-                        "Remarks".tr(),
+                        "Customer Notes",
                         style: TextStyle(
                           fontFamily: 'Poppinsm',
                           fontSize: 17,
@@ -471,34 +1286,63 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                               : const Color(0xff9091A4),
                         ),
                       ),
-                      trailing: InkWell(
-                        onTap: () {
-                          showModalBottomSheet(
-                              isScrollControlled: true,
-                              isDismissible: true,
-                              context: context,
-                              backgroundColor: Colors.transparent,
-                              enableDrag: true,
-                              builder: (BuildContext context) =>
-                                  viewNotesheet(widget.orderModel.notes!));
-                        },
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 4),
                         child: Text(
-                          "View".tr(),
+                          widget.orderModel.notes!,
                           style: TextStyle(
-                              fontSize: 18,
-                              color: Color(COLOR_PRIMARY),
-                              letterSpacing: 0.5,
-                              fontFamily: 'Poppinsm'),
+                            fontFamily: 'Poppinsm',
+                            fontSize: 14,
+                            color: isDarkMode(context)
+                                ? Colors.white70
+                                : Colors.black87,
+                          ),
                         ),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.copy, size: 20),
+                            onPressed: () {
+                              Clipboard.setData(
+                                ClipboardData(text: widget.orderModel.notes!),
+                              );
+                            },
+                          ),
+                          InkWell(
+                            onTap: () {
+                              showModalBottomSheet(
+                                isScrollControlled: true,
+                                isDismissible: true,
+                                context: context,
+                                backgroundColor: Colors.transparent,
+                                enableDrag: true,
+                                builder: (ctx) =>
+                                    viewNotesheet(widget.orderModel.notes!),
+                              );
+                            },
+                            child: Text(
+                              "View",
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Color(COLOR_PRIMARY),
+                                letterSpacing: 0.5,
+                                fontFamily: 'Poppinsm',
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     )
                   : Container(),
+              _buildInternalNotesSection(),
               widget.orderModel.couponCode!.trim().isNotEmpty
                   ? ListTile(
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 0, vertical: 0),
                       title: Text(
-                        'Coupon Code'.tr(),
+                        'Coupon Code',
                         style: TextStyle(
                           fontFamily: 'Poppinsm',
                           fontSize: 16,
@@ -525,7 +1369,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
                 title: Text(
-                  'Order Total'.tr(),
+                  'Order Total',
                   style: TextStyle(
                     fontFamily: 'Poppinsm',
                     letterSpacing: 0.5,
@@ -566,7 +1410,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                 width: 0.8, color: Color(COLOR_PRIMARY))),
                         child: Center(
                           child: Text(
-                            'Print Invoice'.tr(),
+                            'Print Invoice',
                             style: TextStyle(
                                 color: isDarkMode(context)
                                     ? const Color(0xffFFFFFF)
@@ -692,7 +1536,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
       barrierDismissible: false,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Connect Bluetooth Device').tr(),
+          title: const Text('Connect Bluetooth Device'),
           content: SizedBox(
             width: double.maxFinite,
             child: availableBluetoothDevices.isEmpty
@@ -701,12 +1545,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                     children: [
                       const CircularProgressIndicator(),
                       const SizedBox(height: 16),
-                      const Text("Searching for devices...").tr(),
+                      const Text("Searching for devices..."),
                       const SizedBox(height: 8),
                       const Text(
                         "If no devices are found, please pair your printer in Bluetooth settings.",
                         textAlign: TextAlign.center,
-                      ).tr(),
+                      ),
                     ],
                   )
                 : ListView.builder(
@@ -726,7 +1570,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                         title: Text(deviceName.isNotEmpty
                             ? deviceName
                             : "Unknown Device"),
-                        subtitle: Text("MAC: $mac").tr(),
+                        subtitle: Text("MAC: $mac"),
                       );
                     },
                   ),
@@ -734,7 +1578,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text("Cancel").tr(),
+              child: const Text("Cancel"),
             ),
           ],
         );
@@ -829,7 +1673,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                   Container(
                       padding: const EdgeInsets.only(top: 20),
                       child: Text(
-                        'Remark'.tr(),
+                        'Remark',
                         style: TextStyle(
                             fontFamily: 'Poppinssb',
                             color: isDarkMode(context)
@@ -894,4 +1738,47 @@ Widget _buildChip(String label, int attributesOptionIndex) {
       ),
     ),
   );
+}
+
+class _RestaurantActionChip extends StatelessWidget {
+  const _RestaurantActionChip({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Color(COLOR_PRIMARY).withOpacity(0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Color(COLOR_PRIMARY).withOpacity(0.3)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: Color(COLOR_PRIMARY)),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: Color(COLOR_PRIMARY),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

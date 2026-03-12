@@ -1,4 +1,3 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/constants.dart';
 
@@ -37,7 +36,7 @@ class TextFormFieldWidget extends StatelessWidget {
         onFieldSubmitted: onFieldSubmitted,
         decoration: InputDecoration(
           contentPadding: const EdgeInsets.only(left: 16, right: 16, top: 10, bottom: 10),
-          hintText: hintText.tr(),
+          hintText: hintText,
           focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(25.0), borderSide: BorderSide(color: Color(COLOR_PRIMARY), width: 2.0)),
           errorBorder: OutlineInputBorder(
             borderSide: BorderSide(color: Theme.of(context).colorScheme.error),

@@ -1,6 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:intl/intl.dart';
 import 'package:dotted_border/dotted_border.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
@@ -27,7 +27,7 @@ class _OffersScreenState extends State<OffersScreen> {
     if (MyAppState.currentUser!.vendorID.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
         final snackBar = SnackBar(
-          content: const Text('Please add a restaurant first').tr(),
+          content: const Text('Please add a restaurant first'),
         );
         ScaffoldMessenger.of(context).showSnackBar(snackBar);
       });
@@ -92,8 +92,8 @@ class _OffersScreenState extends State<OffersScreen> {
                   return Container(
                     height: MediaQuery.of(context).size.height * 0.9,
                     alignment: Alignment.center,
-                    child: showEmptyState('No Promos'.tr(),
-                        'All your promos will show up here'.tr()),
+                    child: showEmptyState('No Promos',
+                        'All your promos will show up here'),
                   );
                 } else {
                   return ListView.builder(
@@ -244,7 +244,7 @@ class _OffersScreenState extends State<OffersScreen> {
                                                   Expanded(
                                                       child: Text(
                                                           "This offer is expire on"
-                                                                  .tr() +
+                                                                   +
                                                               " " +
                                                               getDate(snapshot
                                                                   .data![index]

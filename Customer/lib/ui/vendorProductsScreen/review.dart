@@ -90,8 +90,10 @@ class _ReviewState extends State<Review> {
                               )),
                               errorWidget: (context, url, error) => ClipRRect(
                                   borderRadius: BorderRadius.circular(35),
-                                  child: Image.network(
-                                    placeholderImage,
+                                  child: CachedNetworkImage(
+                                    imageUrl: placeholderImage,
+                                    memCacheWidth: 120,
+                                    memCacheHeight: 120,
                                     fit: BoxFit.cover,
                                   )),
                               fit: BoxFit.cover,
@@ -167,8 +169,10 @@ class _ReviewState extends State<Review> {
                                         )),
                                         errorWidget: (context, url, error) => ClipRRect(
                                             borderRadius: BorderRadius.circular(10),
-                                            child: Image.network(
-                                              placeholderImage,
+                                            child: CachedNetworkImage(
+                                              imageUrl: placeholderImage,
+                                              memCacheWidth: 120,
+                                              memCacheHeight: 120,
                                               fit: BoxFit.cover,
                                             )),
                                         fit: BoxFit.cover,

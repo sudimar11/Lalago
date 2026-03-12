@@ -7,11 +7,11 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:progress_dialog_null_safe/progress_dialog_null_safe.dart';
 import 'package:intl/intl.dart';
 
 import '../constants.dart';
+import '../utils/location_error.dart';
 
 String? validateName(String? value, bool isFirstName) {
   if (value == null || value.trim().isEmpty) {
@@ -216,10 +216,10 @@ Widget displayImage(String picUrl) => CachedNetworkImage(
       httpHeaders: const {
         'User-Agent': 'Foodie-Customer-App',
       },
-      maxWidthDiskCache: 1000,
-      maxHeightDiskCache: 1000,
-      memCacheWidth: 1000,
-      memCacheHeight: 1000,
+      maxWidthDiskCache: 500,
+      maxHeightDiskCache: 500,
+      memCacheWidth: 250,
+      memCacheHeight: 250,
       fadeInDuration: const Duration(milliseconds: 300),
       fadeOutDuration: const Duration(milliseconds: 300),
       fadeInCurve: Curves.easeIn,
@@ -259,10 +259,10 @@ Widget displayCircleImage(String picUrl, double size, hasBorder) =>
       httpHeaders: const {
         'User-Agent': 'Foodie-Customer-App',
       },
-      maxWidthDiskCache: 1000,
-      maxHeightDiskCache: 1000,
-      memCacheWidth: 1000,
-      memCacheHeight: 1000,
+      maxWidthDiskCache: 500,
+      maxHeightDiskCache: 500,
+      memCacheWidth: 250,
+      memCacheHeight: 250,
       fadeInDuration: const Duration(milliseconds: 300),
       fadeOutDuration: const Duration(milliseconds: 300),
       fadeInCurve: Curves.easeIn,
@@ -337,49 +337,31 @@ Future<String> getSafeImageUrl(String imageUrl) async {
 /// Determine the current position of the device.
 ///
 /// When the location services are not enabled or permissions
-/// are denied the `Future` will return an error.
-///
-///
+/// are denied the `Future` will return an error with [LocationErrorCode].
+/// Callers should use [parseLocationError] and [showLocationErrorDialog]
+/// to show user-initiated Settings dialogs.
 Future<Position> getCurrentLocation() async {
-  bool serviceEnabled;
-  LocationPermission permission;
-
-  // Test if location services are enabled.
-  serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  final serviceEnabled = await Geolocator.isLocationServiceEnabled();
   if (!serviceEnabled) {
-    // Location services are not enabled don't continue
-    // accessing the position and request users of the
-    // App to enable the location services.
-    await Geolocator.openLocationSettings();
+    return Future.error(LocationErrorCode.servicesDisabled);
   }
 
-  permission = await Geolocator.checkPermission();
+  var permission = await Geolocator.checkPermission();
   if (permission == LocationPermission.denied) {
     permission = await Geolocator.requestPermission();
     if (permission == LocationPermission.denied) {
-      // Permissions are denied, next time you could try
-      // requesting permissions again (this is also where
-      // Android's shouldShowRequestPermissionRationale
-      // returned true. According to Android guidelines
-      // your App should show an explanatory UI now.
-      return Future.error('Location permissions are denied');
+      return Future.error(LocationErrorCode.permissionDenied);
     }
   }
 
   if (permission == LocationPermission.deniedForever) {
-    // Permissions are denied forever, handle appropriately.
-    if (Platform.isIOS) {
-      openAppSettings();
-    } else {
-      await Permission.contacts.shouldShowRequestRationale;
-    }
+    return Future.error(LocationErrorCode.permissionDeniedForever);
   }
 
-  // When we reach here, permissions are granted and we can
-  // continue accessing the position of the device.
   return await Geolocator.getCurrentPosition(
-      forceAndroidLocationManager: true,
-      desiredAccuracy: LocationAccuracy.high);
+    forceAndroidLocationManager: true,
+    desiredAccuracy: LocationAccuracy.high,
+  );
 }
 
 String audioMessageTime(Duration audioDuration) {

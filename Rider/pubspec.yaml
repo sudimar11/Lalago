@@ -11,13 +11,18 @@ dependencies:
   flutter:
     sdk: flutter
 
+  lalago_shared:
+    path: ../packages/lalago_shared
+
   firebase_core: ^2.32.0
   firebase_crashlytics: ^3.5.7
   firebase_auth: ^4.20.0 # or ^4.15.3 if you want to mirror the declared constraint; 4.20.0 resolved in customer
   cloud_firestore: ^4.17.5
+  cloud_functions: ^4.7.6
   firebase_storage: ^11.7.7
   firebase_messaging: ^14.9.4
   flutter_local_notifications: ^18.0.1
+  flutter_timezone: ^1.0.8
   geoflutterfire2: ^2.3.15
   geolocator: ^10.1.1
   geocoding: ^3.0.0
@@ -42,6 +47,7 @@ dependencies:
   flutter_polyline_points: ^1.0.0
   cupertino_icons: ^1.0.6
   flutter_image_compress: ^2.0.4
+  audioplayers: ^5.2.1
   flutter_sound: ^9.2.13
   sign_in_with_apple: ^6.1.2
   google_sign_in: ^6.2.1
@@ -56,10 +62,13 @@ dependencies:
   hive: ^2.2.3
   hive_flutter: ^1.1.0
   connectivity_plus: ^5.0.2
+  battery_plus: ^6.0.2
+  device_info_plus: ^9.1.2
   workmanager: ^0.5.2
   freezed_annotation: ^2.4.1
   json_annotation: ^4.8.1
   fl_chart: ^0.69.0
+  flutter_rating_bar: ^4.0.1
 
 dependency_overrides:
   google_maps_place_picker_mb: ^3.1.0

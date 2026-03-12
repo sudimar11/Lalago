@@ -6,19 +6,29 @@ import 'package:intl/intl.dart';
 
 import 'package:foodie_customer/AppGlobal.dart';
 import 'package:foodie_customer/constants.dart';
+import 'package:foodie_customer/main.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/offer_model.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
+import 'package:foodie_customer/widgets/performance_badge.dart';
 
 class RestaurantCard extends StatelessWidget {
   final VendorModel vendorModel;
   final List<OfferModel> offerList;
   final List<ProductModel> allProducts;
   final dynamic currencyModel;
+  final String? source;
+  final int? position;
+  final String? recommendationReason;
+  final bool showFeedbackButtons;
+  final void Function(String feedback)? onFeedback;
 
   const RestaurantCard({
     Key? key,
@@ -26,6 +36,11 @@ class RestaurantCard extends StatelessWidget {
     required this.offerList,
     required this.allProducts,
     required this.currencyModel,
+    this.source,
+    this.position,
+    this.recommendationReason,
+    this.showFeedbackButtons = false,
+    this.onFeedback,
   }) : super(key: key);
 
   @override
@@ -63,10 +78,19 @@ class RestaurantCard extends StatelessWidget {
     }
 
     return GestureDetector(
-      onTap: () => push(
-        context,
-        NewVendorProductsScreen(vendorModel: vendorModel),
-      ),
+      onTap: () {
+        ClickTrackingService.logClick(
+          userId: MyAppState.currentUser?.userID ?? 'guest',
+          restaurantId: vendorModel.id,
+          source: source ?? 'home_section',
+          metadata: {
+            if (position != null) 'position': position,
+            if (recommendationReason != null)
+              'recommendationReason': recommendationReason,
+          },
+        );
+        push(context, NewVendorProductsScreen(vendorModel: vendorModel));
+      },
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
@@ -101,6 +125,8 @@ class RestaurantCard extends StatelessWidget {
                         imageUrl: getImageVAlidUrl(cardImage),
                         width: MediaQuery.of(context).size.width,
                         height: 180,
+                        memCacheWidth: 200,
+                        memCacheHeight: 200,
                         fit: BoxFit.cover,
                         placeholder: (context, url) => Center(
                             child: CircularProgressIndicator.adaptive(
@@ -109,11 +135,18 @@ class RestaurantCard extends StatelessWidget {
                         )),
                         errorWidget: (context, url, error) => ClipRRect(
                             borderRadius: BorderRadius.circular(20),
-                            child: Image.network(
-                              AppGlobal.placeHolderImage!,
+                            child: CachedNetworkImage(
+                              imageUrl: AppGlobal.placeHolderImage!,
                               width: MediaQuery.of(context).size.width,
                               height: 180,
+                              memCacheWidth: 200,
+                              memCacheHeight: 200,
                               fit: BoxFit.cover,
+                              errorWidget: (context, u, e) => Container(
+                                color: Colors.grey.shade200,
+                                child: Icon(Icons.restaurant,
+                                    size: 50, color: Colors.grey.shade400),
+                              ),
                             )),
                       ),
                     ),
@@ -185,43 +218,59 @@ class RestaurantCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(vendorModel.title,
-                          maxLines: 1,
-                          style: TextStyle(
-                            fontFamily: "Poppinsm",
-                            letterSpacing: 0.5,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                            color: isDarkMode(context)
-                                ? Colors.white
-                                : Colors.black,
-                          )),
-                      const SizedBox(height: 8),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          ImageIcon(
-                            const AssetImage('assets/images/location3x.png'),
-                            size: 15,
-                            color: Color(COLOR_PRIMARY),
-                          ),
-                          const SizedBox(width: 5),
                           Expanded(
                             child: Text(
-                              vendorModel.location,
+                              vendorModel.title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontFamily: "Poppinsm",
                                 letterSpacing: 0.5,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
                                 color: isDarkMode(context)
-                                    ? Colors.white70
-                                    : const Color(0xff555353),
+                                    ? Colors.white
+                                    : Colors.black,
                               ),
                             ),
                           ),
+                          PerformanceBadge(
+                            vendorModel: vendorModel,
+                            compact: true,
+                          ),
                         ],
                       ),
+                      if (source != 'personalized') ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            ImageIcon(
+                              const AssetImage('assets/images/location3x.png'),
+                              size: 15,
+                              color: Color(COLOR_PRIMARY),
+                            ),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(
+                                vendorModel.location ?? '',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontFamily: "Poppinsm",
+                                  letterSpacing: 0.5,
+                                  color: isDarkMode(context)
+                                      ? Colors.white70
+                                      : const Color(0xff555353),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                       RestaurantEtaFeeRow(
                         vendorModel: vendorModel,
                         currencyModel: currencyModel,
@@ -260,7 +309,43 @@ class RestaurantCard extends StatelessWidget {
                                 )),
                           ],
                         ),
-                      )
+                      ),
+                      if (showFeedbackButtons && onFeedback != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8.0),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.thumb_up_outlined, size: 18),
+                                constraints: const BoxConstraints(
+                                  minWidth: 32,
+                                  minHeight: 32,
+                                ),
+                                padding: EdgeInsets.zero,
+                                onPressed: () => onFeedback!('like'),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.thumb_down_outlined, size: 18),
+                                constraints: const BoxConstraints(
+                                  minWidth: 32,
+                                  minHeight: 32,
+                                ),
+                                padding: EdgeInsets.zero,
+                                onPressed: () => onFeedback!('dislike'),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.close, size: 18),
+                                constraints: const BoxConstraints(
+                                  minWidth: 32,
+                                  minHeight: 32,
+                                ),
+                                padding: EdgeInsets.zero,
+                                onPressed: () => onFeedback!('dismiss'),
+                              ),
+                            ],
+                          ),
+                        ),
                     ],
                   ),
                 )

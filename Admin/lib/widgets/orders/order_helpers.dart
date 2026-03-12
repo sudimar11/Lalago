@@ -73,21 +73,7 @@ class _OrderPlacedTimerState extends State<OrderPlacedTimer> {
       return Colors.green; // Green for completed orders
     }
 
-    // Special color logic for "Order Placed" status with auto-accept countdown
-    if (widget.status == 'Order Placed') {
-      final minutes = _elapsed.inMinutes;
-      if (minutes >= 4) {
-        return Colors.orange; // Orange when auto-accepting
-      } else if (minutes >= 3) {
-        return Colors.red; // Red when close to auto-accept
-      } else if (minutes >= 2) {
-        return Colors.orange; // Orange when getting close
-      } else {
-        return Colors.green; // Green for first 2 minutes
-      }
-    }
-
-    // Default color logic for other statuses
+    // Default color logic for all active statuses (including "Order Placed")
     final minutes = _elapsed.inMinutes;
     if (minutes < 3) return Colors.green;
     if (minutes < 6) return Colors.orange;
@@ -120,18 +106,6 @@ class _OrderPlacedTimerState extends State<OrderPlacedTimer> {
       return 'Completed in ${_formatDuration()}';
     }
 
-    // Show auto-accept countdown for "Order Placed" status
-    if (widget.status == 'Order Placed') {
-      final autoAcceptDuration = const Duration(minutes: 4);
-      final remainingDuration = autoAcceptDuration - _elapsed;
-
-      if (remainingDuration.isNegative) {
-        return 'Auto-accept in ${_formatDuration(Duration.zero)}';
-      } else {
-        return 'Auto-accept in ${_formatDuration(remainingDuration)}';
-      }
-    }
-
     return _formatDuration();
   }
 
@@ -153,9 +127,7 @@ class _OrderPlacedTimerState extends State<OrderPlacedTimer> {
                         widget.status == 'order rejected'
                     ? Icons.cancel
                     : Icons.check_circle)
-                : (widget.status == 'Order Placed' && _elapsed.inMinutes >= 4
-                    ? Icons.auto_awesome
-                    : Icons.timer),
+                : Icons.timer,
             size: 12,
             color: _getTimerColor(),
           ),
@@ -221,9 +193,10 @@ class DriverNameChip extends StatelessWidget {
         final driverInfo = snapshot.data!;
         final driverName = driverInfo['name']!;
         final driverPhone = driverInfo['phone'] ?? '';
+        final driverStatus = driverInfo['status'] ?? '';
 
         return Chip(
-          avatar: Icon(Icons.person, size: 16),
+          avatar: const Icon(Icons.person, size: 16),
           label: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -236,6 +209,11 @@ class DriverNameChip extends StatelessWidget {
                     fontSize: 10,
                     color: Colors.grey.shade600,
                   ),
+                ),
+              if (driverStatus.isNotEmpty)
+                Text(
+                  driverStatus,
+                  style: const TextStyle(fontSize: 10),
                 ),
             ],
           ),
@@ -384,10 +362,13 @@ Future<Map<String, String>> fetchDriverInfo(String driverId) async {
     final lastName = driverData['lastName'] ?? '';
     final driverName = '$firstName $lastName'.trim();
     final driverPhone = driverData['phoneNumber'] as String? ?? '';
+    final displayStatus =
+        driverData['riderDisplayStatus'] as String? ?? '';
 
     return {
       'name': driverName.isEmpty ? 'Unknown Driver' : driverName,
       'phone': driverPhone,
+      'status': displayStatus,
     };
   } catch (e) {
     print('Error fetching driver info: $e');

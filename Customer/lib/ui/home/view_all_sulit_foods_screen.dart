@@ -286,6 +286,8 @@ class _ViewAllSulitFoodsScreenState extends State<ViewAllSulitFoodsScreen> {
                                         child: CachedNetworkImage(
                                           imageUrl:
                                               getImageVAlidUrl(product.photo),
+                                          memCacheWidth: 280,
+                                          memCacheHeight: 280,
                                           fit: BoxFit.cover,
                                           placeholder: (context, url) =>
                                               Container(
@@ -353,6 +355,8 @@ class _ViewAllSulitFoodsScreenState extends State<ViewAllSulitFoodsScreen> {
                                             child: CachedNetworkImage(
                                               imageUrl: getImageVAlidUrl(
                                                   vendor.photo),
+                                              memCacheWidth: 100,
+                                              memCacheHeight: 100,
                                               fit: BoxFit.cover,
                                               placeholder: (context, url) =>
                                                   const Center(

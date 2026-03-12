@@ -7,6 +7,47 @@ import 'package:brgy/widgets/orders/order_helpers.dart';
 class OrderNotificationService {
   final SMSService _smsService = SMSService();
 
+  /// Ash-voiced SMS templates for customer notifications
+  static String _getAshSmsContent(
+    String type,
+    Map<String, dynamic> data,
+  ) {
+    final restaurantName =
+        (data['restaurantName'] as String?) ?? 'the restaurant';
+    final customerName = (data['customerName'] as String?) ?? '';
+
+    switch (type) {
+      case 'order_placed':
+        return 'Ash here! Your order from $restaurantName is placed. '
+            'I\'ll update you when it\'s confirmed!';
+      case 'order_accepted':
+        final isAutoAccepted = data['isAutoAccepted'] == true;
+        if (isAutoAccepted) {
+          return customerName.isNotEmpty
+              ? 'Good news from Ash! Hi $customerName, our rider has '
+                  'accepted your order and is confirming with the restaurant.'
+              : 'Good news from Ash! Our rider has accepted your order and '
+                  'is confirming with the restaurant.';
+        }
+        return customerName.isNotEmpty
+            ? 'Good news from Ash! Hi $customerName, $restaurantName '
+                'accepted your order. It\'s being prepared.'
+            : 'Good news from Ash! $restaurantName accepted your order. '
+                'It\'s being prepared.';
+      case 'order_rejected':
+        return 'Ash here – your order from $restaurantName couldn\'t be '
+            'processed. Want to try another restaurant? Check the app.';
+      case 'order_ready':
+        return 'Your order is ready! Ash hopes you enjoy your meal from '
+            '$restaurantName.';
+      case 'order_delivered':
+        return 'Delivered! Ash hopes everything is perfect. Let me know if '
+            'you need anything else!';
+      default:
+        return 'LalaGO: Your order status has been updated.';
+    }
+  }
+
   // Queue to prevent concurrent SMS sends
   final List<Future<void> Function()> _smsQueue = [];
   bool _isProcessingQueue = false;
@@ -132,9 +173,18 @@ class OrderNotificationService {
           combined.isNotEmpty ? combined : (author['name'] ?? '').toString();
       if (customerName.trim().isEmpty) customerName = 'Customer';
 
-      final message = isAutoAccepted
-          ? 'LalaGO SMS: Salam, $customerName, Our rider has accepted your order and is now confirming it with the restaurant.'
-          : 'LalaGO SMS: Salam $customerName, your order has been accepted by the restaurant! thank you for ordering with LalaGO!';
+      final vendor = (orderData['vendor'] ?? {}) as Map<String, dynamic>;
+      final restaurantName =
+          (vendor['title'] ?? vendor['name'] ?? 'the restaurant').toString();
+
+      final message = _getAshSmsContent(
+        'order_accepted',
+        {
+          'customerName': customerName,
+          'restaurantName': restaurantName,
+          'isAutoAccepted': isAutoAccepted,
+        },
+      );
 
       // Send SMS (without fallback to prevent SMS app opening)
       final result = await _smsService.sendSingleSMS(

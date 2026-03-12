@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../../../../constants.dart';
 import '../../../../main.dart';
 import '../../../../model/CurrencyModel.dart';
 import '../../../../model/VendorModel.dart';
 import '../../../../services/helper.dart';
 import '../../../../utils/restaurant_eta_delivery_helper.dart';
 
-/// Compact inline widget displaying ETA and delivery fee for a restaurant.
-/// Gracefully hides when data is unavailable.
-/// Uses the global delivery charge model from Firestore (matching CartScreen).
+/// Compact inline widget displaying distance, ETA and delivery fee.
+/// Format: "2.3 km • 25-35 min • ₱40" or "850 m • 15-20 min • Free".
+/// Uses vendor.distanceInKM when set, else computes from coordinates.
 class RestaurantEtaFeeRow extends StatelessWidget {
   final VendorModel vendorModel;
   final CurrencyModel? currencyModel;
@@ -19,31 +20,50 @@ class RestaurantEtaFeeRow extends StatelessWidget {
     this.currencyModel,
   }) : super(key: key);
 
+  static String _formatDistance(double distanceKm) {
+    if (distanceKm < 1 && distanceKm > 0) {
+      return '${(distanceKm * 1000).round()} m';
+    }
+    return '${distanceKm.toStringAsFixed(1)} km';
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Check if user location is available
-    final userLocation = MyAppState.selectedPosotion.location;
+    final userLocation = MyAppState.selectedPosition.location;
     if (userLocation == null ||
         (userLocation.latitude == 0 && userLocation.longitude == 0)) {
       return const SizedBox.shrink();
     }
 
-    // Calculate distance
-    final distanceKm = RestaurantEtaDeliveryHelper.calculateDistanceKm(
-      vendorModel.latitude,
-      vendorModel.longitude,
-      userLocation.latitude,
-      userLocation.longitude,
-    );
+    final distanceKm = vendorModel.distanceInKM ??
+        RestaurantEtaDeliveryHelper.calculateDistanceKm(
+          vendorModel.latitude,
+          vendorModel.longitude,
+          userLocation.latitude,
+          userLocation.longitude,
+        );
 
     if (distanceKm == null || distanceKm <= 0) {
       return const SizedBox.shrink();
     }
 
-    // Calculate ETA
     final eta = RestaurantEtaDeliveryHelper.calculateETA(distanceKm);
     if (eta == null) {
       return const SizedBox.shrink();
+    }
+
+    final distanceStr = _formatDistance(distanceKm);
+    String line = '$distanceStr • $eta';
+
+    if (currencyModel != null) {
+      final fee = RestaurantEtaDeliveryHelper.calculateDeliveryFee(
+        distanceKm,
+        vendorModel.deliveryCharge,
+      );
+      final feeStr = (fee != null && fee > 0)
+          ? amountShow(amount: fee.round().toString())
+          : 'Free';
+      line = '$distanceStr • $eta • $feeStr';
     }
 
     return Padding(
@@ -52,7 +72,7 @@ class RestaurantEtaFeeRow extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              '⏱ $eta',
+              line,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(

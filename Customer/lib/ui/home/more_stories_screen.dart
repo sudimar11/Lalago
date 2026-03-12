@@ -84,8 +84,8 @@ class _MoreStoriesState extends State<MoreStories> {
                   double distanceInMeters = Geolocator.distanceBetween(
                       vendorModel!.latitude,
                       vendorModel.longitude,
-                      MyAppState.selectedPosotion.location!.latitude,
-                      MyAppState.selectedPosotion.location!.longitude);
+                      MyAppState.selectedPosition.location!.latitude,
+                      MyAppState.selectedPosition.location!.longitude);
 
                   double kilometer = distanceInMeters / 1000;
 
@@ -124,12 +124,13 @@ class _MoreStoriesState extends State<MoreStories> {
                                 )),
                                 errorWidget: (context, url, error) => ClipRRect(
                                     borderRadius: BorderRadius.circular(30),
-                                    child: Image.network(
-                                      AppGlobal.placeHolderImage!,
+                                    child: CachedNetworkImage(
+                                      imageUrl: AppGlobal.placeHolderImage!,
+                                      memCacheWidth: 200,
+                                      memCacheHeight: 200,
                                       fit: BoxFit.cover,
                                       width: MediaQuery.of(context).size.width,
-                                      height:
-                                          MediaQuery.of(context).size.height,
+                                      height: MediaQuery.of(context).size.height,
                                     )),
                                 fit: BoxFit.cover,
                               ),

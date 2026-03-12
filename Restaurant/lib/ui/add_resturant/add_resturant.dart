@@ -2,8 +2,6 @@ import 'dart:io';
 
 import 'package:barcode_image/barcode_image.dart';
 
-import 'package:easy_localization/easy_localization.dart';
-
 import 'package:firebase_storage/firebase_storage.dart';
 
 import 'package:flutter/cupertino.dart';
@@ -258,7 +256,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                           Container(
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                "Restaurant Name".tr(),
+                                "Restaurant Name",
                                 style: TextStyle(
                                     fontSize: 17,
                                     fontFamily: "Poppinsl",
@@ -280,7 +278,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               decoration: InputDecoration(
                                 contentPadding: EdgeInsets.symmetric(
                                     horizontal: 24, vertical: 5),
-                                hintText: 'Restaurant Name'.tr(),
+                                hintText: 'Restaurant Name',
                                 hintStyle: TextStyle(
                                     color: isDarkMode(context)
                                         ? Colors.white
@@ -308,7 +306,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               padding: EdgeInsets.only(top: 5),
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                "Category".tr(),
+                                "Category",
                                 style: TextStyle(
                                     fontSize: 17,
                                     fontFamily: "Poppinsl",
@@ -353,7 +351,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                                   selectedCategory = value;
                                 });
                               },
-                              hint: Text('Select Category'.tr()),
+                              hint: Text('Select Category'),
                               items:
                                   categoryLst.map((VendorCategoryModel item) {
                                 return DropdownMenuItem<VendorCategoryModel>(
@@ -365,7 +363,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               padding: EdgeInsets.only(top: 5),
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                "Services".tr(),
+                                "Services",
                                 style: TextStyle(
                                     fontSize: 17,
                                     fontFamily: "Poppinsl",
@@ -397,14 +395,14 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
 
                               // childBuilder: selected.first,
 
-                              whenEmpty: 'Select Something'.tr(),
+                              whenEmpty: 'Select Something',
                             ),
                           ),
                           Container(
                               padding: EdgeInsets.only(top: 5),
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                "Description".tr(),
+                                "Description",
                                 style: TextStyle(
                                     fontSize: 17,
                                     fontFamily: "Poppinsl",
@@ -426,7 +424,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               decoration: InputDecoration(
                                 contentPadding: EdgeInsets.symmetric(
                                     horizontal: 24, vertical: 5),
-                                hintText: 'Description'.tr(),
+                                hintText: 'Description',
                                 hintStyle: TextStyle(
                                     color: isDarkMode(context)
                                         ? Colors.white
@@ -452,7 +450,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               padding: EdgeInsets.only(top: 5),
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                "Phone Number".tr(),
+                                "Phone Number",
                                 style: TextStyle(
                                     fontSize: 17,
                                     fontFamily: "Poppinsl",
@@ -478,7 +476,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               decoration: InputDecoration(
                                 contentPadding: EdgeInsets.symmetric(
                                     horizontal: 24, vertical: 5),
-                                hintText: 'Phone Number'.tr(),
+                                hintText: 'Phone Number',
                                 hintStyle: TextStyle(
                                     color: isDarkMode(context)
                                         ? Colors.white
@@ -507,7 +505,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                             dense: true,
                             activeColor: Color(COLOR_ACCENT),
                             title: Text(
-                              'Delivery Settings'.tr(),
+                              'Delivery Settings',
                               style: TextStyle(
                                   fontSize: 16,
                                   color: isDarkMode(context)
@@ -523,7 +521,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                           Container(
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                "Delivery Charge Per km".tr(),
+                                "Delivery Charge Per km",
                                 style: TextStyle(
                                     fontSize: 15,
                                     fontFamily: "Poppinsl",
@@ -539,7 +537,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                                 print("value os $value");
 
                                 if (value == null || value.isEmpty) {
-                                  return "Invalid value".tr();
+                                  return "Invalid value";
                                 }
 
                                 return null;
@@ -554,7 +552,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               decoration: InputDecoration(
                                 contentPadding: EdgeInsets.symmetric(
                                     horizontal: 24, vertical: 5),
-                                hintText: 'Delivery Charge Per km'.tr(),
+                                hintText: 'Delivery Charge Per km',
                                 hintStyle: TextStyle(
                                     color: isDarkMode(context)
                                         ? Colors.white
@@ -579,7 +577,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                           Container(
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                "Min Delivery Charge".tr(),
+                                "Min Delivery Charge",
                                 style: TextStyle(
                                     fontSize: 15,
                                     fontFamily: "Poppinsl",
@@ -596,7 +594,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               textInputAction: TextInputAction.next,
                               validator: (value) {
                                 if (value == null || value.isEmpty) {
-                                  return "Invalid value".tr();
+                                  return "Invalid value";
                                 }
 
                                 return null;
@@ -608,7 +606,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               decoration: InputDecoration(
                                 contentPadding: EdgeInsets.symmetric(
                                     horizontal: 24, vertical: 5),
-                                hintText: 'Min Delivery Charge'.tr(),
+                                hintText: 'Min Delivery Charge',
                                 hintStyle: TextStyle(
                                     color: isDarkMode(context)
                                         ? Colors.white
@@ -633,7 +631,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                           Container(
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                "Min Delivery Charge within km".tr(),
+                                "Min Delivery Charge within km",
                                 style: TextStyle(
                                     fontSize: 15,
                                     fontFamily: "Poppinsl",
@@ -650,7 +648,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               textInputAction: TextInputAction.next,
                               validator: (value) {
                                 if (value == null || value.isEmpty) {
-                                  return "Invalid value".tr();
+                                  return "Invalid value";
                                 }
 
                                 return null;
@@ -663,7 +661,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                               decoration: InputDecoration(
                                 contentPadding: EdgeInsets.symmetric(
                                     horizontal: 24, vertical: 5),
-                                hintText: 'Min Delivery Charge within km'.tr(),
+                                hintText: 'Min Delivery Charge within km',
                                 hintStyle: TextStyle(
                                     color: isDarkMode(context)
                                         ? Colors.white
@@ -735,7 +733,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                 validate();
               },
               child: Text(
-                'CONTINUE'.tr(),
+                'CONTINUE',
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
@@ -792,7 +790,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                     push(context, QrCodeGenerator(vendorModel: vendorData!));
                   },
                   child: Text(
-                    'Generate QR Code'.tr(),
+                    'Generate QR Code',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -813,7 +811,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
       Container(
           alignment: AlignmentDirectional.centerStart,
           child: Text(
-            "Restaurant Name".tr(),
+            "Restaurant Name",
             style: TextStyle(
                 fontSize: 17,
                 fontFamily: "Poppinsl",
@@ -830,7 +828,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           cursorColor: Color(COLOR_PRIMARY),
           decoration: InputDecoration(
             contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 5),
-            hintText: 'Restaurant Name'.tr(),
+            hintText: 'Restaurant Name',
             hintStyle: TextStyle(
                 color: isDarkMode(context) ? Colors.white : Color(0Xff696A75),
                 fontSize: 17,
@@ -851,7 +849,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           padding: EdgeInsets.only(top: 5),
           alignment: AlignmentDirectional.centerStart,
           child: Text(
-            "Category".tr(),
+            "Category",
             style: TextStyle(
                 fontSize: 17,
                 fontFamily: "Poppinsl",
@@ -888,7 +886,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
               selectedCategory = value;
             });
           },
-          hint: Text('Select Category'.tr()),
+          hint: Text('Select Category'),
           items: categoryLst.map((VendorCategoryModel item) {
             return DropdownMenuItem<VendorCategoryModel>(
               child: Text(item.title.toString()),
@@ -899,7 +897,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           padding: EdgeInsets.only(top: 5),
           alignment: AlignmentDirectional.centerStart,
           child: Text(
-            "Services".tr(),
+            "Services",
             style: TextStyle(
                 fontSize: 17,
                 fontFamily: "Poppinsl",
@@ -929,14 +927,14 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
 
           // childBuilder: selected.first,
 
-          whenEmpty: 'Select Something'.tr(),
+          whenEmpty: 'Select Something',
         ),
       ),
       Container(
           padding: EdgeInsets.only(top: 5),
           alignment: AlignmentDirectional.centerStart,
           child: Text(
-            "Description".tr(),
+            "Description",
             style: TextStyle(
                 fontSize: 17,
                 fontFamily: "Poppinsl",
@@ -953,7 +951,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           cursorColor: Color(COLOR_PRIMARY),
           decoration: InputDecoration(
             contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 5),
-            hintText: 'Description'.tr(),
+            hintText: 'Description',
             hintStyle: TextStyle(
                 color: isDarkMode(context) ? Colors.white : Color(0Xff333333),
                 fontSize: 17,
@@ -977,7 +975,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           padding: EdgeInsets.only(top: 5),
           alignment: AlignmentDirectional.centerStart,
           child: Text(
-            "Phone Number".tr(),
+            "Phone Number",
             style: TextStyle(
                 fontSize: 17,
                 fontFamily: "Poppinsl",
@@ -997,7 +995,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           cursorColor: Color(COLOR_PRIMARY),
           decoration: InputDecoration(
             contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 5),
-            hintText: 'Phone Number'.tr(),
+            hintText: 'Phone Number',
             hintStyle: TextStyle(
                 color: isDarkMode(context) ? Colors.white : Color(0Xff333333),
                 fontSize: 17,
@@ -1021,7 +1019,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
         contentPadding: EdgeInsets.all(0),
         activeColor: Color(COLOR_ACCENT),
         title: Text(
-          'Delivery Settings'.tr(),
+          'Delivery Settings',
           style: TextStyle(
               fontSize: 17,
               color: isDarkMode(context) ? Colors.white : Color(0Xff696A75),
@@ -1033,7 +1031,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
       Container(
           alignment: AlignmentDirectional.centerStart,
           child: Text(
-            "Delivery Charge Per km".tr(),
+            "Delivery Charge Per km",
             style: TextStyle(
                 fontSize: 15,
                 fontFamily: "Poppinsl",
@@ -1045,7 +1043,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           textInputAction: TextInputAction.next,
           validator: (value) {
             if (value == null || value.isEmpty) {
-              return "Invalid value".tr();
+              return "Invalid value";
             }
 
             return null;
@@ -1057,7 +1055,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           cursorColor: Color(COLOR_PRIMARY),
           decoration: InputDecoration(
             contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 5),
-            hintText: 'Delivery Charge Per km'.tr(),
+            hintText: 'Delivery Charge Per km',
             hintStyle: TextStyle(
                 color: isDarkMode(context) ? Colors.white : Color(0Xff333333),
                 fontSize: 17,
@@ -1080,7 +1078,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
       Container(
           alignment: AlignmentDirectional.centerStart,
           child: Text(
-            "Min Delivery Charge".tr(),
+            "Min Delivery Charge",
             style: TextStyle(
                 fontSize: 15,
                 fontFamily: "Poppinsl",
@@ -1093,7 +1091,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           textInputAction: TextInputAction.next,
           validator: (value) {
             if (value == null || value.isEmpty) {
-              return "Invalid value".tr();
+              return "Invalid value";
             }
 
             return null;
@@ -1104,7 +1102,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           cursorColor: Color(COLOR_PRIMARY),
           decoration: InputDecoration(
             contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 5),
-            hintText: 'Min Delivery Charge'.tr(),
+            hintText: 'Min Delivery Charge',
             hintStyle: TextStyle(
                 color: isDarkMode(context) ? Colors.white : Color(0Xff333333),
                 fontSize: 17,
@@ -1127,7 +1125,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
       Container(
           alignment: AlignmentDirectional.centerStart,
           child: Text(
-            "Min Delivery Charge within km".tr(),
+            "Min Delivery Charge within km",
             style: TextStyle(
                 fontSize: 15,
                 fontFamily: "Poppinsl",
@@ -1140,7 +1138,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           textInputAction: TextInputAction.next,
           validator: (value) {
             if (value == null || value.isEmpty) {
-              return "Invalid value".tr();
+              return "Invalid value";
             }
 
             return null;
@@ -1151,7 +1149,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           cursorColor: Color(COLOR_PRIMARY),
           decoration: InputDecoration(
             contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 5),
-            hintText: 'Min Delivery Charge within km'.tr(),
+            hintText: 'Min Delivery Charge within km',
             hintStyle: TextStyle(
                 color: isDarkMode(context) ? Colors.white : Color(0Xff333333),
                 fontSize: 17,
@@ -1187,12 +1185,12 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
   changeimg() {
     final action = CupertinoActionSheet(
       message: Text(
-        'Change Picture'.tr(),
+        'Change Picture',
         style: TextStyle(fontSize: 15.0),
       ),
       actions: [
         CupertinoActionSheetAction(
-          child: Text('Choose image from gallery'.tr()),
+          child: Text('Choose image from gallery'),
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -1212,7 +1210,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text('Take a picture'.tr()),
+          child: Text('Take a picture'),
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -1231,7 +1229,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel'.tr()),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -1245,7 +1243,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
     // set up the button
 
     Widget okButton = TextButton(
-      child: Text("OK".tr()),
+      child: Text("OK"),
       onPressed: () {
         Navigator.pop(context);
       },
@@ -1254,8 +1252,8 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
     // set up the AlertDialog
 
     AlertDialog alert = AlertDialog(
-      title: Text("Restaurant Field".tr()),
-      content: Text("Please Select Image to Continue.".tr()),
+      title: Text("Restaurant Field"),
+      content: Text("Please Select Image to Continue."),
       actions: [
         okButton,
       ],
@@ -1272,12 +1270,20 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
   }
 
   validate() async {
+    final formValid = _formKey.currentState?.validate() ?? false;
+    // #region agent log
+    debugPrint(
+        '[REST_SAVE] add_resturant validate: formValid=$formValid '
+        'vendorID=${MyAppState.currentUser!.vendorID} '
+        'phone=${phonenumber.text} phoneEmpty=${phonenumber.text.isEmpty} '
+        'mediaEmpty=${_mediaFiles.isEmpty}');
+    // #endregion
     if (MyAppState.currentUser!.vendorID != '') {
-      if (_formKey.currentState?.validate() ?? false) {
+      if (formValid) {
         filter();
 
         if (_mediaFiles.isNotEmpty) {
-          await showProgress(context, 'Updating Photo...'.tr(), false);
+          await showProgress(context, 'Updating Photo...', false);
 
           var uniqueID = Uuid().v4();
 
@@ -1305,6 +1311,9 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
               minimumDeliveryChargesWithinKm:
                   num.parse(minDeliveryChargewkm.text));
 
+          // #region agent log
+          debugPrint('[REST_SAVE] add_resturant pushing RestaurantLocationScreen (edit with new photo)');
+          // #endregion
           push(
             context,
             RestaurantLocationScreen(
@@ -1326,6 +1335,9 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
               minimumDeliveryChargesWithinKm:
                   num.parse(minDeliveryChargewkm.text));
 
+          // #region agent log
+          debugPrint('[REST_SAVE] add_resturant pushing RestaurantLocationScreen (edit no new photo)');
+          // #endregion
           push(
             context,
             RestaurantLocationScreen(
@@ -1341,13 +1353,13 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           );
         }
       }
-    } else if (_formKey.currentState?.validate() ?? false) {
+    } else if (formValid) {
       if (_mediaFiles.isEmpty) {
-        showimgAlertDialog(context, 'Please add Image'.tr(),
-            'Add Image to continue'.tr(), true);
+        showimgAlertDialog(context, 'Please add Image',
+            'Add Image to continue', true);
       } else if (phonenumber.text.isEmpty) {
-        showimgAlertDialog(context, 'Please enter valid number'.tr(),
-            'Add phone no. to continue'.tr(), true);
+        showimgAlertDialog(context, 'Please enter valid number',
+            'Add phone no. to continue', true);
       } else {
         filter();
 
@@ -1361,7 +1373,9 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                 num.parse(minDeliveryChargewkm.text));
 
         print("---->$filters");
-
+        // #region agent log
+        debugPrint('[REST_SAVE] add_resturant pushing RestaurantLocationScreen (new restaurant)');
+        // #endregion
         push(
           context,
           RestaurantLocationScreen(
@@ -1387,12 +1401,12 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
   _pickImage() {
     final action = CupertinoActionSheet(
       message: Text(
-        'Add Picture'.tr(),
+        'Add Picture',
         style: TextStyle(fontSize: 15.0),
       ),
       actions: <Widget>[
         CupertinoActionSheetAction(
-          child: Text('Choose image from gallery'.tr()),
+          child: Text('Choose image from gallery'),
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -1412,7 +1426,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text('Take a picture'.tr()),
+          child: Text('Take a picture'),
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -1433,7 +1447,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel'.tr()),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -1493,7 +1507,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
 
             setState(() {});
           },
-          child: Text('Remove picture'.tr()),
+          child: Text('Remove picture'),
           isDestructiveAction: true,
         ),
         CupertinoActionSheetAction(
@@ -1507,11 +1521,11 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
                     : FullScreenImageViewer(imageUrl: image));
           },
           isDefaultAction: true,
-          child: Text('View picture'.tr()),
+          child: Text('View picture'),
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel'.tr()),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -1535,7 +1549,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
 
     if (addOkButton) {
       okButton = TextButton(
-        child: Text('OK'.tr()),
+        child: Text('OK'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -1573,7 +1587,7 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
     // set up the button
 
     Widget okButton = TextButton(
-      child: Text("OK".tr()),
+      child: Text("OK"),
       onPressed: () {
         Navigator.pop(context);
       },
@@ -1582,8 +1596,8 @@ class _AddRestaurantScreenState extends State<AddRestaurantScreen> {
     // set up the AlertDialog
 
     AlertDialog alert = AlertDialog(
-      title: Text("My title".tr()),
-      content: Text("This is my message.".tr()),
+      title: Text("My title"),
+      content: Text("This is my message."),
       actions: [
         okButton,
       ],

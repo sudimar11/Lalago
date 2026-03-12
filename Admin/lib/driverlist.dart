@@ -101,7 +101,8 @@ class _DriverListPageState extends State<DriverListPage> {
         }
 
         bool isAvailable = data['isAvailable'] ?? false;
-        bool isOnline = data['checkedInToday'] ?? false;
+        String riderDisplayStatus =
+            data['riderDisplayStatus'] as String? ?? '⚪ Offline';
         bool multipleOrders = data['multipleOrders'] ?? false;
         List<dynamic>? inProgressOrderID = data['inProgressOrderID'];
         int activeOrders = inProgressOrderID?.length ?? 0;
@@ -136,7 +137,7 @@ class _DriverListPageState extends State<DriverListPage> {
           longitude: longitude,
           activeOrders: activeOrders,
           batch: batch,
-          isOnline: isOnline,
+          riderDisplayStatus: riderDisplayStatus,
           multipleOrders: multipleOrders,
         ));
       }
@@ -564,7 +565,7 @@ class _DriverListPageState extends State<DriverListPage> {
                                                         '${index + 1}'),
                                                     _buildDataCell(driver.name),
                                                     _buildOnlineStatusCell(
-                                                        driver.isOnline),
+                                                        driver.riderDisplayStatus),
                                                     _buildDataCell(
                                                         driver.phoneNumber),
                                                     _buildDataCell(
@@ -699,27 +700,13 @@ class _DriverListPageState extends State<DriverListPage> {
     );
   }
 
-  Widget _buildOnlineStatusCell(bool isOnline) {
-    String status = isOnline ? 'Online' : 'Offline';
-    Color statusColor = isOnline ? Colors.green : Colors.grey;
+  Widget _buildOnlineStatusCell(String displayStatus) {
     return Padding(
       padding: const EdgeInsets.all(8.0),
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        decoration: BoxDecoration(
-          color: statusColor.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: statusColor.withOpacity(0.3)),
-        ),
-        child: Text(
-          status,
-          style: TextStyle(
-            fontSize: 10,
-            color: statusColor,
-            fontWeight: FontWeight.bold,
-          ),
-          textAlign: TextAlign.center,
-        ),
+      child: Text(
+        displayStatus,
+        style: const TextStyle(fontSize: 12),
+        textAlign: TextAlign.center,
       ),
     );
   }
@@ -760,7 +747,7 @@ class DriverData {
   final double longitude;
   final int activeOrders;
   final String batch;
-  bool isOnline;
+  String riderDisplayStatus;
   bool multipleOrders;
 
   DriverData({
@@ -778,7 +765,7 @@ class DriverData {
     required this.longitude,
     this.activeOrders = 0,
     required this.batch,
-    this.isOnline = false,
+    this.riderDisplayStatus = '⚪ Offline',
     this.multipleOrders = false,
   });
 }

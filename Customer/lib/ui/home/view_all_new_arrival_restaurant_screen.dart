@@ -128,6 +128,8 @@ class _ViewAllNewArrivalRestaurantScreenState extends State<ViewAllNewArrivalRes
             Expanded(
                 child: CachedNetworkImage(
               imageUrl: getImageVAlidUrl(vendorModel.photo),
+              memCacheWidth: 280,
+              memCacheHeight: 280,
               imageBuilder: (context, imageProvider) => Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(20),
@@ -140,8 +142,10 @@ class _ViewAllNewArrivalRestaurantScreenState extends State<ViewAllNewArrivalRes
               )),
               errorWidget: (context, url, error) => ClipRRect(
                   borderRadius: BorderRadius.circular(15),
-                  child: Image.network(
-                    AppGlobal.placeHolderImage!,
+                  child: CachedNetworkImage(
+                    imageUrl: AppGlobal.placeHolderImage!,
+                    memCacheWidth: 200,
+                    memCacheHeight: 200,
                     fit: BoxFit.cover,
                     width: MediaQuery.of(context).size.width,
                     height: MediaQuery.of(context).size.height,
@@ -262,7 +266,7 @@ class _ViewAllNewArrivalRestaurantScreenState extends State<ViewAllNewArrivalRes
 
   void _getUserLocation() async {
     setState(() {
-      position = LatLng(MyAppState.selectedPosotion.location!.latitude, MyAppState.selectedPosotion.location!.longitude);
+      position = LatLng(MyAppState.selectedPosition.location!.latitude, MyAppState.selectedPosition.location!.longitude);
     });
   }
 

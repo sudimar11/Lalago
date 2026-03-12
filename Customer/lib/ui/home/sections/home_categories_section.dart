@@ -128,10 +128,8 @@ class HomeCategoriesSection extends StatelessWidget {
                       ),
                     ),
                   ),
-                  memCacheHeight:
-                      (MediaQuery.of(context).size.height * 0.11).toInt(),
-                  memCacheWidth:
-                      (MediaQuery.of(context).size.width * 0.23).toInt(),
+                  memCacheHeight: 280,
+                  memCacheWidth: 280,
                   placeholder: (context, url) => ClipOval(
                     child: Container(
                       decoration: BoxDecoration(
@@ -153,8 +151,10 @@ class HomeCategoriesSection extends StatelessWidget {
                   ),
                   errorWidget: (context, url, error) => ClipRRect(
                     borderRadius: BorderRadius.circular(20),
-                    child: Image.network(
-                      AppGlobal.placeHolderImage!,
+                    child: CachedNetworkImage(
+                      imageUrl: AppGlobal.placeHolderImage!,
+                      memCacheWidth: 200,
+                      memCacheHeight: 200,
                       fit: BoxFit.cover,
                     ),
                   ),

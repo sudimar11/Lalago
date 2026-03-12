@@ -9,7 +9,11 @@
 
 // Import the referral functions
 const { createReferralCode, loginReferralCheck } = require('./referralCloudFunction');
+const { computeItemSimilarities } = require('./computeItemSimilarities');
+const { computeUserPreferences } = require('./computeUserPreferences');
 
 // Export the functions
 exports.createReferralCode = createReferralCode;
 exports.loginReferralCheck = loginReferralCheck;
+exports.computeItemSimilarities = computeItemSimilarities;
+exports.computeUserPreferences = computeUserPreferences;

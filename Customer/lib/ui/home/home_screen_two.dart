@@ -200,9 +200,9 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
               : const Color(0xffFAFAFA),
           body: isLoading == true
               ? Center(child: CircularProgressIndicator())
-              : MyAppState.selectedPosotion.location == null ||
-                      (MyAppState.selectedPosotion.location!.latitude == 0 &&
-                          MyAppState.selectedPosotion.location!.longitude == 0)
+              : MyAppState.selectedPosition.location == null ||
+                      (MyAppState.selectedPosition.location!.latitude == 0 &&
+                          MyAppState.selectedPosition.location!.longitude == 0)
                   ? Center(
                       child: showEmptyState(
                           "We don't have your location.", context,
@@ -239,7 +239,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                         longitude:
                                             result.geometry!.location.lng);
 
-                                    MyAppState.selectedPosotion = addressModel;
+                                    MyAppState.selectedPosition = addressModel;
 
                                     setState(() {});
 
@@ -306,7 +306,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                         value;
 
                                                     MyAppState
-                                                            .selectedPosotion =
+                                                            .selectedPosition =
                                                         addressModel;
 
                                                     setState(() {});
@@ -365,7 +365,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                                       .lng);
 
                                                               MyAppState
-                                                                      .selectedPosotion =
+                                                                      .selectedPosition =
                                                                   addressModel;
 
                                                               setState(() {});
@@ -434,7 +434,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                       });
 
                                                       MyAppState
-                                                              .selectedPosotion =
+                                                              .selectedPosition =
                                                           addressModel;
 
                                                       await hideProgress();
@@ -450,7 +450,7 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                 Expanded(
                                                     child: Text(
                                                         MyAppState
-                                                            .selectedPosotion
+                                                            .selectedPosition
                                                             .getFullAddress()
                                                             .toString(),
                                                         maxLines: 1,
@@ -747,9 +747,11 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                               (context, url) =>
                                                                   ClipOval(
                                                             child:
-                                                                Image.network(
-                                                              AppGlobal
+                                                                CachedNetworkImage(
+                                                              imageUrl: AppGlobal
                                                                   .placeHolderImage!,
+                                                              memCacheWidth: 120,
+                                                              memCacheHeight: 120,
                                                               fit: BoxFit.cover,
                                                             ),
                                                           ),
@@ -761,9 +763,11 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                                     .circular(
                                                                         20),
                                                             child:
-                                                                Image.network(
-                                                              AppGlobal
+                                                                CachedNetworkImage(
+                                                              imageUrl: AppGlobal
                                                                   .placeHolderImage!,
+                                                              memCacheWidth: 200,
+                                                              memCacheHeight: 200,
                                                               fit: BoxFit.cover,
                                                             ),
                                                           ),
@@ -1085,39 +1089,26 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                                         borderRadius:
                                                             BorderRadius
                                                                 .circular(10),
-                                                        child: Image.network(
-                                                          vendorModel.photo,
+                                                        child: CachedNetworkImage(
+                                                          imageUrl: vendorModel.photo,
                                                           height: 150,
                                                           width: 200,
+                                                          memCacheWidth: 200,
+                                                          memCacheHeight: 200,
                                                           fit: BoxFit.cover,
-                                                          loadingBuilder: (context,
-                                                              child,
-                                                              loadingProgress) {
-                                                            if (loadingProgress ==
-                                                                null)
-                                                              return child;
-
-                                                            return SizedBox(
-                                                              height: 150,
-                                                              width: 200,
-                                                              child: Center(
-                                                                child:
-                                                                    CircularProgressIndicator(
-                                                                  value: loadingProgress
-                                                                              .expectedTotalBytes !=
-                                                                          null
-                                                                      ? loadingProgress
-                                                                              .cumulativeBytesLoaded /
-                                                                          (loadingProgress.expectedTotalBytes ??
-                                                                              1)
-                                                                      : null,
-                                                                ),
-                                                              ),
-                                                            );
-                                                          },
-                                                          errorBuilder: (context,
-                                                                  error,
-                                                                  stackTrace) =>
+                                                          placeholder:
+                                                              (context, url) =>
+                                                                  SizedBox(
+                                                            height: 150,
+                                                            width: 200,
+                                                            child: Center(
+                                                              child:
+                                                                  CircularProgressIndicator
+                                                                      .adaptive(),
+                                                            ),
+                                                          ),
+                                                          errorWidget: (context,
+                                                                  url, error) =>
                                                               const Icon(
                                                             Icons.image,
                                                             size: 80,
@@ -1564,10 +1555,12 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                 Center(child: CircularProgressIndicator()),
                             errorWidget: (context, url, error) => ClipRRect(
                                 borderRadius: BorderRadius.circular(10),
-                                child: Image.network(
+                                child: CachedNetworkImage(
+                                  imageUrl: AppGlobal.placeHolderImage!,
                                   height: 120,
                                   width: 90,
-                                  AppGlobal.placeHolderImage!,
+                                  memCacheWidth: 200,
+                                  memCacheHeight: 200,
                                   fit: BoxFit.cover,
                                 )),
                           ),
@@ -1783,8 +1776,10 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
             )),
             errorWidget: (context, url, error) => ClipRRect(
                 borderRadius: BorderRadius.circular(20),
-                child: Image.network(
-                  AppGlobal.placeHolderImage!,
+                child: CachedNetworkImage(
+                  imageUrl: AppGlobal.placeHolderImage!,
+                  memCacheWidth: 200,
+                  memCacheHeight: 200,
                   width: MediaQuery.of(context).size.width * 0.75,
                   fit: BoxFit.fitWidth,
                 )),
@@ -1939,10 +1934,12 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
                                 Center(child: CircularProgressIndicator()),
                             errorWidget: (context, url, error) => ClipRRect(
                                 borderRadius: BorderRadius.circular(10),
-                                child: Image.network(
+                                child: CachedNetworkImage(
+                                  imageUrl: AppGlobal.placeHolderImage!,
                                   height: 120,
                                   width: 90,
-                                  AppGlobal.placeHolderImage!,
+                                  memCacheWidth: 200,
+                                  memCacheHeight: 200,
                                   fit: BoxFit.cover,
                                 )),
                           ),
@@ -2054,7 +2051,12 @@ class _HomeScreenTwoState extends State<HomeScreenTwo> {
               )),
               errorWidget: (context, url, error) => ClipRRect(
                   borderRadius: BorderRadius.circular(20),
-                  child: Image.network(AppGlobal.placeHolderImage!)),
+                  child: CachedNetworkImage(
+                    imageUrl: AppGlobal.placeHolderImage!,
+                    memCacheWidth: 200,
+                    memCacheHeight: 200,
+                    fit: BoxFit.cover,
+                  )),
               fit: BoxFit.cover,
             )),
             const SizedBox(height: 8),
@@ -2437,8 +2439,8 @@ class _MoreStoriesState extends State<MoreStories> {
                 double distanceInMeters = Geolocator.distanceBetween(
                     vendorModel!.latitude,
                     vendorModel.longitude,
-                    MyAppState.selectedPosotion.location!.latitude,
-                    MyAppState.selectedPosotion.location!.longitude);
+                    MyAppState.selectedPosition.location!.latitude,
+                    MyAppState.selectedPosition.location!.longitude);
 
                 double kilometer = distanceInMeters / 1000;
 
@@ -2476,8 +2478,10 @@ class _MoreStoriesState extends State<MoreStories> {
                               )),
                               errorWidget: (context, url, error) => ClipRRect(
                                   borderRadius: BorderRadius.circular(30),
-                                  child: Image.network(
-                                    AppGlobal.placeHolderImage!,
+                                  child: CachedNetworkImage(
+                                    imageUrl: AppGlobal.placeHolderImage!,
+                                    memCacheWidth: 200,
+                                    memCacheHeight: 200,
                                     fit: BoxFit.cover,
                                     width: MediaQuery.of(context).size.width,
                                     height: MediaQuery.of(context).size.height,

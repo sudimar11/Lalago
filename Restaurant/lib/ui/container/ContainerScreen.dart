@@ -1,6 +1,7 @@
+import 'dart:async';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -13,38 +14,43 @@ import 'package:foodie_restaurant/model/User.dart';
 import 'package:foodie_restaurant/model/VendorModel.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
+import 'package:foodie_restaurant/services/notification_service.dart';
 
-import 'package:foodie_restaurant/ui/add_resturant/add_resturant.dart';
 import 'package:foodie_restaurant/ui/add_story_screen.dart';
 import 'package:foodie_restaurant/ui/auth/AuthScreen.dart';
 import 'package:foodie_restaurant/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_restaurant/ui/chat_screen/inbox_screen.dart';
+import 'package:foodie_restaurant/ui/communication/order_communication_screen.dart';
 import 'package:foodie_restaurant/ui/container/message.dart';
 import 'package:foodie_restaurant/ui/manageProductsScreen/ManageProductsScreen.dart';
-import 'package:foodie_restaurant/ui/offer/offers.dart';
-import 'package:foodie_restaurant/ui/ordersScreen/OrdersScreen.dart';
-import 'package:foodie_restaurant/ui/ordersScreen/CompletedOrdersScreen.dart';
+import 'package:foodie_restaurant/ui/order_acceptance_screen.dart';
+import 'package:foodie_restaurant/ui/ordersScreen/UnifiedOrdersScreen.dart';
+import 'package:foodie_restaurant/ui/pause_screen.dart';
+import 'package:foodie_restaurant/ui/insights_screen/InsightsScreen.dart';
 import 'package:foodie_restaurant/ui/profile/ProfileScreen.dart';
+import 'package:foodie_restaurant/ui/reviews/ReviewsScreen.dart';
 import 'package:foodie_restaurant/ui/termsAndCondition/terms_and_codition.dart';
-import 'package:foodie_restaurant/ui/working_hour/working_hours_screen.dart';
+import 'package:foodie_restaurant/screens/ai_chat_screen.dart';
+import 'package:foodie_restaurant/ui/loyalty/loyalty_program_screen.dart';
+import 'package:foodie_restaurant/ui/locations/locations_screen.dart';
+
+enum BottomNavTab { orders, menu, reviews, insights, profile }
 
 enum DrawerSelection {
   Orders,
   CompletedOrders,
-  DineIn,
   ManageProducts,
   createTable,
   addStory,
-  Offers,
   SpecialOffer,
   inbox,
-  WorkingHours,
+  LoyaltyProgram,
+  Locations,
   Profile,
   Wallet,
   BankInfo,
   termsCondition,
   privacyPolicy,
-  chooseLanguage,
   Logout
 }
 
@@ -66,8 +72,8 @@ class ContainerScreen extends StatefulWidget {
       appBarTitle,
       currentWidget,
       this.drawerSelection = DrawerSelection.Orders})
-      : this.appBarTitle = appBarTitle ?? 'Orders'.tr(),
-        this.currentWidget = currentWidget ?? OrdersScreen(),
+      : this.appBarTitle = appBarTitle ?? 'Orders',
+        this.currentWidget = currentWidget ?? UnifiedOrdersScreen(),
         super(key: key);
 
   @override
@@ -80,9 +86,24 @@ class _ContainerScreen extends State<ContainerScreen> {
   User? user;
   late String _appBarTitle;
   final fireStoreUtils = FireStoreUtils();
-  Widget _currentWidget = OrdersScreen();
+
+  // Bottom nav tab state (for Phase 3)
+  int _selectedIndex = 0;
+  BottomNavTab _currentTab = BottomNavTab.orders;
+  Widget? _ordersScreen;
+  Widget? _menuScreen;
+  Widget? _reviewsScreen;
+  Widget? _insightsScreen;
+  Widget? _profileScreen;
+  int _lowStockCount = 0;
+  final _menuScreenKey = GlobalKey<ManageProductsScreenState>();
+  final _unifiedOrdersKey = GlobalKey<UnifiedOrdersScreenState>();
+
+  // Drawer overlay: when non-null, shows a drawer-only screen
+  Widget? _drawerOverlayWidget;
   DrawerSelection _drawerSelection = DrawerSelection.Orders;
   int unreadMessages = 0;
+  List<Map<String, String>> _chainLocations = [];
 
   // String _keyHash = 'Unknown';
   VendorModel? vendorModel;
@@ -94,9 +115,9 @@ class _ContainerScreen extends State<ContainerScreen> {
   //   // We also handle the message potentially returning null.
   //   try {
   //     keyHash = await FlutterFacebookKeyhash.getFaceBookKeyHash ??
-  //         'Unknown platform KeyHash'.tr();
+  //         'Unknown platform KeyHash';
   //   } on PlatformException {
-  //     keyHash = 'Failed to get Kay Hash.'.tr();
+  //     keyHash = 'Failed to get Kay Hash.';
   //   }
 
   //   // If the widget was removed from the tree while the asynchronous platform
@@ -116,6 +137,10 @@ class _ContainerScreen extends State<ContainerScreen> {
   @override
   void initState() {
     super.initState();
+    NotificationService.onPrepTimeReminder = _showPrepTimeReminderDialog;
+    NotificationService.onNewOrder = _openOrderAcceptanceScreen;
+    NotificationService.onDeclineOrder = _openOrderAcceptanceScreen;
+    NotificationService.onOpenOrderCommunication = _openOrderCommunication;
     setCurrency();
 
     // Initialize user from widget.user if available, otherwise from MyAppState
@@ -124,7 +149,26 @@ class _ContainerScreen extends State<ContainerScreen> {
       MyAppState.currentUser = widget.user;
     }
 
+    // Initialize bottom nav tab screens (for Phase 3)
+    _ordersScreen = UnifiedOrdersScreen(key: _unifiedOrdersKey);
+    _menuScreen = ManageProductsScreen(
+      key: _menuScreenKey,
+      onLowStockCountChanged: (n) {
+        if (mounted && _lowStockCount != n) {
+          setState(() => _lowStockCount = n);
+        }
+      },
+    );
+    _reviewsScreen = ReviewsScreen();
+    _insightsScreen = InsightsScreen();
+    if (user != null) {
+      _profileScreen = ProfileScreen(user: user!);
+    }
+
     listenForUnreadMessages();
+    if (user?.role == USER_ROLE_CHAIN_ADMIN && (user?.chainId ?? '').isNotEmpty) {
+      _loadChainLocations();
+    }
 
     // Get user data if not already available
     if (user == null) {
@@ -133,8 +177,10 @@ class _ContainerScreen extends State<ContainerScreen> {
               : MyAppState.currentUser!.userID)
           .then((value) {
         setState(() {
-          user = value!;
-          MyAppState.currentUser = value;
+          final u = value!;
+          user = u;
+          MyAppState.currentUser = u;
+          _profileScreen ??= ProfileScreen(user: u);
         });
       });
     }
@@ -153,7 +199,7 @@ class _ContainerScreen extends State<ContainerScreen> {
     getSpecialDiscount();
 
     //getKeyHash();
-    _appBarTitle = 'Orders'.tr();
+    _appBarTitle = 'Orders';
     fireStoreUtils.getplaceholderimage();
     // print(MyAppState.currentUser!.vendorID);
 
@@ -166,6 +212,92 @@ class _ContainerScreen extends State<ContainerScreen> {
       criticalAlert: false,
       provisional: false,
       sound: true,
+    );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 800), () {
+        if (mounted) {
+          NotificationService.showEnableNotificationsDialogIfNeeded(context);
+        }
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    NotificationService.onPrepTimeReminder = null;
+    NotificationService.onNewOrder = null;
+    NotificationService.onDeclineOrder = null;
+    NotificationService.onOpenOrderCommunication = null;
+    super.dispose();
+  }
+
+  void _openOrderAcceptanceScreen(String orderId) {
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => OrderAcceptanceScreen(orderId: orderId),
+      ),
+    );
+  }
+
+  void _showPrepTimeReminderDialog(String orderId, String minutes) {
+    if (!mounted) return;
+    final shortId = orderId.length > 8 ? orderId.substring(0, 8) : orderId;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Order Almost Ready'),
+        content: Text(
+          'Order #$shortId will be ready in $minutes minutes.\n\n'
+          'Please mark it as ready to notify the rider.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('DISMISS'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                _drawerSelection = DrawerSelection.Orders;
+                _drawerOverlayWidget = null;
+                _selectedIndex = 0;
+                _currentTab = BottomNavTab.orders;
+                _appBarTitle = 'Orders';
+              });
+            },
+            child: const Text('VIEW ORDER'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openOrderCommunication(String orderId) async {
+    if (!mounted) return;
+    final orderSnap = await FirebaseFirestore.instance
+        .collection('restaurant_orders')
+        .doc(orderId)
+        .get();
+    if (!mounted || !orderSnap.exists) return;
+    final data = orderSnap.data() ?? {};
+    final riderId = (data['driverID'] ?? data['driverId'] ?? '').toString();
+    final vendorId = (data['vendorID'] ?? '').toString();
+    final customerId = (data['authorID'] ?? data['authorId'] ?? '').toString();
+    if (riderId.isEmpty || vendorId.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => OrderCommunicationScreen(
+          orderId: orderId,
+          riderId: riderId,
+          vendorId: vendorId,
+          customerId: customerId,
+        ),
+      ),
     );
   }
 
@@ -187,13 +319,13 @@ class _ContainerScreen extends State<ContainerScreen> {
         String chatDocId = chatDoc.id;
 
         // Query the subcollection "thread" for messages
-        // where receiverId == vendorId AND isread == false
+        // where receiverId == vendorId AND isRead == false
         QuerySnapshot threadSnapshot = await FirebaseFirestore.instance
             .collection("chat_restaurant")
             .doc(chatDocId)
             .collection("thread")
             .where("receiverId", isEqualTo: vendorId)
-            .where("isread", isEqualTo: false) // <-- use "isread"
+            .where("isRead", isEqualTo: false)
             .get();
 
         // Count how many unread messages we have
@@ -221,13 +353,13 @@ class _ContainerScreen extends State<ContainerScreen> {
   ) async {
     print("📌 Opening chat for Order ID: $orderId");
 
-    // Fetch unread messages (where isread == false) for this order
+    // Fetch unread messages (where isRead == false) for this order
     var unreadMessagesSnapshot = await FirebaseFirestore.instance
         .collection("chat_restaurant")
         .doc(orderId)
         .collection("thread")
         .where("receiverId", isEqualTo: restaurantId)
-        .where("isread", isEqualTo: false) // <-- use "isread"
+        .where("isRead", isEqualTo: false)
         .get();
 
     print("🔹 Unread messages found: ${unreadMessagesSnapshot.docs.length}");
@@ -239,7 +371,7 @@ class _ContainerScreen extends State<ContainerScreen> {
 
     // Mark all unread messages as read
     for (var doc in unreadMessagesSnapshot.docs) {
-      await doc.reference.update({"isread": true}); // <-- use "isread"
+      await doc.reference.update({"isRead": true});
     }
 
     Navigator.push(
@@ -300,19 +432,101 @@ class _ContainerScreen extends State<ContainerScreen> {
 
   DateTime preBackpress = DateTime.now();
 
+  Future<void> _loadChainLocations() async {
+    final chainId = user?.chainId ?? MyAppState.currentUser?.chainId;
+    if (chainId == null || chainId.isEmpty) return;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection(VENDORS)
+          .where('chainId', isEqualTo: chainId)
+          .get();
+      if (!mounted) return;
+      setState(() {
+        _chainLocations = snap.docs.map((d) {
+          final data = d.data();
+          return {
+            'id': d.id,
+            'title': (data['title'] ?? '').toString(),
+          };
+        }).toList();
+      });
+    } catch (_) {}
+  }
+
   void setExit(bool value) {
     setState(() {
       widget.isExit = value;
     });
   }
 
+  void _onTabTapped(int index) {
+    setState(() {
+      _drawerOverlayWidget = null;
+      _selectedIndex = index;
+      _currentTab = BottomNavTab.values[index];
+      switch (_currentTab) {
+        case BottomNavTab.orders:
+          _appBarTitle = 'Orders';
+          break;
+        case BottomNavTab.menu:
+          _appBarTitle = 'Your Products';
+          break;
+        case BottomNavTab.reviews:
+          _appBarTitle = 'Reviews';
+          break;
+        case BottomNavTab.insights:
+          _appBarTitle = 'Insights';
+          break;
+        case BottomNavTab.profile:
+          _appBarTitle = 'Profile';
+          break;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar:
-          _drawerSelection == DrawerSelection.Wallet ? true : false,
-      backgroundColor: isDarkMode(context) ? Color(COLOR_DARK) : null,
-      drawer: Drawer(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        if (_drawerOverlayWidget != null) {
+          setState(() {
+            _drawerOverlayWidget = null;
+            _selectedIndex = 0;
+            _currentTab = BottomNavTab.orders;
+            _appBarTitle = 'Orders';
+          });
+          return;
+        }
+        if (_selectedIndex != 0) {
+          setState(() {
+            _selectedIndex = 0;
+            _currentTab = BottomNavTab.orders;
+            _appBarTitle = 'Orders';
+          });
+          return;
+        }
+        final timeGap = DateTime.now().difference(preBackpress);
+        final shouldExit = timeGap >= const Duration(seconds: 2);
+        preBackpress = DateTime.now();
+        if (!shouldExit) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Press Back button again to Exit'),
+              duration: const Duration(seconds: 2),
+              backgroundColor: Colors.black,
+            ),
+          );
+        } else {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+        extendBodyBehindAppBar:
+            _drawerSelection == DrawerSelection.Wallet ? true : false,
+        backgroundColor: isDarkMode(context) ? Color(COLOR_DARK) : null,
+        drawer: Drawer(
           child: Container(
         color: isDarkMode(context) ? Color(COLOR_DARK) : null,
         child: ListView(
@@ -353,106 +567,35 @@ class _ContainerScreen extends State<ContainerScreen> {
               style: ListTileStyle.drawer,
               selectedColor: Color(COLOR_PRIMARY),
               child: ListTile(
-                selected: _drawerSelection == DrawerSelection.Orders,
-                title: Text('Orders').tr(),
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(
-                    () {
-                      _drawerSelection = DrawerSelection.Orders;
-                      _appBarTitle = 'Orders'.tr();
-                      _currentWidget = OrdersScreen();
-                    },
-                  );
-                },
-                leading: Image.asset(
-                  'assets/images/app_logo.png',
-                  color: _drawerSelection == DrawerSelection.Orders
-                      ? Color(COLOR_PRIMARY)
-                      : isDarkMode(context)
-                          ? Colors.grey.shade200
-                          : Colors.grey.shade600,
-                  width: 24,
-                  height: 24,
-                ),
-              ),
-            ),
-            ListTileTheme(
-              style: ListTileStyle.drawer,
-              selectedColor: Color(COLOR_PRIMARY),
-              child: ListTile(
                 selected: _drawerSelection == DrawerSelection.CompletedOrders,
-                title: Text('Completed Orders').tr(),
+                title: Text('Completed Orders'),
                 onTap: () {
                   Navigator.pop(context);
-                  setState(
-                    () {
-                      _drawerSelection = DrawerSelection.CompletedOrders;
-                      _appBarTitle = 'Completed Orders'.tr();
-                      _currentWidget = CompletedOrdersScreen();
-                    },
-                  );
+                  setState(() {
+                    _drawerSelection = DrawerSelection.CompletedOrders;
+                    _appBarTitle = 'Completed Orders';
+                    _drawerOverlayWidget = null;
+                    _selectedIndex = 0;
+                    _currentTab = BottomNavTab.orders;
+                    _unifiedOrdersKey.currentState?.switchToTab(OrdersTab.completed);
+                  });
                 },
                 leading: Icon(Icons.check_circle),
               ),
             ),
 
-            ListTileTheme(
-              style: ListTileStyle.drawer,
-              selectedColor: Color(COLOR_PRIMARY),
-              child: ListTile(
-                selected: _drawerSelection == DrawerSelection.DineIn,
-                leading: Icon(Icons.restaurant_outlined),
-                title: Text('Restaurant Information').tr(),
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(() {
-                    _drawerSelection = DrawerSelection.DineIn;
-                    _appBarTitle = 'Restaurant Information'.tr();
-                    _currentWidget = AddRestaurantScreen();
-                  });
-                  //Navigator.push(
-                  //  context,
-                  //  MaterialPageRoute(
-                  //    builder: (_) => MessageBadgePage(
-                  //      vendorId:
-                  //          vendorModel?.id ?? MyAppState.currentUser!.vendorID,
-                  //    ),
-                  //  ),
-                  //);
-                },
-              ),
-            ),
-
-            ListTileTheme(
-              style: ListTileStyle.drawer,
-              selectedColor: Color(COLOR_PRIMARY),
-              child: ListTile(
-                selected: _drawerSelection == DrawerSelection.ManageProducts,
-                leading: FaIcon(FontAwesomeIcons.pizzaSlice),
-                title: Text('Manage Products').tr(),
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(() {
-                    _drawerSelection = DrawerSelection.ManageProducts;
-                    _appBarTitle = 'Your Products'.tr();
-                    _currentWidget = ManageProductsScreen();
-                  });
-                },
-              ),
-            ),
             //ListTileTheme(
             //  style: ListTileStyle.drawer,
             //  selectedColor: Color(COLOR_PRIMARY),
             //  child: ListTile(
             //    selected: _drawerSelection == DrawerSelection.createTable,
-            //    title: Text('Create Table'.tr()),
+            //    title: Text('Create Table'),
             //    onTap: () {
             //      Navigator.pop(context);
             //      setState(
             //        () {
             //          _drawerSelection = DrawerSelection.createTable;
-            //          _appBarTitle = 'Create Table'.tr();
+            //          _appBarTitle = 'Create Table';
             //          _currentWidget = const CreateTable();
             //        },
             //      );
@@ -460,49 +603,6 @@ class _ContainerScreen extends State<ContainerScreen> {
             //    leading: const Icon(CupertinoIcons.table_badge_more),
             //  ),
             //),
-            ListTileTheme(
-              style: ListTileStyle.drawer,
-              selectedColor: Color(COLOR_PRIMARY),
-              child: ListTile(
-                selected: _drawerSelection == DrawerSelection.Offers,
-                leading: Icon(Icons.local_offer_outlined),
-                title: Text('Promo Offers').tr(),
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(() {
-                    _drawerSelection = DrawerSelection.Offers;
-                    _appBarTitle = 'Offers'.tr();
-                    _currentWidget = OffersScreen();
-                  });
-                },
-              ),
-            ),
-            ListTileTheme(
-              style: ListTileStyle.drawer,
-              selectedColor: Color(COLOR_PRIMARY),
-              child: ListTile(
-                selected: _drawerSelection == DrawerSelection.WorkingHours,
-                leading: Icon(Icons.access_time_sharp),
-                title: Text('Working Hours').tr(),
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(() {
-                    String? vendorId =
-                        user?.vendorID ?? MyAppState.currentUser?.vendorID;
-                    if (vendorId != null && vendorId.isNotEmpty) {
-                      _drawerSelection = DrawerSelection.WorkingHours;
-                      _appBarTitle = 'Working Hours'.tr();
-                      _currentWidget = WorkingHoursScreen();
-                    } else {
-                      final snackBar = SnackBar(
-                        content: const Text('Please add restaurant first.'),
-                      );
-                      ScaffoldMessenger.of(context).showSnackBar(snackBar);
-                    }
-                  });
-                },
-              ),
-            ),
             Visibility(
               visible: storyEnable == true ? true : false,
               child: ListTileTheme(
@@ -511,7 +611,7 @@ class _ContainerScreen extends State<ContainerScreen> {
                 child: ListTile(
                   selected: _drawerSelection == DrawerSelection.addStory,
                   leading: Icon(Icons.ad_units),
-                  title: Text('Add Story').tr(),
+                  title: Text('Add Story'),
                   onTap: () {
                     Navigator.pop(context);
                     setState(() {
@@ -519,8 +619,8 @@ class _ContainerScreen extends State<ContainerScreen> {
                           user?.vendorID ?? MyAppState.currentUser?.vendorID;
                       if (vendorId != null && vendorId.isNotEmpty) {
                         _drawerSelection = DrawerSelection.addStory;
-                        _appBarTitle = 'Add Story'.tr();
-                        _currentWidget = AddStoryScreen();
+                        _appBarTitle = 'Add Story';
+                        _drawerOverlayWidget = AddStoryScreen();
                       } else {
                         final snackBar = SnackBar(
                           content: const Text('Please add restaurant first.'),
@@ -538,13 +638,13 @@ class _ContainerScreen extends State<ContainerScreen> {
             //  child: ListTile(
             //    selected: _drawerSelection == DrawerSelection.SpecialOffer,
             //    leading: Icon(Icons.local_offer_outlined),
-            //    title: Text('special_discount').tr(),
+            //    title: Text('special_discount'),
             //    onTap: () {
             //      Navigator.pop(context);
             //      setState(() {
             //        if (specialDiscountEnable) {
             //          _drawerSelection = DrawerSelection.SpecialOffer;
-            //          _appBarTitle = 'special_discount'.tr();
+            //          _appBarTitle = 'special_discount';
             //          _currentWidget = SpecialOfferScreen();
             //        } else {
             //          final snackBar = SnackBar(
@@ -596,7 +696,7 @@ class _ContainerScreen extends State<ContainerScreen> {
                       ),
                   ],
                 ),
-                title: Text('Inbox').tr(),
+                title: Text('Inbox'),
                 onTap: () {
                   if (MyAppState.currentUser == null) {
                     Navigator.pop(context);
@@ -605,45 +705,26 @@ class _ContainerScreen extends State<ContainerScreen> {
                     Navigator.pop(context);
                     setState(() {
                       _drawerSelection = DrawerSelection.inbox;
-                      _appBarTitle = 'My Inbox'.tr();
-                      _currentWidget = InboxScreen();
+                      _appBarTitle = 'My Inbox';
+                      _drawerOverlayWidget = InboxScreen();
                     });
                   }
                 },
               ),
             ),
 
-            ListTileTheme(
-              style: ListTileStyle.drawer,
-              selectedColor: Color(COLOR_PRIMARY),
-              child: ListTile(
-                selected: _drawerSelection == DrawerSelection.Profile,
-                leading: Icon(CupertinoIcons.person),
-                title: Text('Profile').tr(),
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(() {
-                    _drawerSelection = DrawerSelection.Profile;
-                    _appBarTitle = 'Profile'.tr();
-                    _currentWidget = ProfileScreen(
-                      user: user!,
-                    );
-                  });
-                },
-              ),
-            ),
             //ListTileTheme(
             //  style: ListTileStyle.drawer,
             //  selectedColor: Color(COLOR_PRIMARY),
             //  child: ListTile(
             //    selected: _drawerSelection == DrawerSelection.Wallet,
             //    leading: Icon(Icons.account_balance_wallet_sharp),
-            //    title: Text('Wallet').tr(),
+            //    title: Text('Wallet'),
             //    onTap: () {
             //      Navigator.pop(context);
             //      setState(() {
             //        _drawerSelection = DrawerSelection.Wallet;
-            //        _appBarTitle = 'Wallet'.tr();
+            //        _appBarTitle = 'Wallet';
             //        _currentWidget = WalletScreen();
             //      });
             //    },
@@ -655,39 +736,13 @@ class _ContainerScreen extends State<ContainerScreen> {
             //  child: ListTile(
             //    selected: _drawerSelection == DrawerSelection.BankInfo,
             //    leading: Icon(Icons.account_balance),
-            //    title: Text('Bank Details').tr(),
+            //    title: Text('Bank Details'),
             //    onTap: () {
             //      Navigator.pop(context);
             //      setState(() {
             //        _drawerSelection = DrawerSelection.BankInfo;
-            //        _appBarTitle = 'Bank Info'.tr();
+            //        _appBarTitle = 'Bank Info';
             //        _currentWidget = BankDetailsScreen();
-            //      });
-            //    },
-            //  ),
-            //),
-            //ListTileTheme(
-            //  style: ListTileStyle.drawer,
-            //  selectedColor: Color(COLOR_PRIMARY),
-            //  child: ListTile(
-            //    selected: _drawerSelection == DrawerSelection.chooseLanguage,
-            //    leading: Icon(
-            //      Icons.language,
-            //      color: _drawerSelection == DrawerSelection.chooseLanguage
-            //          ? Color(COLOR_PRIMARY)
-            //          : isDarkMode(context)
-            //              ? Colors.grey.shade200
-            //              : Colors.grey.shade600,
-            //    ),
-            //    title: const Text('Language').tr(),
-            //    onTap: () {
-            //      Navigator.pop(context);
-            //      setState(() {
-            //        _drawerSelection = DrawerSelection.chooseLanguage;
-            //        _appBarTitle = 'Language'.tr();
-            //        _currentWidget = LanguageChooseScreen(
-            //          isContainer: true,
-            //        );
             //      });
             //    },
             //  ),
@@ -696,9 +751,46 @@ class _ContainerScreen extends State<ContainerScreen> {
               style: ListTileStyle.drawer,
               selectedColor: Color(COLOR_PRIMARY),
               child: ListTile(
+                selected: _drawerSelection == DrawerSelection.LoyaltyProgram,
+                leading: const Icon(Icons.card_giftcard),
+                title: const Text('Loyalty Program'),
+                onTap: () {
+                  Navigator.pop(context);
+                  setState(() {
+                    _drawerSelection = DrawerSelection.LoyaltyProgram;
+                    _appBarTitle = 'Loyalty Program';
+                    _drawerOverlayWidget =
+                        const LoyaltyProgramScreen();
+                  });
+                },
+              ),
+            ),
+            if (user?.role == USER_ROLE_CHAIN_ADMIN)
+              ListTileTheme(
+                style: ListTileStyle.drawer,
+                selectedColor: Color(COLOR_PRIMARY),
+                child: ListTile(
+                  selected: _drawerSelection == DrawerSelection.Locations,
+                  leading: const Icon(Icons.store),
+                  title: const Text('Locations'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() {
+                      _drawerSelection = DrawerSelection.Locations;
+                      _appBarTitle = 'Locations';
+                      _drawerOverlayWidget =
+                          const LocationsScreen();
+                    });
+                  },
+                ),
+              ),
+            ListTileTheme(
+              style: ListTileStyle.drawer,
+              selectedColor: Color(COLOR_PRIMARY),
+              child: ListTile(
                 selected: _drawerSelection == DrawerSelection.termsCondition,
                 leading: const Icon(Icons.policy),
-                title: const Text('Terms and Condition').tr(),
+                title: const Text('Terms and Condition'),
                 onTap: () async {
                   push(context, const TermsAndCondition());
                 },
@@ -710,7 +802,7 @@ class _ContainerScreen extends State<ContainerScreen> {
             //  child: ListTile(
             //    selected: _drawerSelection == DrawerSelection.privacyPolicy,
             //    leading: const Icon(Icons.privacy_tip),
-            //    title: const Text('Privacy policy').tr(),
+            //    title: const Text('Privacy policy'),
             //    onTap: () async {
             //      push(context, const PrivacyPolicyScreen());
             //    },
@@ -722,12 +814,20 @@ class _ContainerScreen extends State<ContainerScreen> {
               child: ListTile(
                 selected: _drawerSelection == DrawerSelection.Logout,
                 leading: Icon(Icons.logout),
-                title: Text('Log out').tr(),
+                title: Text('Log out'),
                 onTap: () async {
                   audioPlayer.stop();
                   Navigator.pop(context);
                   //user.active = false;
                   user!.lastOnlineTimestamp = Timestamp.now();
+                  if (user!.fcmToken.isNotEmpty) {
+                    unawaited(FireStoreUtils.removeFcmToken(
+                      user!.userID,
+                      user!.fcmToken,
+                      vendorId:
+                          user!.vendorID.isEmpty ? null : user!.vendorID,
+                    ));
+                  }
                   await FireStoreUtils.firestore
                       .collection(USERS)
                       .doc(user!.userID)
@@ -764,6 +864,60 @@ class _ContainerScreen extends State<ContainerScreen> {
                 ? Color(DARK_VIEWBG_COLOR)
                 : Colors.white,
         actions: [
+          if (user?.role == USER_ROLE_CHAIN_ADMIN && _chainLocations.isNotEmpty)
+            PopupMenuButton<String>(
+              icon: Icon(
+                Icons.store,
+                color: _drawerSelection == DrawerSelection.Wallet
+                    ? Colors.white
+                    : (isDarkMode(context) ? Colors.white : Colors.black),
+              ),
+              onSelected: (id) {
+                MyAppState.selectedLocationId =
+                    id.isEmpty ? null : id;
+                setState(() {});
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: '',
+                  child: Row(
+                    children: [
+                      Icon(Icons.all_inclusive, size: 20),
+                      SizedBox(width: 12),
+                      Text('All Locations'),
+                    ],
+                  ),
+                ),
+                ..._chainLocations.map((loc) => PopupMenuItem(
+                      value: loc['id'] ?? '',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.store, size: 20),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text(loc['title'] ?? '')),
+                        ],
+                      ),
+                    )),
+              ],
+            ),
+          if (_currentTab == BottomNavTab.orders) ...[
+            IconButton(
+              icon: Icon(Icons.upload_file),
+              onPressed: () =>
+                  _unifiedOrdersKey.currentState?.showExportSheet(),
+            ),
+            IconButton(
+              icon: Icon(Icons.filter_list),
+              onPressed: () =>
+                  _unifiedOrdersKey.currentState?.showFilterSheet(),
+            ),
+          ],
+          if (_currentTab == BottomNavTab.menu)
+            IconButton(
+              icon: Icon(Icons.checklist),
+              onPressed: () =>
+                  _menuScreenKey.currentState?.toggleSelectionMode(),
+            ),
           // if (_currentWidget is ManageProductsScreen)
           // IconButton(
           //   icon: Icon(
@@ -788,28 +942,124 @@ class _ContainerScreen extends State<ContainerScreen> {
           ),
         ),
       ),
-      body: PopScope(
-          onPopInvokedWithResult: (cantExit, dynamic) async {
-            final timeGap = DateTime.now().difference(preBackpress);
-            final cantExit = timeGap >= Duration(seconds: 2);
-            preBackpress = DateTime.now();
-            if (cantExit) {
-              //show snackbar
-              final snack = SnackBar(
-                content: Text(
-                  'Press Back button again to Exit',
-                  style: TextStyle(color: Colors.white),
+        body: _buildBody(),
+        floatingActionButton: _currentTab == BottomNavTab.menu
+            ? null
+            : Tooltip(
+                message: 'Ask Ash',
+                child: FloatingActionButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const AiChatScreen(),
+                    ),
+                  ),
+                  backgroundColor: Color(COLOR_PRIMARY),
+                  child: const Icon(Icons.assistant, color: Colors.white),
                 ),
-                duration: Duration(seconds: 2),
-                backgroundColor: Colors.black,
-              );
-              ScaffoldMessenger.of(context).showSnackBar(snack);
-              return setExit(false); // false will do nothing when back press
-            } else {
-              return setExit(true); // true will exit the app
-            }
-          },
-          child: _currentWidget),
+              ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        bottomNavigationBar: BottomNavigationBar(
+          currentIndex: _selectedIndex,
+          onTap: _onTabTapped,
+          type: BottomNavigationBarType.fixed,
+          backgroundColor:
+              isDarkMode(context) ? Color(COLOR_DARK) : Colors.white,
+          selectedItemColor: Color(COLOR_PRIMARY),
+          unselectedItemColor:
+              isDarkMode(context) ? Colors.grey[400] : Colors.grey[600],
+          items: [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.receipt_long),
+              label: 'Orders',
+            ),
+            BottomNavigationBarItem(
+              icon: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(Icons.restaurant_menu),
+                  if (_lowStockCount > 0)
+                    Positioned(
+                      right: -4,
+                      top: -4,
+                      child: Container(
+                        padding: EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                        ),
+                        constraints: BoxConstraints(minWidth: 18, minHeight: 18),
+                        child: Text(
+                          '$_lowStockCount',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              label: 'Menu',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.star),
+              label: 'Reviews',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.insights),
+              label: 'Insights',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.person),
+              label: 'Profile',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    final bodyChild = _drawerOverlayWidget ??
+        IndexedStack(
+          index: _selectedIndex,
+          children: [
+            _ordersScreen ?? UnifiedOrdersScreen(),
+            _menuScreen ?? ManageProductsScreen(),
+            _reviewsScreen ?? ReviewsScreen(),
+            _insightsScreen ?? InsightsScreen(),
+            _profileScreen ??
+                (user != null
+                    ? ProfileScreen(user: user!)
+                    : Center(child: CircularProgressIndicator())),
+          ],
+        );
+
+    final vendorId = user?.vendorID ?? MyAppState.currentUser?.vendorID;
+    if (vendorId == null || vendorId.isEmpty) {
+      return bodyChild;
+    }
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FireStoreUtils.firestore
+          .collection(VENDORS)
+          .doc(vendorId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final autoPause =
+            (snapshot.data?.data() as Map<String, dynamic>? ?? {})['autoPause']
+                as Map<String, dynamic>? ??
+            {};
+        final isPaused = autoPause['isPaused'] == true;
+
+        if (isPaused) {
+          return PauseScreen(vendorId: vendorId);
+        }
+
+        return bodyChild;
+      },
     );
   }
 }

@@ -3,6 +3,15 @@ service cloud.firestore {
   match /databases/{database}/documents {
     // Temporary rules for testing
     // WARNING: These rules are NOT for production use
+    // Validate riderAvailability values on user documents
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && (!('riderAvailability' in request.resource.data) ||
+            request.resource.data.riderAvailability in
+            ['available', 'on_delivery', 'on_break', 'offline']);
+    }
+
     match /{document=**} {
       // Reads remain open for now; writes require authentication.
       allow read: if true;
@@ -68,7 +77,254 @@ service cloud.firestore {
     // progress; Cloud Function (Admin SDK) updates them. Allow auth users.
     match /notification_jobs/{jobId} {
       allow create, read: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if false;
+    }
+
+    // Bundle Deals: read for all (Customer/Rider), write for authenticated (Admin)
+    match /bundles/{bundleId} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null;
+    }
+
+    // Bundle analytics: read for authenticated (reporting), write only via Cloud Functions
+    match /bundle_analytics/{docId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // PAUTOS orders: customer creates/reads own; rider reads available or assigned
+    match /pautos_orders/{orderId} {
+      allow read: if request.auth != null
+        && (resource.data.authorID == request.auth.uid
+            || resource.data.driverID == request.auth.uid
+            || !('driverID' in resource.data)
+            || resource.data.driverID == null
+            || resource.data.driverID == '');
+      allow create: if request.auth != null
+        && request.resource.data.authorID == request.auth.uid;
+      allow update: if request.auth != null
+        && (resource.data.authorID == request.auth.uid
+            || resource.data.driverID == request.auth.uid
+            || (request.resource.data.driverID == request.auth.uid
+                && (!('driverID' in resource.data)
+                    || resource.data.driverID == null)));
+      allow delete: if false;
+
+      // Substitution requests subcollection
+      match /substitution_requests/{requestId} {
+        allow read: if request.auth != null
+          && (get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.authorID == request.auth.uid
+              || get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.driverID == request.auth.uid);
+        allow create: if request.auth != null
+          && get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.driverID == request.auth.uid;
+        allow update: if request.auth != null
+          && (get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.authorID == request.auth.uid
+              || get(/databases/$(database)/documents/pautos_orders/$(orderId)).data.driverID == request.auth.uid);
+        allow delete: if false;
+      }
+    }
+
+    // PAUTOS dispute audit logs: read for authenticated (admin), write via Cloud Functions only
+    match /pautos_disputes/{docId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // Add-on Promos: read for all (Customer/Rider), write for authenticated (Admin)
+    match /addon_promos/{promoId} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null;
+    }
+
+    // Add-on promo analytics: write only via Cloud Functions
+    match /addon_promo_analytics/{docId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // Dispatch settings: admin read/write for auto-dispatch toggle
+    match /config/dispatch_settings {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Restaurant order settings (device status, SMS contact, timeout)
+    match /vendors/{vendorId}/settings/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Ash scheduled notifications: user can read/create/update/delete own docs
+    match /ash_scheduled_notifications/{notificationId} {
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // Ash notification history: user can read own; create via Cloud Functions only
+    match /ash_notification_history/{historyId} {
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow create: if false;
+      allow update: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // User carts: user can read/write own cart for cart recovery sync
+    match /user_carts/{userId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == userId;
+    }
+
+    // Cart recovery analytics: read for admin, write via Cloud Functions only
+    match /cart_recovery_analytics/{doc} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // Order failures: admin/Cloud Functions only (write by Cloud Functions)
+    match /order_failures/{failure} {
+      allow read, write: if false;
+    }
+
+    // Retry attempts: admin/Cloud Functions only
+    match /retry_attempts/{attempt} {
+      allow read, write: if false;
+    }
+
+    // Idempotency keys: Cloud Functions only (placeOrderWithDispatch)
+    match /idempotency_keys/{key} {
+      allow read, write: if false;
+    }
+
+    // Trending products: read for all, write via Cloud Functions only
+    match /trending_products/{product} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Recommendation feedback: authenticated users create own feedback
+    match /recommendation_feedback/{feedback} {
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if false;
+    }
+
+    // A/B tests: read for authenticated, write admin only
+    match /ab_tests/{test} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // A/B assignments: user can read own, write via Cloud Functions only
+    match /ab_assignments/{assignment} {
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    // Notification action stats: read for admin, write via Cloud Functions only
+    match /action_stats/{stat} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Notification action analytics: read for admin, write via Cloud Functions only
+    match /action_analytics/{analytic} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Ash voice metrics: read for admin, write via Cloud Functions only
+    match /ash_voice_metrics/{metric} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Ash voice analysis: read for admin, write via Cloud Functions only
+    match /ash_voice_analysis/{analysis} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Audit logs: read for authenticated (admin), create/write via Cloud Functions only
+    match /audit_logs/{logId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if false;
+    }
+
+    // Analytics aggregates: read for authenticated, write via Cloud Functions only
+    match /notification_aggregates/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /user_daily_metrics/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /revenue_daily_metrics/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /ltv_aggregates/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    match /ab_test_results/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Analytics events: create for authenticated, read for authenticated
+    match /notification_actions/{doc} {
+      allow read, create: if request.auth != null;
       allow update, delete: if false;
+    }
+    match /conversion_events/{doc} {
+      allow read, create: if request.auth != null;
+      allow update, delete: if false;
+    }
+    match /user_engagement/{doc} {
+      allow read, create: if request.auth != null;
+      allow update, delete: if false;
+    }
+    match /funnel_steps/{doc} {
+      allow read, create: if request.auth != null;
+      allow update, delete: if false;
+    }
+
+    // Weekly reports: read for authenticated (admin)
+    match /weekly_reports/{doc} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Gift cards: templates (no code) readable by auth users; cards readable if owned
+    match /gift_cards/{cardId} {
+      allow read: if request.auth != null
+        && (
+            !('code' in resource.data)
+            || resource.data.ownedBy == request.auth.uid
+            || resource.data.purchasedBy == request.auth.uid
+        );
+      allow create, update, delete: if false;
+    }
+
+    // Gift card transactions: read own (userId); write via Cloud Functions only
+    match /gift_card_transactions/{txId} {
+      allow read: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    // Gift card config: read for authenticated, write for admin
+    match /settings/giftCardConfig {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
     }
 
     // TODO: Replace with proper security rules before production deployment

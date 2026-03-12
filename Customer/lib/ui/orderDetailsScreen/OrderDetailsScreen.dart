@@ -21,14 +21,21 @@ import 'package:foodie_customer/model/TaxModel.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/variant_info.dart';
+import 'package:foodie_customer/model/bundle_model.dart';
+import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/ordertracknew.dart';
+import 'package:foodie_customer/ui/orderDetailsScreen/ReportIssueScreen.dart';
+import 'package:foodie_customer/utils/order_status_messages.dart';
+import 'package:foodie_customer/widget/order_eta_badge.dart';
+import 'package:foodie_customer/widget/order_status_progress_bar.dart';
 import 'package:foodie_customer/ui/ordersScreen/OrdersScreen.dart';
 import 'package:foodie_customer/ui/reviewScreen.dart/reviewScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
+import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 // Removed Google Maps/Directions client usage from this screen
 import 'package:lottie/lottie.dart' as lottie;
 import 'package:provider/provider.dart';
@@ -36,10 +43,60 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/localDatabase.dart';
 
+/// Entry for order product list: either a bundle header or a product.
+class _OrderListEntry {
+  final bool isBundleHeader;
+  final String? bundleName;
+  final CartProduct? product;
+
+  _OrderListEntry.bundleHeader(this.bundleName)
+      : isBundleHeader = true,
+        product = null;
+
+  _OrderListEntry.item(this.product)
+      : isBundleHeader = false,
+        bundleName = null;
+}
+
+List<_OrderListEntry> _orderProductEntries(List<CartProduct> products) {
+  final List<_OrderListEntry> entries = [];
+  for (int i = 0; i < products.length; i++) {
+    final p = products[i];
+    final bid = p.bundleId;
+    final bname = p.bundleName;
+    if (bid != null &&
+        bid.isNotEmpty &&
+        (i == 0 || products[i - 1].bundleId != bid)) {
+      entries.add(_OrderListEntry.bundleHeader(bname ?? 'Bundle'));
+    }
+    entries.add(_OrderListEntry.item(p));
+  }
+  return entries;
+}
+
+class OrderStatusStage {
+  final String status;
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  const OrderStatusStage({
+    required this.status,
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+}
+
 class OrderDetailsScreen extends StatefulWidget {
   final OrderModel orderModel;
+  final bool fromNotification;
 
-  OrderDetailsScreen({Key? key, required this.orderModel}) : super(key: key);
+  OrderDetailsScreen({
+    Key? key,
+    required this.orderModel,
+    this.fromNotification = false,
+  }) : super(key: key);
 
   @override
   _OrderDetailsScreenState createState() => _OrderDetailsScreenState();
@@ -77,8 +134,6 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   late String storeName;
 
   late String phoneNumberStore;
-
-  String currentEvent = '';
 
   double total = 0.0;
 
@@ -236,6 +291,294 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
     }
   }
 
+  static const List<OrderStatusStage> _orderStatusStages = [
+    OrderStatusStage(
+      status: 'Order Placed',
+      label: 'Order Placed',
+      icon: Icons.receipt_long_rounded,
+      color: Colors.blue,
+    ),
+    OrderStatusStage(
+      status: 'Order Accepted',
+      label: 'Order Accepted',
+      icon: Icons.check_circle_outline_rounded,
+      color: Colors.green,
+    ),
+    OrderStatusStage(
+      status: 'Driver Assigned',
+      label: 'Driver Assigned',
+      icon: Icons.person_pin_circle_rounded,
+      color: Colors.orange,
+    ),
+    OrderStatusStage(
+      status: 'Driver Accepted',
+      label: 'Driver Accepted',
+      icon: Icons.delivery_dining,
+      color: Colors.teal,
+    ),
+    OrderStatusStage(
+      status: 'Order Shipped',
+      label: 'Order Shipped',
+      icon: Icons.takeout_dining,
+      color: Colors.amber,
+    ),
+    OrderStatusStage(
+      status: 'In Transit',
+      label: 'In Transit',
+      icon: Icons.local_shipping_rounded,
+      color: Colors.deepOrange,
+    ),
+    OrderStatusStage(
+      status: 'Order Completed',
+      label: 'Order Completed',
+      icon: Icons.celebration,
+      color: Colors.green,
+    ),
+  ];
+
+  int _getCurrentStageIndex(OrderModel order) {
+    final s = order.status.toLowerCase();
+    if (s.contains('completed') || s.contains('delivered')) return 6;
+    if (s == 'in transit') return 5;
+    if (s.contains('shipped')) return 4;
+    if (s.contains('driver') && s.contains('accepted')) return 3;
+    if (s.contains('driver') && s.contains('assigned')) return 2;
+    if (s.contains('accepted') && !s.contains('driver')) return 1;
+    if (s.contains('placed') || s.contains('order placed')) return 0;
+    if (s.contains('rejected') || s.contains('cancelled')) {
+      if (s.contains('driver')) return 2;
+      return 1;
+    }
+    return 0;
+  }
+
+  Widget _buildStatusTimeline(OrderModel order) {
+    final currentIndex = _getCurrentStageIndex(order);
+    final displayStages = _orderStatusStages
+        .sublist(0, (currentIndex + 1).clamp(1, _orderStatusStages.length));
+    const green = Colors.green;
+    const gray = Colors.grey;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      elevation: 4,
+      shadowColor: Colors.black26,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      color: isDarkMode(context) ? const Color(DARK_BG_COLOR) : Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            for (int i = 0; i < displayStages.length; i++) ...[
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: i < currentIndex
+                            ? green.withOpacity(0.2)
+                            : gray.withOpacity(0.2),
+                        border: Border.all(
+                          color: i < currentIndex ? green : gray,
+                          width: 2,
+                        ),
+                      ),
+                      child: Icon(
+                        displayStages[i].icon,
+                        size: 22,
+                        color: i < currentIndex ? green : gray,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      displayStages[i].label,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        fontFamily: 'Poppinsm',
+                        color: isDarkMode(context)
+                            ? Colors.grey.shade300
+                            : Colors.grey.shade800,
+                      ),
+                    ),
+                    if (i == currentIndex)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          'Current',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'Poppinsm',
+                            color: Color(COLOR_PRIMARY),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (i < displayStages.length - 1)
+                Container(
+                  width: 24,
+                  height: 2,
+                  margin: const EdgeInsets.only(bottom: 32),
+                  color: i + 1 < currentIndex ? green : gray,
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusMessage(
+    BuildContext context,
+    Map<String, dynamic> orderData,
+    OrderModel orderModel,
+  ) {
+    final status = orderData['status'] as String? ?? '';
+    final dispatch = orderData['dispatch'] as Map<String, dynamic>?;
+    final rejectionCount = (dispatch?['rejectionCount'] as num?)?.toInt() ?? 0;
+
+    String message = '';
+    Color color = Colors.orange;
+    IconData icon = Icons.info;
+
+    switch (status) {
+      case ORDER_STATUS_PLACED:
+        message = 'Order placed successfully';
+        color = Colors.green;
+        icon = Icons.check_circle;
+        break;
+      case ORDER_STATUS_ACCEPTED:
+        if (rejectionCount == 0) {
+          message = 'Looking for a nearby rider...';
+        } else if (rejectionCount == 1) {
+          message =
+              'First rider was unavailable. Finding another rider...';
+        } else {
+          message =
+              'Still searching for an available rider. '
+              'Thank you for your patience.';
+        }
+        break;
+      case 'Driver Assigned':
+        message =
+            'Rider assigned! They are on the way to the restaurant.';
+        color = Colors.green;
+        icon = Icons.delivery_dining;
+        break;
+      case ORDER_STATUS_DRIVER_ACCEPTED:
+        message = 'Restaurant is preparing your order';
+        color = Colors.blue;
+        icon = Icons.restaurant;
+        break;
+      case ORDER_STATUS_SHIPPED:
+        message = 'Food is ready! Rider is picking up';
+        color = Colors.orange;
+        icon = Icons.takeout_dining;
+        break;
+      case ORDER_STATUS_IN_TRANSIT:
+        message = 'Your order is on the way!';
+        color = Colors.orange;
+        icon = Icons.delivery_dining;
+        break;
+      case ORDER_STATUS_COMPLETED:
+        message = 'Order delivered! Enjoy your meal!';
+        color = Colors.green;
+        icon = Icons.celebration;
+        break;
+      case ORDER_STATUS_DRIVER_REJECTED:
+        message = 'Looking for another rider...';
+        break;
+      case ORDER_STATUS_REJECTED:
+      case ORDER_STATUS_CANCELLED:
+        message = 'Your order was not successful';
+        color = Colors.red;
+        icon = Icons.cancel;
+        break;
+      default:
+        message = 'Processing your order';
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: color,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                fontFamily: 'Poppinsm',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPerformanceHint(OrderModel order) {
+    final badge = order.vendor.performanceBadge?.toLowerCase();
+    String? hint;
+    if (badge == 'fast') {
+      hint = 'This restaurant usually confirms within 1 minute';
+    } else if (badge == 'reliable') {
+      hint = 'This restaurant usually confirms within 2 minutes';
+    } else if (badge == 'slow') {
+      hint = 'This restaurant sometimes takes longer to confirm';
+    } else {
+      hint = 'Waiting for restaurant to confirm';
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, left: 10, right: 10),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.blue.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.blue.withOpacity(0.3)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.schedule, color: Colors.blue.shade700, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                hint,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontFamily: 'Poppinsr',
+                  color: Colors.blue.shade800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<OrderModel?> getOrderById(String orderId) async {
     try {
       DocumentSnapshot<Map<String, dynamic>> doc = await FirebaseFirestore
@@ -260,25 +603,14 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
   // Removed unused _onTimerEnd (auto-reject handled elsewhere)
 
-  void _showOrderRejectedDialog() {
+  void _showOrderRejectedDialog(OrderModel order) {
     showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Order Unsuccessful'),
-          content: const Text(
-            "We regret to inform you that this order could not be completed as the restaurant is currently unavailable. We kindly recommend exploring other restaurant options. Thank you for your patience and understanding.",
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop(); // Close the dialog
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
+      barrierDismissible: false,
+      builder: (ctx) => _OrderRejectedWithSuggestionsDialog(
+        order: order,
+        onDismiss: () => Navigator.of(ctx).pop(),
+      ),
     );
   }
 
@@ -366,54 +698,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
                   debugPrint('_PlaceOrderScreenState.initState $orderStatus');
 
-                  switch (orderStatus) {
-                    case ORDER_STATUS_PLACED:
-                      currentEvent = 'We sent your order to' +
-                          " (${orderModel.vendor.title})";
-
-                      break;
-
-                    case ORDER_STATUS_ACCEPTED:
-                      currentEvent = 'Preparing your order...';
-
-                      break;
-
-                    case ORDER_STATUS_REJECTED:
-                      currentEvent = 'Your order is not successfull';
-
-                      break;
-
-                    case ORDER_STATUS_CANCELLED:
-                      currentEvent = 'Your order is not successfull';
-
-                      break;
-
-                    case ORDER_STATUS_DRIVER_PENDING:
-                      currentEvent = 'Driver picking up your order...';
-
-                      break;
-
-                    case ORDER_STATUS_DRIVER_REJECTED:
-                      currentEvent = 'Looking for a driver...';
-
-                      break;
-
-                    case ORDER_STATUS_SHIPPED:
-                      currentEvent =
-                          '${orderModel.driver?.firstName ?? 'Our Driver'} has picked up your order.';
-
-                      break;
-
-                    case ORDER_STATUS_IN_TRANSIT:
-                      currentEvent = 'Your order is on the way';
-
-                      break;
-
-                    case ORDER_STATUS_COMPLETED:
-                      currentEvent = 'Your order is Deliver.';
-
-                      break;
-                  }
+                  final orderData = snapshot.data!.data()!;
 
                   return SingleChildScrollView(
                     child: Column(
@@ -468,37 +753,37 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                     ],
                                   ),
                                 ),
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                      right: 10, left: 10, bottom: 12),
-                                  child: RichText(
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    text: TextSpan(children: [
-                                      TextSpan(
-                                        text: currentEvent,
-                                        style: TextStyle(
-                                          letterSpacing: 0.5,
-
-                                          color: isDarkMode(context)
-                                              ? Colors.grey.shade200
-                                              : const Color(0XFF2A2A2A),
-
-                                          fontFamily: "Poppinsm",
-
-                                          // fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ]),
-                                  ),
+                                _buildStatusMessage(
+                                  context,
+                                  orderData,
+                                  orderModel,
                                 ),
+                                if ((orderData['status'] as String?)
+                                        ?.toLowerCase() ==
+                                    'order placed')
+                                  _buildPerformanceHint(orderModel),
                               ],
                             ),
                           ),
                         ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8.0, vertical: 8),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: OrderStatusProgressBar(
+                                    status: orderModel.status),
+                              ),
+                              OrderETABadge(order: orderModel),
+                            ],
+                          ),
+                        ),
+                        _buildStatusTimeline(orderModel),
                         orderModel.status == ORDER_STATUS_ACCEPTED ||
                                 orderModel.status ==
-                                    ORDER_STATUS_DRIVER_PENDING ||
+                                    ORDER_STATUS_DRIVER_ACCEPTED ||
                                 orderModel.status ==
                                     ORDER_STATUS_DRIVER_REJECTED
                             ? Padding(
@@ -602,7 +887,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                                     : Colors.grey.shade200)),
                                       ),
                                       child: Text(
-                                        'Go',
+                                        getButtonText(widget.orderModel.status),
                                         style: TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.bold,
@@ -634,6 +919,34 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                         buildDeliveryDetailsCard(),
                         const SizedBox(height: 16),
                         buildOrderSummaryCard(orderModel),
+                        const SizedBox(height: 16),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      ReportIssueScreen(order: orderModel),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.report_problem_outlined),
+                            label: const Text('Report an Issue'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.orange,
+                              side: const BorderSide(color: Colors.orange),
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
                       ],
                     ),
                   );
@@ -813,17 +1126,48 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
               ListView.builder(
                   physics: const NeverScrollableScrollPhysics(),
                   shrinkWrap: true,
-                  itemCount: widget.orderModel.products.length,
+                  itemCount:
+                      _orderProductEntries(widget.orderModel.products).length,
                   itemBuilder: (context, index) {
-                    VariantInfo? variantIno =
-                        widget.orderModel.products[index].variant_info;
+                    final entries =
+                        _orderProductEntries(widget.orderModel.products);
+                    final entry = entries[index];
+                    if (entry.isBundleHeader) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          'Bundle: ${entry.bundleName ?? "Value Meal"}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                            color: isDarkMode(context)
+                                ? Colors.grey.shade300
+                                : Colors.grey.shade700,
+                          ),
+                        ),
+                      );
+                    }
+                    final product = entry.product!;
+                    VariantInfo? variantIno = product.variant_info;
 
-                    List<dynamic>? addon =
-                        widget.orderModel.products[index].extras;
+                    List<dynamic>? addon;
+                    final e = product.extras;
+                    if (e is List) {
+                      addon = e;
+                    } else if (e is String && e.isNotEmpty && e != '[]') {
+                      try {
+                        final decoded = jsonDecode(e);
+                        addon = decoded is List
+                            ? List<dynamic>.from(decoded)
+                            : [decoded];
+                      } catch (_) {
+                        addon = [e];
+                      }
+                    }
 
                     String extrasDisVal = '';
 
-                    if (addon != null) {
+                    if (addon != null && addon.isNotEmpty) {
                       for (int i = 0; i < addon.length; i++) {
                         extrasDisVal +=
                             '${addon[i].toString().replaceAll("\"", "")} ${(i == addon.length - 1) ? "" : ","}';
@@ -842,8 +1186,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
                                 // width: 50,
 
-                                imageUrl: getImageVAlidUrl(
-                                    widget.orderModel.products[index].photo),
+                                imageUrl: getImageVAlidUrl(product.photo),
                                 imageBuilder: (context, imageProvider) =>
                                     Container(
                                       decoration: BoxDecoration(
@@ -856,8 +1199,10 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                     ),
                                 errorWidget: (context, url, error) => ClipRRect(
                                     borderRadius: BorderRadius.circular(15),
-                                    child: Image.network(
-                                      AppGlobal.placeHolderImage!,
+                                    child: CachedNetworkImage(
+                                      imageUrl: AppGlobal.placeHolderImage!,
+                                      memCacheWidth: 200,
+                                      memCacheHeight: 200,
                                       fit: BoxFit.cover,
                                       width: MediaQuery.of(context).size.width,
                                       height:
@@ -873,8 +1218,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                       children: [
                                         Expanded(
                                           child: Text(
-                                            widget.orderModel.products[index]
-                                                .name,
+                                            product.name,
                                             maxLines: 2,
                                             overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
@@ -888,7 +1232,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                           ),
                                         ),
                                         Text(
-                                          ' x ${widget.orderModel.products[index].quantity}',
+                                          ' x ${product.quantity}',
                                           style: TextStyle(
                                               fontFamily: 'Poppinsr',
                                               letterSpacing: 0.5,
@@ -900,8 +1244,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                       ],
                                     ),
                                     const SizedBox(height: 5),
-                                    getPriceTotalText(
-                                        widget.orderModel.products[index]),
+                                    getPriceTotalText(product),
                                   ],
                                 ),
                               ),
@@ -979,12 +1322,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                       )),
                                   onTap: () async {
                                     try {
-                                      showProgress(
+                                      await showProgress(
                                           context, "Please wait", false);
 
                                       // Validate order has products
                                       if (widget.orderModel.products.isEmpty) {
-                                        hideProgress();
+                                        await hideProgress();
                                         showAlertDialog(
                                           context,
                                           "Reorder Failed",
@@ -1012,46 +1355,99 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                       int failCount = 0;
                                       List<String> failedProducts = [];
 
-                                      // Re-add each ordered product into cart with validation
+                                      // Group products by bundleId for reorder
+                                      final Map<String?, List<CartProduct>>
+                                          byBundle = {};
                                       for (final CartProduct p
                                           in widget.orderModel.products) {
-                                        try {
-                                          debugPrint(
-                                              "Processing product: ${p.name}, id: ${p.id}");
-                                          // Validate and transform CartProduct
-                                          final validatedProduct =
-                                              _validateAndTransformCartProduct(
-                                                  p);
+                                        final bid =
+                                            p.bundleId?.isEmpty == true
+                                                ? null
+                                                : p.bundleId;
+                                        byBundle.putIfAbsent(
+                                            bid, () => []).add(p);
+                                      }
 
-                                          if (validatedProduct != null) {
-                                            debugPrint(
-                                                "Product validated, adding to cart: ${p.name}");
-                                            // Add timeout to prevent hanging
-                                            await cartDatabase
-                                                .reAddProduct(validatedProduct)
-                                                .timeout(Duration(seconds: 5),
-                                                    onTimeout: () {
-                                              throw TimeoutException(
-                                                  'Product add operation timed out');
-                                            });
-                                            successCount++;
-                                            debugPrint(
-                                                "Product added successfully: ${p.name}, successCount: $successCount");
-                                          } else {
-                                            failCount++;
-                                            failedProducts.add(p.name);
-                                            debugPrint(
-                                                "Failed to validate product: ${p.name}");
+                                      for (final entry in byBundle.entries) {
+                                        final bundleId = entry.key;
+                                        final group = entry.value;
+                                        if (bundleId != null &&
+                                            bundleId.isNotEmpty) {
+                                          try {
+                                            final bundle =
+                                                await BundleService
+                                                    .getBundle(bundleId)
+                                                    .timeout(
+                                              const Duration(seconds: 10),
+                                              onTimeout: () => throw
+                                                  TimeoutException(
+                                                'Bundle fetch timed out',
+                                              ),
+                                            );
+                                            if (bundle != null &&
+                                                bundle.isActive) {
+                                              final itemsWithPhotos =
+                                                  await BundleService
+                                                      .itemsWithPhotos(
+                                                bundle.restaurantId,
+                                                bundle.items,
+                                              ).timeout(
+                                                const Duration(seconds: 15),
+                                                onTimeout: () => throw
+                                                    TimeoutException(
+                                                  'Items fetch timed out',
+                                                ),
+                                              );
+                                              await cartDatabase.addBundleToCart(
+                                                bundleId: bundle.bundleId,
+                                                bundleName: bundle.name,
+                                                vendorID: bundle.restaurantId,
+                                                bundlePrice: bundle.bundlePrice,
+                                                items: itemsWithPhotos,
+                                              );
+                                              successCount += group.length;
+                                            } else {
+                                              for (final p in group) {
+                                                final validated =
+                                                    _validateAndTransformCartProduct(p);
+                                                if (validated != null) {
+                                                  await cartDatabase
+                                                      .reAddProduct(validated);
+                                                  successCount++;
+                                                } else {
+                                                  failCount++;
+                                                  failedProducts.add(p.name);
+                                                }
+                                              }
+                                            }
+                                          } catch (e) {
+                                            failCount += group.length;
+                                            failedProducts
+                                                .addAll(group.map((p) => p.name));
                                           }
-                                        } catch (e) {
-                                          failCount++;
-                                          failedProducts.add(p.name);
-                                          debugPrint(
-                                              "Error adding product ${p.name}: $e");
+                                        } else {
+                                          for (final CartProduct p in group) {
+                                            try {
+                                              final validatedProduct =
+                                                  _validateAndTransformCartProduct(p);
+                                              if (validatedProduct != null) {
+                                                await cartDatabase
+                                                    .reAddProduct(
+                                                        validatedProduct);
+                                                successCount++;
+                                              } else {
+                                                failCount++;
+                                                failedProducts.add(p.name);
+                                              }
+                                            } catch (e) {
+                                              failCount++;
+                                              failedProducts.add(p.name);
+                                            }
+                                          }
                                         }
                                       }
 
-                                      hideProgress();
+                                      await hideProgress();
 
                                       // Debug logging
                                       debugPrint(
@@ -1105,7 +1501,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                         );
                                       }
                                     } catch (e, stackTrace) {
-                                      hideProgress();
+                                      await hideProgress();
                                       debugPrint("Error during reorder: $e");
                                       debugPrint("StackTrace: $stackTrace");
                                       showAlertDialog(
@@ -1146,9 +1542,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                   push(
                                       context,
                                       ReviewScreen(
-                                        product:
-                                            widget.orderModel.products[index],
+                                        product: product,
                                         orderId: widget.orderModel.id,
+                                        driverId: widget.orderModel.driverID,
                                       ));
                                 },
                               ),
@@ -2224,6 +2620,14 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
         debugPrint("Driver ID in order: ${event.driverID}");
 
         if (mounted) {
+          final wasRejected = (currentOrder?.status ?? '')
+              .toLowerCase()
+              .contains('rejected');
+          final isRejected =
+              event.status.toLowerCase().contains('rejected');
+          if (!wasRejected && isRejected) {
+            _showOrderRejectedDialog(event);
+          }
           setState(() {
             currentOrder = event;
 
@@ -2538,6 +2942,17 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
           extrasString = product.extras.toString();
         }
       }
+      // Treat empty/meaningless extras as null to avoid displaying "\\", "null", etc
+      if (extrasString != null) {
+        final s = extrasString.trim();
+        if (s.isEmpty ||
+            s == '[]' ||
+            s == 'null' ||
+            s == '\\' ||
+            s == r'\\') {
+          extrasString = null;
+        }
+      }
 
       // Ensure variant_info is properly handled (can be VariantInfo object or null)
       dynamic variantInfo = product.variant_info;
@@ -2561,6 +2976,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
         extras_price: product.extras_price ?? "0.0",
         extras: extrasString,
         variant_info: variantInfo,
+        addedAt: product.addedAt,
       );
     } catch (e) {
       debugPrint("Error validating CartProduct: $e");
@@ -2708,4 +3124,108 @@ Widget _buildChip(String label, int attributesOptionIndex) {
       ),
     ),
   );
+}
+
+class _OrderRejectedWithSuggestionsDialog extends StatefulWidget {
+  final OrderModel order;
+  final VoidCallback onDismiss;
+
+  const _OrderRejectedWithSuggestionsDialog({
+    required this.order,
+    required this.onDismiss,
+  });
+
+  @override
+  State<_OrderRejectedWithSuggestionsDialog> createState() =>
+      _OrderRejectedWithSuggestionsDialogState();
+}
+
+class _OrderRejectedWithSuggestionsDialogState
+    extends State<_OrderRejectedWithSuggestionsDialog> {
+  List<VendorModel> _similarVendors = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSimilar();
+  }
+
+  Future<void> _loadSimilar() async {
+    final list = await FireStoreUtils.getSimilarVendors(
+      widget.order.vendorID,
+      widget.order.vendor.categoryID.isNotEmpty
+          ? widget.order.vendor.categoryID
+          : null,
+      limit: 3,
+    );
+    if (mounted) {
+      setState(() {
+        _similarVendors = list;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Order Unsuccessful'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "The restaurant didn't confirm your order. "
+              "Here are similar options that respond quickly:",
+              style: TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 16),
+            if (_loading)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            else if (_similarVendors.isEmpty)
+              Text(
+                'No similar restaurants found. '
+                'Try searching for other options.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey.shade600,
+                ),
+              )
+            else
+              ..._similarVendors.map(
+                (v) => ListTile(
+                  title: Text(v.title),
+                  subtitle: Text(
+                    v.acceptanceRate != null
+                        ? '${v.acceptanceRate!.toStringAsFixed(0)}% acceptance'
+                        : 'No performance data',
+                  ),
+                  trailing: const Icon(Icons.arrow_forward),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    push(
+                      context,
+                      NewVendorProductsScreen(vendorModel: v),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: widget.onDismiss,
+          child: const Text('Maybe Later'),
+        ),
+      ],
+    );
+  }
 }

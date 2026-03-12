@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart' as easyLocal;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutterflow_paginate_firestore/paginate_firestore.dart';
@@ -381,10 +380,10 @@ class _ChatScreensState extends State<ChatScreens> {
       message: Text(
         'sendMedia',
         style: TextStyle(fontSize: 15.0),
-      ).tr(),
+      ),
       actions: <Widget>[
         CupertinoActionSheetAction(
-          child: Text("chooseImageFromGallery").tr(),
+          child: Text("chooseImageFromGallery"),
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -396,7 +395,7 @@ class _ChatScreensState extends State<ChatScreens> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text("chooseVideoFromGallery").tr(),
+          child: Text("chooseVideoFromGallery"),
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -408,7 +407,7 @@ class _ChatScreensState extends State<ChatScreens> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text("takeAPicture").tr(),
+          child: Text("takeAPicture"),
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -420,7 +419,7 @@ class _ChatScreensState extends State<ChatScreens> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text("recordVideo").tr(),
+          child: Text("recordVideo"),
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -435,7 +434,7 @@ class _ChatScreensState extends State<ChatScreens> {
       cancelButton: CupertinoActionSheetAction(
         child: Text(
           'Cancel',
-        ).tr(),
+        ),
         onPressed: () {
           Navigator.pop(context);
         },

@@ -39,6 +39,7 @@ import 'package:foodie_driver/model/ChatVideoContainer.dart';
 import 'package:foodie_driver/model/CurrencyModel.dart';
 import 'package:foodie_driver/model/OrderModel.dart';
 import 'package:foodie_driver/model/User.dart';
+import 'package:foodie_driver/model/Ratingmodel.dart';
 import 'package:foodie_driver/model/VendorModel.dart';
 import 'package:foodie_driver/model/withdrawHistoryModel.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
@@ -176,9 +177,13 @@ class FireStoreUtils {
     driverStreamController?.close();
   }
 
-  static Future<User?> getCurrentUser(String uid) async {
+  static Future<User?> getCurrentUser(String uid,
+      {bool forceFromServer = false}) async {
+    final options = forceFromServer
+        ? GetOptions(source: Source.server)
+        : GetOptions();
     DocumentSnapshot<Map<String, dynamic>> userDocument =
-        await firestore.collection(USERS).doc(uid).get();
+        await firestore.collection(USERS).doc(uid).get(options);
     if (userDocument.data() != null && userDocument.exists) {
       final user = User.fromJson(userDocument.data()!);
 
@@ -295,7 +300,11 @@ class FireStoreUtils {
 
     user.fcmToken = newToken;
     try {
-      await updateCurrentUser(user);
+      await firestore.collection(USERS).doc(user.userID).update({
+        'fcmToken': newToken,
+        'fcmTokens': FieldValue.arrayUnion([newToken]),
+        'lastTokenUpdate': FieldValue.serverTimestamp(),
+      });
       MyAppState.currentUser = user;
       dlog('[FCM_TOKEN] Token saved to users/${user.userID}.fcmToken (refreshed)');
       return true;
@@ -306,18 +315,27 @@ class FireStoreUtils {
   }
 
   static Future<User?> updateCurrentUser(User user) async {
-    // Strip wallet-related fields so generic merges do not overwrite
-    // server-owned balances or payout/transmit data.
+    // Strip wallet-related and server-owned fields so generic merges do not
+    // overwrite server/admin data (e.g. driver_performance from Admin edits).
     final sanitized = Map<String, dynamic>.from(user.toJson());
-    const walletKeys = <String>{
+    const serverOwnedKeys = <String>{
       'wallet_amount',
       'wallet_credit',
       'payoutRequests',
       'transmitRequests',
       'todayVoucherEarned',
       'totalVouchers',
+      'driver_performance',
     };
-    walletKeys.forEach(sanitized.remove);
+    serverOwnedKeys.forEach(sanitized.remove);
+    if (user.role == USER_ROLE_DRIVER) {
+      sanitized['statusSchemaVersion'] = 2;
+      final hasMaxOrders = sanitized['maxOrders'] is num &&
+          (sanitized['maxOrders'] as num) > 0;
+      if (!hasMaxOrders) {
+        sanitized['maxOrders'] = user.multipleOrders ? 2 : 1;
+      }
+    }
 
     return await firestore
         .collection(USERS)
@@ -326,6 +344,40 @@ class FireStoreUtils {
         .then((document) {
       return user;
     });
+  }
+
+  /// Update lastActivityTimestamp for rider inactivity tracking.
+  static Future<void> touchLastActivity(String userId) async {
+    await firestore.collection(USERS).doc(userId).update({
+      'lastActivityTimestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Adds token to user's fcmTokens array. Call on login.
+  static Future<void> addFcmTokenToArray(String userId, String token) async {
+    try {
+      if (userId.isEmpty || token.isEmpty) return;
+      await firestore.collection(USERS).doc(userId).update({
+        'fcmTokens': FieldValue.arrayUnion([token]),
+        'lastTokenUpdate': FieldValue.serverTimestamp(),
+      });
+      dlog('[FCM_TOKEN] Token added to array for user: $userId');
+    } catch (e) {
+      dlog('[FCM_TOKEN] addFcmTokenToArray failed: $e');
+    }
+  }
+
+  /// Removes token from user's fcmTokens array. Call on logout.
+  static Future<void> removeFcmToken(String userId, String token) async {
+    try {
+      if (userId.isEmpty || token.isEmpty) return;
+      await firestore.collection(USERS).doc(userId).update({
+        'fcmTokens': FieldValue.arrayRemove([token]),
+      });
+      dlog('[FCM_TOKEN] Token removed from array for user: $userId');
+    } catch (e) {
+      dlog('[FCM_TOKEN] removeFcmToken failed: $e');
+    }
   }
 
   static const String _defaultContactEmail = 'alshidarabdelnasir19@gmail.com';
@@ -365,6 +417,68 @@ class FireStoreUtils {
     _contactUsCache = result;
     _contactUsCachedAt = now;
     return result;
+  }
+
+  static Stream<List<RatingModel>> getReviewsByDriver(String driverId) {
+    return firestore
+        .collection(Order_Rating)
+        .where('driverId', isEqualTo: driverId)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((doc) => RatingModel.fromJson({
+                  ...doc.data(),
+                  'Id': doc.id,
+                  'id': doc.id,
+                }))
+            .toList());
+  }
+
+  static Future<void> addReviewReply(
+    String reviewId,
+    String text, {
+    required String userId,
+    required String userType,
+    required String userName,
+  }) async {
+    final reply = {
+      'userId': userId,
+      'userType': userType,
+      'userName': userName,
+      'text': text,
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    await firestore.collection(Order_Rating).doc(reviewId).update({
+      'replies': FieldValue.arrayUnion([reply]),
+    });
+  }
+
+  static Future<void> flagReview(
+    String reviewId, {
+    required String userId,
+    required String reason,
+  }) async {
+    final flagEntry = {
+      'userId': userId,
+      'reason': reason,
+      'timestamp': FieldValue.serverTimestamp(),
+    };
+    final ref = firestore.collection(Order_Rating).doc(reviewId);
+    final doc = await ref.get();
+    if (!doc.exists) return;
+    final data = doc.data() ?? {};
+    final flaggedBy = List<Map<String, dynamic>>.from(
+      (data['flaggedBy'] as List?)
+              ?.map((e) => Map<String, dynamic>.from(
+                    e is Map ? e : <String, dynamic>{},
+                  )) ??
+          [],
+    );
+    final updates = <String, dynamic>{
+      'flaggedBy': FieldValue.arrayUnion([flagEntry]),
+    };
+    if (flaggedBy.isEmpty) updates['status'] = 'flagged';
+    await ref.update(updates);
   }
 
   static Future createPaymentId({collectionName = "wallet"}) async {
@@ -553,6 +667,22 @@ class FireStoreUtils {
     } catch (e) {
       print('Error uploading user image: $e');
       throw Exception('Failed to upload user image: $e');
+    }
+  }
+
+  /// Upload PAUTOS receipt photo. Returns download URL.
+  static Future<String> uploadPautosReceipt(File image, String orderId) async {
+    try {
+      final compressed = await compressImage(image);
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final ref = storage.child('pautos_receipts/${orderId}_$ts.png');
+      final task = ref.putFile(compressed);
+      await task.whenComplete(() {});
+      final url = await (await task).ref.getDownloadURL();
+      return url.toString();
+    } catch (e) {
+      print('Error uploading PAUTOS receipt: $e');
+      throw Exception('Failed to upload receipt: $e');
     }
   }
 
@@ -1324,7 +1454,15 @@ class FireStoreUtils {
   /// returns an error message on failure or null on success
   static Future<String?> firebaseCreateNewUser(User user) async {
     try {
-      await firestore.collection(USERS).doc(user.userID).set(user.toJson());
+      final json = user.toJson();
+      if (user.role == USER_ROLE_DRIVER) {
+        json['riderAvailability'] = user.riderAvailability ?? 'offline';
+        json['riderDisplayStatus'] =
+            user.riderDisplayStatus ?? '\u{26AA} Offline';
+        json['checkedInToday'] = user.checkedInToday ?? false;
+        json['isOnline'] = user.isOnline ?? false;
+      }
+      await firestore.collection(USERS).doc(user.userID).set(json);
     } catch (e, s) {
       print('FireStoreUtils.firebaseCreateNewUser $e $s');
       return "notSignIn";
@@ -1648,6 +1786,7 @@ class FireStoreUtils {
         email: emailAddress,
         settings: UserSettings(),
         lastOnlineTimestamp: Timestamp.now(),
+        lastActivityTimestamp: Timestamp.now(),
         isActive: true,
         phoneNumber: mobile,
         firstName: firstName,

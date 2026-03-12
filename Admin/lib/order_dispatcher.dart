@@ -3,23 +3,29 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:brgy/services/auto_accept_service.dart';
 import 'package:brgy/services/order_acceptance_service.dart';
 import 'package:brgy/services/order_rejection_service.dart';
 import 'package:brgy/services/manual_dispatch_service.dart';
 import 'package:brgy/services/driver_change_service.dart';
-import 'package:brgy/services/auto_redispatch_service.dart';
+
+import 'package:brgy/services/dispatch_config_service.dart';
 import 'package:brgy/services/driver_assignment_service.dart';
+import 'package:brgy/services/delivery_zone_service.dart';
 import 'package:brgy/services/driver_response_tracking_service.dart';
 import 'package:brgy/widgets/orders/assignments_log_list.dart';
+import 'package:brgy/widgets/orders/pautos_queue_list.dart';
 import 'package:brgy/widgets/orders/order_helpers.dart';
+import 'package:brgy/widgets/orders/pending_device_less_orders.dart';
 import 'package:brgy/widgets/orders/order_preparation_dialog.dart';
 import 'package:brgy/widgets/orders/order_rejection_dialog.dart';
 import 'package:brgy/widgets/orders/change_driver_dialog.dart';
 import 'package:brgy/widgets/orders/order_info_section.dart';
 import 'package:brgy/utils/order_ready_time_helper.dart';
+import 'package:brgy/pages/change_order_status_page.dart';
+import 'package:brgy/services/restaurant_settings_service.dart';
 import 'package:brgy/services/sms_service.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class OrderDispatcherPage extends StatefulWidget {
   final int initialTabIndex;
@@ -39,9 +45,9 @@ class _OrderDispatcherPageState extends State<OrderDispatcherPage>
   void initState() {
     super.initState();
     _tab = TabController(
-      length: 2,
+      length: 3,
       vsync: this,
-      initialIndex: widget.initialTabIndex,
+      initialIndex: widget.initialTabIndex.clamp(0, 2),
     );
   }
 
@@ -60,20 +66,29 @@ class _OrderDispatcherPageState extends State<OrderDispatcherPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: TabBar(
+        controller: _tab,
+        tabs: const [
+          Tab(text: 'Assignments'),
+          Tab(text: 'Orders'),
+          Tab(text: 'PAUTOS'),
+        ],
+      ),
       body: TabBarView(
         controller: _tab,
         children: [
-          // --- TAB 1: assignments_log stream ---
           RefreshIndicator(
             onRefresh: _pullToRefresh,
             child:
                 AssignmentsLogList(key: ValueKey('assignments$_refreshBump')),
           ),
-
-          // --- TAB 2: restaurant_orders stream ---
           RefreshIndicator(
             onRefresh: _pullToRefresh,
             child: _RecentOrdersList(key: ValueKey('orders$_refreshBump')),
+          ),
+          RefreshIndicator(
+            onRefresh: _pullToRefresh,
+            child: PautosQueueList(key: ValueKey('pautos$_refreshBump')),
           ),
         ],
       ),
@@ -92,56 +107,120 @@ class _RecentOrdersList extends StatefulWidget {
 
 class _RecentOrdersListState extends State<_RecentOrdersList> {
   final Set<String> _dispatching = {};
-  final Set<String> _sendingSMS = {}; // Track orders currently sending SMS
-  final Map<String, StreamSubscription<QuerySnapshot>> _driverListeners = {};
+  final Set<String> _sendingSMS = {};
   final Map<String, StreamSubscription<DocumentSnapshot>>
       _orderStatusListeners = {};
-  final Set<String> _trackedOrders =
-      {}; // Track which orders we've already logged
+  final Set<String> _trackedOrders = {};
 
-  // Auto-accept service
-  final AutoAcceptService _autoAcceptService = AutoAcceptService();
-
-  // Order acceptance service
   final OrderAcceptanceService _orderAcceptanceService =
       OrderAcceptanceService();
-
-  // Order rejection service
   final OrderRejectionService _orderRejectionService = OrderRejectionService();
-
-  // Manual dispatch service
   final ManualDispatchService _manualDispatchService = ManualDispatchService();
-
-  // Driver change service
   final DriverChangeService _driverChangeService = DriverChangeService();
-
-  // Auto re-dispatch service
-  final AutoRedispatchService _autoRedispatchService = AutoRedispatchService();
-
-  // Driver assignment service
   final DriverAssignmentService _driverAssignmentService =
       DriverAssignmentService();
 
   // Driver response tracking service
   final DriverResponseTrackingService _driverResponseTrackingService =
       DriverResponseTrackingService();
+  final RestaurantSettingsService _restaurantSettingsService =
+      RestaurantSettingsService();
+
+  // Zone name cache: orderId -> zone name (resolved async, shown on next rebuild)
+  final Map<String, String> _zoneNameCache = {};
+  final DeliveryZoneService _deliveryZoneService = DeliveryZoneService();
+
+  String? _resolveZoneName(String orderId, Map<String, dynamic> data) {
+    if (_zoneNameCache.containsKey(orderId)) {
+      return _zoneNameCache[orderId];
+    }
+    final addr = _manualDispatchService.extractDeliveryAddress(data);
+    final lat = addr['lat'] as double?;
+    final lng = addr['lng'] as double?;
+    final locality = addr['locality'] as String?;
+    if (lat == null &&
+        lng == null &&
+        (locality == null || locality.isEmpty)) {
+      _zoneNameCache[orderId] = '';
+      return '';
+    }
+    _zoneNameCache[orderId] = '';
+    _deliveryZoneService
+        .getZoneMatchForDelivery(
+          lat: lat,
+          lng: lng,
+          locality: locality,
+        )
+        .then((match) {
+      final name = match?.zone.name ?? '';
+      if (_zoneNameCache[orderId] != name) {
+        _zoneNameCache[orderId] = name;
+        if (mounted) setState(() {});
+      }
+    }).catchError((_) {});
+    return '';
+  }
+
+  // Recommendation rider: cache active drivers (TTL 60s), limit to first 10 orders
+  List<Map<String, dynamic>>? _cachedDrivers;
+  DateTime? _driversCacheTime;
+  bool _loadingDrivers = false;
+  static const int _recommendationOrderLimit = 10;
+  static const Duration _driversCacheTtl = Duration(seconds: 60);
+
+  Future<void> _refreshDriverCacheIfNeeded() async {
+    final now = DateTime.now();
+    if (_cachedDrivers != null &&
+        _driversCacheTime != null &&
+        now.difference(_driversCacheTime!) < _driversCacheTtl) {
+      return;
+    }
+    if (mounted) setState(() => _loadingDrivers = true);
+    try {
+      final drivers =
+          await _driverAssignmentService.fetchActiveDriversWithLocations();
+      if (mounted) {
+        setState(() {
+          _cachedDrivers = drivers;
+          _driversCacheTime = now;
+        });
+      }
+    } catch (_) {
+      // Keep previous cache on error
+    } finally {
+      if (mounted) setState(() => _loadingDrivers = false);
+    }
+  }
+
+  Future<void> _openRestaurantMap(
+    BuildContext context,
+    double lat,
+    double lng,
+  ) async {
+    final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+    );
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (ok) return;
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open maps.')),
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open maps.')),
+      );
+    }
+  }
 
   @override
   void dispose() {
-    // Cancel all active listeners when widget is disposed
-    for (var listener in _driverListeners.values) {
-      listener.cancel();
-    }
-    _driverListeners.clear();
-
     for (var listener in _orderStatusListeners.values) {
       listener.cancel();
     }
     _orderStatusListeners.clear();
-
-    // Dispose auto-accept service
-    _autoAcceptService.dispose();
-
     super.dispose();
   }
 
@@ -216,6 +295,12 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
             }
           }
 
+          // Exclude Order Placed + restaurantHasNoDevice (shown in Pending No Device section)
+          if (status == 'Order Placed' &&
+              (data['restaurantHasNoDevice'] == true)) {
+            return false;
+          }
+
           return true;
         }).toList();
 
@@ -223,12 +308,120 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
           return const CenteredMessage('No active orders.');
         }
 
-        return ListView.separated(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(12),
-          itemCount: filteredDocs.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, i) {
+        // Refresh driver cache when orders exist (TTL 60s)
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _refreshDriverCacheIfNeeded();
+        });
+
+        // Compute health KPIs from the visible orders
+        final stalledCount = filteredDocs.where((d) {
+          final s = _statusToText(d.data()['status']);
+          return s == 'Driver Rejected';
+        }).length;
+        final availableRiders = _cachedDrivers?.length ?? 0;
+        final activeOrderCount = filteredDocs.length;
+
+        return Column(
+          children: [
+            // Dispatch Health Strip
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: SizedBox(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    StreamBuilder<bool>(
+                      stream: DispatchConfigService()
+                          .streamAutoDispatchEnabled(),
+                      builder: (context, snap) {
+                        final enabled = snap.data ?? true;
+                        return _HealthChip(
+                          icon: enabled
+                              ? Icons.auto_awesome
+                              : Icons.handyman,
+                          label: enabled
+                              ? 'Auto-Dispatch: ON'
+                              : 'Auto-Dispatch: OFF',
+                          color: enabled
+                              ? Colors.green
+                              : Colors.orange,
+                        );
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    _HealthChip(
+                      icon: Icons.people_outline,
+                      label: '$availableRiders riders',
+                      color: availableRiders > 0
+                          ? Colors.green
+                          : Colors.red,
+                    ),
+                    const SizedBox(width: 8),
+                    _HealthChip(
+                      icon: Icons.shopping_bag_outlined,
+                      label: '$activeOrderCount orders',
+                      color: Colors.blue,
+                    ),
+                    const SizedBox(width: 8),
+                    if (stalledCount > 0)
+                      _HealthChip(
+                        icon: Icons.warning_amber_rounded,
+                        label: '$stalledCount stalled',
+                        color: Colors.red,
+                      ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () async {
+                        print('==== ALL RIDERS ====');
+                        final snapshot = await FirebaseFirestore
+                            .instance
+                            .collection('users')
+                            .where('role',
+                                isEqualTo: 'driver')
+                            .get();
+                        for (final doc in snapshot.docs) {
+                          final d = doc.data();
+                          final loc = d['location'];
+                          final ts = d['locationUpdatedAt']
+                              as Timestamp?;
+                          final ago = ts != null
+                              ? DateTime.now()
+                                  .difference(
+                                      ts.toDate())
+                                  .inSeconds
+                              : null;
+                          print(
+                              'ID: ${doc.id}\n'
+                              '  riderAvailability: ${d['riderAvailability']}\n'
+                              '  isActive: ${d['isActive']}\n'
+                              '  isOnline: ${d['isOnline']}\n'
+                              '  checkedInToday: ${d['checkedInToday']}\n'
+                              '  checkedOutToday: ${d['checkedOutToday']}\n'
+                              '  location: ${loc != null ? "lat=${loc['latitude']},lng=${loc['longitude']}" : "null"}\n'
+                              '  locationUpdatedAt: ${ago != null ? "${ago}s ago" : "null"}\n');
+                        }
+                        print('==== END RIDERS ====');
+                      },
+                      child: const _HealthChip(
+                        icon: Icons.bug_report,
+                        label: 'Debug Riders',
+                        color: Colors.purple,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const PendingDeviceLessOrders(),
+            Expanded(
+              child: ListView.separated(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(12),
+                itemCount: filteredDocs.length,
+                separatorBuilder: (_, __) =>
+                    const SizedBox(height: 8),
+                itemBuilder: (context, i) {
             final data = filteredDocs[i].data();
             final id = filteredDocs[i].id;
 
@@ -256,12 +449,16 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
             }
             final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
             final vendorName = (vendor['title'] ?? '') as String? ?? '';
+            final vendorId =
+                (vendor['id'] ?? data['vendorID'] ?? data['vendorId'] ?? '')
+                    .toString();
+            final zoneName = _resolveZoneName(id, data);
 
             // Check if this order has status "Order Accepted" or "Order Completed"
             final isOrderAccepted = status == 'Order Accepted';
             final isOrderPlaced = status == 'Order Placed';
             final isDriverAssigned = status == 'Driver Assigned';
-            final isDriverPending = status == 'Driver Pending';
+            final isDriverAccepted = status == 'Driver Accepted';
             final isOrderCompleted = status == 'Order Completed';
             final isInTransit = status == 'In Transit';
             final isDriverRejected =
@@ -273,71 +470,11 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
             final isOrderTooOld = createdAt != null &&
                 DateTime.now().difference(createdAt.toDate()).inHours > 24;
 
-            // AI Auto-dispatch ONLY when status is "Order Accepted" or "Driver Rejected"
-            // Never assign riders if status is not one of these two specific statuses
-            // Guard: Skip dispatch for completed or in transit orders
-            if (!isDispatching &&
-                !isOrderTooOld &&
-                !isOrderCompleted &&
-                !isInTransit) {
-              // Auto-dispatch if driver rejected (NOT if order/restaurant rejected)
-              // ONLY if there was a driver who rejected (driverId exists)
-              // Additional guard: verify order is not in terminal/active delivery state
-              if (isDriverRejected &&
-                  !isOrderRejected &&
-                  driverId.isNotEmpty &&
-                  !isOrderCompleted &&
-                  !isInTransit) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _autoDispatchAfterRejection(context, id, data);
-                });
-              }
-              // Auto-dispatch if order accepted (but not if rejected)
-              // ONLY if no driver is assigned yet (prevents re-dispatching)
-              // Additional guard: verify order is not in terminal/active delivery state
-              else if (isOrderAccepted &&
-                  !isOrderRejected &&
-                  driverId.isEmpty &&
-                  !isOrderCompleted &&
-                  !isInTransit) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _manualDispatch(context, id, data);
-                });
-              }
-              // For any other status (including "Order Placed"), do NOT auto-dispatch
-            }
-
-            // Auto-accept logic for orders in "Order Placed" status
-            if (isOrderPlaced && createdAt != null) {
-              // Start auto-accept timer for new orders in "Order Placed" status
-              if (!_autoAcceptService.hasActiveTimer(id)) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _autoAcceptService.startAutoAcceptTimer(
-                    id,
-                    createdAt.toDate(),
-                    onAutoAccept: () {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                                '🔄 Order $id auto-accepted after 4 minutes'),
-                            backgroundColor: Colors.orange,
-                            duration: const Duration(seconds: 4),
-                          ),
-                        );
-                      }
-                    },
-                  );
-                });
-              }
-            } else {
-              // Cancel auto-accept timer if order is no longer in "Order Placed" status
-              if (_autoAcceptService.hasActiveTimer(id)) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _autoAcceptService.cancelAutoAcceptTimer(id);
-                });
-              }
-            }
+            // Dispatch is handled server-side by Cloud Functions:
+            // - autoDispatcher: triggers on status -> 'Order Accepted'
+            // - handleDriverRejection: triggers on status -> 'Driver Rejected'
+            // - riderFirstDispatchTimeouts: handles rider accept timeouts
+            // Admin UI only offers manual "Dispatch Now" button as fallback.
 
             // Show driver name for orders with drivers assigned (not "Order Accepted" or "Order Placed" or "Order Rejected")
             final shouldShowDriverName = !isOrderAccepted &&
@@ -345,10 +482,63 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                 !isOrderRejected &&
                 driverId.isNotEmpty;
 
+            // Recommendation rider for first N orders without driver (when not overloaded)
+            final location = _manualDispatchService.extractVendorLocation(data);
+            final hasValidVendor = location['latitude']! != 0.0 &&
+                location['longitude']! != 0.0;
+            Map<String, dynamic>? recommended;
+            if (driverId.isEmpty &&
+                i < _recommendationOrderLimit &&
+                _cachedDrivers != null &&
+                hasValidVendor) {
+              recommended = _driverAssignmentService.getRecommendedDriverFromListSync(
+                _cachedDrivers!,
+                location['latitude']!,
+                location['longitude']!,
+              );
+            }
+            final eligibleForRecommendationUi =
+                driverId.isEmpty && i < _recommendationOrderLimit;
+
+            if (i == 0) {
+              print(
+                  '[Recommendation] orderId=$id hasValidVendor=$hasValidVendor '
+                  'cachedDriversCount=${_cachedDrivers?.length ?? 0} '
+                  'recommended=${recommended != null}');
+              print(
+                  '[Recommendation] vendor lat=${location['latitude']} '
+                  'lng=${location['longitude']}');
+            }
+
+            final dispatch =
+                data['dispatch'] as Map<String, dynamic>? ?? {};
+            final retryCount =
+                (dispatch['retryCount'] as num?)?.toInt() ?? 0;
+            final attemptCount =
+                (dispatch['attemptCount'] as num?)?.toInt() ?? 0;
+
+            Color borderColor = Colors.grey.shade300;
+            if (isDriverRejected && retryCount > 3) {
+              borderColor = Colors.red;
+            } else if (isDriverRejected) {
+              borderColor = Colors.orange;
+            } else if (isInTransit || isDriverAccepted) {
+              borderColor = Colors.green;
+            } else if (isOrderAccepted && attemptCount > 0) {
+              borderColor = Colors.blue;
+            }
+
             return Card(
               clipBehavior: Clip.antiAlias,
               elevation: 3,
               margin: const EdgeInsets.symmetric(vertical: 4),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(
+                  color: borderColor,
+                  width: 2,
+                ),
+              ),
               child: Column(
                 children: [
                   // Order header with status and actions
@@ -413,8 +603,25 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                             IconButton(
                               tooltip: 'Change Status',
                               icon: const Icon(Icons.edit, size: 18),
-                              onPressed: () =>
-                                  _showChangeStatusDialog(context, id, status),
+                              onPressed: () async {
+                                final ok = await _showChangeStatusDialog(
+                                  context,
+                                  id,
+                                  data,
+                                );
+                                if (ok == true && context.mounted) {
+                                  setState(() {});
+                                }
+                              },
+                            ),
+                            IconButton(
+                              tooltip: 'Delete order',
+                              icon: Icon(
+                                Icons.delete,
+                                size: 18,
+                                color: Colors.red.shade700,
+                              ),
+                              onPressed: () => _showDeleteOrderDialog(context, id),
                             ),
                           ],
                         ),
@@ -444,11 +651,94 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                                 label: vendorName,
                                 color: Colors.orange,
                               ),
+                            if (zoneName != null &&
+                                zoneName.isNotEmpty)
+                              _InfoChip(
+                                icon: Icons.map_outlined,
+                                label: zoneName,
+                                color: Colors.blue,
+                              ),
+                            if (hasValidVendor)
+                              InkWell(
+                                onTap: () => _openRestaurantMap(
+                                  context,
+                                  location['latitude']!,
+                                  location['longitude']!,
+                                ),
+                                borderRadius: BorderRadius.circular(4),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Icon(
+                                    Icons.location_on,
+                                    color: Colors.orange,
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
                             // Show driver name for assigned orders (not completed)
                             if (shouldShowDriverName && !isOrderCompleted)
                               DriverNameChip(driverId: driverId),
                             // Show restaurant owner
                             RestaurantOwnerChip(orderData: data),
+                            if (eligibleForRecommendationUi) ...[
+                              if (_cachedDrivers == null && _loadingDrivers)
+                                _InfoChip(
+                                  icon: Icons.hourglass_empty,
+                                  label: 'Loading recommendation…',
+                                  color: Colors.grey,
+                                )
+                              else if (_cachedDrivers == null &&
+                                  !_loadingDrivers)
+                                _InfoChip(
+                                  icon: Icons.person_off,
+                                  label: 'No riders available',
+                                  color: Colors.grey,
+                                )
+                              else if (_cachedDrivers != null &&
+                                  recommended != null)
+                                _InfoChip(
+                                  icon: Icons.person_pin,
+                                  label:
+                                      'Recommended: ${recommended['driverName']} · '
+                                      '${(recommended['distance'] as double).toStringAsFixed(1)} km '
+                                      '${recommended['riderDisplayStatus'] ?? ''}',
+                                  color: Colors.teal,
+                                )
+                              else if (_cachedDrivers != null &&
+                                  recommended == null)
+                                _InfoChip(
+                                  icon: Icons.person_search,
+                                  label: 'No rider in range',
+                                  color: Colors.grey,
+                                ),
+                              const SizedBox(width: 4),
+                              TextButton.icon(
+                                onPressed: () =>
+                                    _showForceAssignDialog(
+                                  context,
+                                  id,
+                                ),
+                                icon: const Icon(
+                                  Icons.bolt,
+                                  size: 16,
+                                  color: Colors.orange,
+                                ),
+                                label: const Text(
+                                  'Force Assign',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.orange,
+                                  ),
+                                ),
+                                style: TextButton.styleFrom(
+                                  minimumSize: Size.zero,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                ),
+                              ),
+                            ],
                             if (eta != null)
                               _InfoChip(
                                 icon: Icons.timer,
@@ -457,7 +747,7 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                               ),
                             if (readyAt != null &&
                                 (isOrderAccepted ||
-                                    isDriverPending ||
+                                    isDriverAccepted ||
                                     status == 'Driver Accepted' ||
                                     status == 'Order Shipped'))
                               _InfoChip(
@@ -477,92 +767,73 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                       ],
                     ),
                   ),
-                  // Accept and Reject Order Buttons - Only show for "Order Placed" status
+                  // Accept and Reject Order Buttons - Only show when allowed by settings
                   if (isOrderPlaced)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: Row(
-                        children: [
-                          Expanded(
+                    vendorId.isEmpty
+                        ? const SizedBox.shrink()
+                        : FutureBuilder<RestaurantOrderSettings>(
+                            future: _restaurantSettingsService.getSettings(
+                              vendorId,
+                            ),
+                            builder: (context, snap) {
+                              if (snap.connectionState ==
+                                  ConnectionState.waiting) {
+                                return const SizedBox.shrink();
+                              }
+                              final settings = snap.data ??
+                                  RestaurantOrderSettings(
+                                    hasDevice: true,
+                                    allowAdminOverride: false,
+                                  );
+                              return _buildOrderPlacedActions(
+                                context,
+                                id,
+                                settings,
+                                isDispatching,
+                              );
+                            },
+                          ),
+                  // Dispatch Now Button - Show only when auto-dispatch is OFF
+                  if (isOrderAccepted || isDriverRejected)
+                    StreamBuilder<bool>(
+                      stream: DispatchConfigService()
+                          .streamAutoDispatchEnabled(),
+                      builder: (context, snap) {
+                        final autoDispatchOn = snap.data ?? true;
+                        if (autoDispatchOn) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                          child: SizedBox(
+                            width: double.infinity,
                             child: ElevatedButton.icon(
                               onPressed: isDispatching
                                   ? null
-                                  : () => _acceptOrder(context, id),
+                                  : () => _manualDispatch(context, id, data),
                               icon: isDispatching
                                   ? const SizedBox(
                                       width: 16,
                                       height: 16,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        valueColor:
-                                            AlwaysStoppedAnimation<Color>(
-                                                Colors.white),
+                                        valueColor: AlwaysStoppedAnimation<
+                                            Color>(Colors.white),
                                       ),
                                     )
-                                  : const Icon(Icons.check_circle),
-                              label: Text(
-                                  isDispatching ? 'Accepting...' : 'Accept'),
+                                  : const Icon(Icons.bolt),
+                              label: Text(isDispatching
+                                  ? 'Dispatching...'
+                                  : 'Dispatch Now'),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
+                                backgroundColor: Colors.orange,
                                 foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 12),
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: isDispatching
-                                  ? null
-                                  : () => _rejectOrder(context, id),
-                              icon: const Icon(Icons.cancel),
-                              label: Text(
-                                  isDispatching ? 'Processing...' : 'Reject'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.red,
-                                foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 12),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
-                  // Manual Dispatch Button - Only show for "Order Accepted" status
-                  if (isOrderAccepted)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: isDispatching
-                              ? null
-                              : () => _manualDispatch(context, id, data),
-                          icon: isDispatching
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                        Colors.white),
-                                  ),
-                                )
-                              : const Icon(Icons.bolt),
-                          label: Text(isDispatching
-                              ? 'Dispatching...'
-                              : 'Manual Dispatch (AI)'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.orange,
-                            foregroundColor: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ),
-                  // Change Driver Button - Show for "Driver Assigned" and "Driver Pending" statuses
-                  if (isDriverAssigned || isDriverPending)
+                  // Change Driver Button - Show for "Driver Assigned" and "Driver Accepted" statuses
+                  if (isDriverAssigned || isDriverAccepted)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: SizedBox(
@@ -664,12 +935,126 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
                         ],
                       ),
                     ),
+                  // Rejection history panel for Driver Rejected
+                  if (isDriverRejected)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        16, 0, 16, 12,
+                      ),
+                      child: _RejectionHistoryPanel(
+                        orderId: id,
+                      ),
+                    ),
+                  // Dispatch timeline for orders with attempts
+                  if (attemptCount > 0 && !isOrderRejected)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        16, 0, 16, 12,
+                      ),
+                      child: _DispatchTimelinePanel(
+                        orderId: id,
+                      ),
+                    ),
+                  // Batch order visualizer
+                  if (data['batch'] != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        16, 0, 16, 12,
+                      ),
+                      child: _BatchOrderPanel(
+                        batchData: data['batch']
+                            as Map<String, dynamic>,
+                      ),
+                    ),
                 ],
               ),
             );
           },
+              ),
+            ),
+          ],
         );
       },
+    );
+  }
+
+  Widget _buildOrderPlacedActions(
+    BuildContext context,
+    String orderId,
+    RestaurantOrderSettings settings,
+    bool isDispatching,
+  ) {
+    final showButtons = !settings.hasDevice || settings.allowAdminOverride;
+
+    if (!showButtons) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.hourglass_empty, size: 18, color: Colors.orange.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Waiting for restaurant to accept order...',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey.shade700,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: isDispatching ? null : () => _acceptOrder(context, orderId),
+              icon: isDispatching
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : const Icon(Icons.check_circle),
+              label: Text(isDispatching ? 'Accepting...' : 'Accept'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: isDispatching ? null : () => _rejectOrder(context, orderId),
+              icon: const Icon(Icons.cancel),
+              label: Text(isDispatching ? 'Processing...' : 'Reject'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -903,39 +1288,84 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
         return;
       }
 
-      // Extract vendor location from order data
       final location = _manualDispatchService.extractVendorLocation(data);
       final vendorLat = location['latitude']!;
       final vendorLng = location['longitude']!;
+      final deliveryAddr =
+          _manualDispatchService.extractDeliveryAddress(data);
+      final deliveryLat = deliveryAddr['lat'] as double?;
+      final deliveryLng = deliveryAddr['lng'] as double?;
+      final deliveryLocality = deliveryAddr['locality'] as String?;
 
-      // Try to dispatch the order
+      List<String>? zoneDriverIds;
+      if (deliveryLat != null ||
+          deliveryLng != null ||
+          (deliveryLocality?.trim().isNotEmpty == true)) {
+        zoneDriverIds = await DeliveryZoneService()
+            .getAssignedDriverIdsForDelivery(
+          lat: deliveryLat,
+          lng: deliveryLng,
+          locality: deliveryLocality,
+        );
+      }
+
+      if (vendorLat != 0.0 && vendorLng != 0.0) {
+        final drivers = await _driverAssignmentService
+            .fetchActiveDriversInZone(zoneDriverIds);
+        final recommended =
+            await _driverAssignmentService
+                .getRecommendedDriverFromList(
+          drivers,
+          vendorLat,
+          vendorLng,
+        );
+        if (recommended != null) {
+          await _driverAssignmentService.assignOrderToDriver(
+            orderId: orderId,
+            driverId: recommended['driverId'] as String,
+            distance: recommended['distance'] as double,
+            setupDriverResponseListener: _setupDriverResponseListener,
+          );
+          if (context.mounted) {
+            _manualDispatchService.showSuccessMessage(
+              context,
+              recommended['driverName'] as String,
+              recommended['distance'] as double,
+            );
+          }
+          return;
+        }
+      }
+
       final result = await _manualDispatchService.dispatchOrder(
         orderId: orderId,
         vendorLat: vendorLat,
         vendorLng: vendorLng,
+        deliveryLat: deliveryLat,
+        deliveryLng: deliveryLng,
+        deliveryLocality: deliveryLocality,
         findAndAssignDriver: _findAndAssignDriver,
       );
 
       if (result['success']) {
-        // Successfully assigned
         _manualDispatchService.showSuccessMessage(
           context,
           result['driverName'] as String,
           result['distance'] as double,
         );
       } else if (result['needsRetry'] == true) {
-        // No active drivers - show retry message and wait
         _manualDispatchService.showRetryMessage(context);
 
-        // Retry dispatch after waiting
         final retryResult = await _manualDispatchService.retryDispatch(
           orderId: orderId,
           vendorLat: vendorLat,
           vendorLng: vendorLng,
+          deliveryLat: deliveryLat,
+          deliveryLng: deliveryLng,
+          deliveryLocality: deliveryLocality,
           findAndAssignDriver: _findAndAssignDriver,
         );
 
-        // Show retry success message
         _manualDispatchService.showRetrySuccessMessage(
           context,
           retryResult['driverName'] as String,
@@ -994,91 +1424,16 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
     }
   }
 
-  Future<void> _autoDispatchAfterRejection(
-      BuildContext context, String orderId, Map<String, dynamic> data) async {
-    // Check if already dispatching to avoid duplicate attempts
-    if (_dispatching.contains(orderId)) {
-      return;
-    }
-
-    // Check if order is already completed or in transit
-    final statusRaw = data['status'];
-    final status = _statusToText(statusRaw);
-    if (status == 'Order Completed' || status == 'In Transit') {
-      print(
-          '[Auto Re-Dispatch] Order $orderId is already $status. Skipping dispatch.');
-      return;
-    }
-
-    setState(() => _dispatching.add(orderId));
-
-    try {
-      // Try to dispatch after rejection
-      final result = await _autoRedispatchService.dispatchAfterRejection(
-        orderId: orderId,
-        orderData: data,
-        findAndAssignDriver: _findAndAssignDriver,
-      );
-
-      if (result['success']) {
-        // Successfully assigned to a new driver
-        _autoRedispatchService.showSuccessMessage(
-          context,
-          result['driverName'] as String,
-          result['distance'] as double,
-        );
-      } else if (result['needsRetry'] == true) {
-        // No active drivers - show retry message and wait
-        _autoRedispatchService.showRetryMessage(context);
-
-        // Retry dispatch after waiting
-        final retryResult =
-            await _autoRedispatchService.retryDispatchAfterRejection(
-          orderId: orderId,
-          vendorLat: result['vendorLat'] as double,
-          vendorLng: result['vendorLng'] as double,
-          rejectedDriverId: result['rejectedDriverId'] as String?,
-          findAndAssignDriver: _findAndAssignDriver,
-        );
-
-        if (retryResult['success']) {
-          // Successfully assigned after retry
-          _autoRedispatchService.showRetrySuccessMessage(
-            context,
-            retryResult['driverName'] as String,
-            retryResult['distance'] as double,
-          );
-        } else if (retryResult['needsListener'] == true) {
-          // Still no drivers - set up listener
-          _autoRedispatchService.showWaitingForDriversMessage(context);
-
-          // Set up listener for when drivers come online
-          _setupDriverOnlineListener(
-            context: context,
-            orderId: orderId,
-            vendorLat: retryResult['vendorLat'] as double,
-            vendorLng: retryResult['vendorLng'] as double,
-            excludeDriverId: retryResult['rejectedDriverId'] as String?,
-          );
-        }
-      }
-    } catch (e, stackTrace) {
-      print('[Auto Re-Dispatch] Error: $e\n$stackTrace');
-      _autoRedispatchService.showErrorMessage(context, e.toString());
-    } finally {
-      if (mounted) {
-        setState(() => _dispatching.remove(orderId));
-      }
-    }
-  }
-
   Future<Map<String, dynamic>> _findAndAssignDriver({
     required String orderId,
     required double vendorLat,
     required double vendorLng,
     String? excludeDriverId,
+    double? deliveryLat,
+    double? deliveryLng,
+    String? deliveryLocality,
   }) async {
-    // Guard: Check order status before attempting to assign driver
+    Map<String, dynamic>? orderData;
     try {
       final orderDoc = await FirebaseFirestore.instance
           .collection('restaurant_orders')
@@ -1090,14 +1445,13 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
         return {'success': false, 'message': 'Order not found'};
       }
 
-      final orderData = orderDoc.data() as Map<String, dynamic>;
-      final statusRaw = orderData['status'];
+      orderData = orderDoc.data() as Map<String, dynamic>?;
+      final statusRaw = orderData?['status'];
       final status = _statusToText(statusRaw);
 
-      // Skip dispatch if order is already completed or in transit
       if (status == 'Order Completed' || status == 'In Transit') {
         print(
-            '[Find and Assign Driver] Order $orderId is already $status. Skipping dispatch.');
+            '[Find and Assign Driver] Order $orderId is already $status.');
         return {
           'success': false,
           'message': 'Order is already $status',
@@ -1106,7 +1460,34 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
       }
     } catch (e) {
       print('[Find and Assign Driver] Error checking order status: $e');
-      // Continue with dispatch if we can't verify status
+    }
+
+    double? dLat = deliveryLat;
+    double? dLng = deliveryLng;
+    String? dLoc = deliveryLocality;
+    if (orderData != null) {
+      final addr =
+          _manualDispatchService.extractDeliveryAddress(orderData);
+      dLat ??= addr['lat'] as double?;
+      dLng ??= addr['lng'] as double?;
+      dLoc ??= addr['locality'] as String?;
+    }
+
+    double? prepMin;
+    if (orderData != null) {
+      final raw = orderData['estimatedTimeToPrepare'] ??
+          orderData['preparationTime'];
+      if (raw != null) {
+        if (raw is num) {
+          prepMin = raw.toDouble();
+        } else {
+          final m = RegExp(r'(\d+)')
+              .firstMatch(raw.toString());
+          if (m != null) {
+            prepMin = double.tryParse(m.group(1)!);
+          }
+        }
+      }
     }
 
     return await _driverAssignmentService.findAndAssignDriver(
@@ -1114,37 +1495,12 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
       vendorLat: vendorLat,
       vendorLng: vendorLng,
       excludeDriverId: excludeDriverId,
+      deliveryLat: dLat,
+      deliveryLng: dLng,
+      deliveryLocality: dLoc,
+      restaurantPrepMinutes: prepMin,
       setupDriverResponseListener: _setupDriverResponseListener,
     );
-  }
-
-  void _setupDriverOnlineListener({
-    required BuildContext context,
-    required String orderId,
-    required double vendorLat,
-    required double vendorLng,
-    String? excludeDriverId,
-  }) {
-    // Cancel any existing listener for this order
-    _driverListeners[orderId]?.cancel();
-
-    // Set up a listener using the service
-    final listener = _autoRedispatchService.setupDriverOnlineListener(
-      context: context,
-      orderId: orderId,
-      vendorLat: vendorLat,
-      vendorLng: vendorLng,
-      excludeDriverId: excludeDriverId,
-      findAndAssignDriver: _findAndAssignDriver,
-      onListenerCancel: (orderId) {
-        // Cancel and remove the listener when assignment succeeds
-        _driverListeners[orderId]?.cancel();
-        _driverListeners.remove(orderId);
-      },
-    );
-
-    // Store the listener so we can cancel it later
-    _driverListeners[orderId] = listener;
   }
 
   void _setupDriverResponseListener({
@@ -1173,6 +1529,262 @@ class _RecentOrdersListState extends State<_RecentOrdersList> {
     // Store the listener
     _orderStatusListeners[orderId] = listener;
   }
+
+  Future<void> _showForceAssignDialog(
+    BuildContext context,
+    String orderId,
+  ) async {
+    print('[FORCE_ASSIGN] Opening dialog for '
+        'order $orderId');
+
+    final drivers = await FirebaseFirestore.instance
+        .collection('users')
+        .where('role', isEqualTo: 'driver')
+        .get();
+
+    print('[FORCE_ASSIGN] Found '
+        '${drivers.docs.length} total drivers');
+
+    if (!context.mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Force Assign Rider'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: ListView.builder(
+            itemCount: drivers.docs.length,
+            itemBuilder: (_, i) {
+              final doc = drivers.docs[i];
+              final d = doc.data();
+              final rid = doc.id;
+              final orders =
+                  d['inProgressOrderID'] as List? ?? [];
+              final status =
+                  d['riderAvailability'] ?? 'unknown';
+              final checkedOut =
+                  d['checkedOutToday'] == true;
+              final hasLoc = d['location'] != null;
+              final firstName =
+                  d['firstName'] ?? '';
+              final lastName = d['lastName'] ?? '';
+              final name =
+                  '$firstName $lastName'.trim();
+
+              print('[FORCE_ASSIGN] Rider $rid: '
+                  'name=$name, status=$status, '
+                  'orders=${orders.length}, '
+                  'checkedOut=$checkedOut, '
+                  'loc=$hasLoc');
+
+              return ListTile(
+                leading: Icon(
+                  checkedOut
+                      ? Icons.logout
+                      : hasLoc
+                          ? Icons.person_pin_circle
+                          : Icons.person_off,
+                  color: checkedOut
+                      ? Colors.grey
+                      : hasLoc
+                          ? Colors.green
+                          : Colors.red,
+                ),
+                title: Text(
+                  name.isNotEmpty ? name : rid,
+                  style: const TextStyle(fontSize: 14),
+                ),
+                subtitle: Text(
+                  '$status '
+                  '| orders: ${orders.length} '
+                  '${checkedOut ? "| CHECKED OUT" : ""}'
+                  '${!hasLoc ? "| NO LOC" : ""}',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(
+                        Icons.bug_report,
+                        size: 20,
+                        color: Colors.blue,
+                      ),
+                      tooltip: 'Check status',
+                      onPressed: () =>
+                          _debugCheckRiderStatus(rid),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _forceAssignRider(
+                          context,
+                          orderId,
+                          rid,
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                        padding:
+                            const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                      ),
+                      child: const Text(
+                        'Assign',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _forceAssignRider(
+    BuildContext context,
+    String orderId,
+    String riderId,
+  ) async {
+    print('[FORCE_ASSIGN] Assigning rider '
+        '$riderId to order $orderId');
+
+    try {
+      final orderRef = FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(orderId);
+      final riderRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(riderId);
+
+      await FirebaseFirestore.instance
+          .runTransaction((tx) async {
+        final orderDoc = await tx.get(orderRef);
+        final riderDoc = await tx.get(riderRef);
+
+        if (!orderDoc.exists) {
+          throw Exception('Order not found');
+        }
+        if (!riderDoc.exists) {
+          throw Exception('Rider not found');
+        }
+
+        final riderData = riderDoc.data() ?? {};
+        final name =
+            '${riderData['firstName'] ?? ''} '
+                '${riderData['lastName'] ?? ''}'
+                .trim();
+
+        tx.update(orderRef, {
+          'status': 'Driver Assigned',
+          'driverID': riderId,
+          'driverName': name,
+          'assignedAt':
+              FieldValue.serverTimestamp(),
+          'dispatch.forceAssigned': true,
+          'dispatch.forceAssignedBy':
+              'admin_debug',
+        });
+
+        tx.update(riderRef, {
+          'orderRequestData': FieldValue.arrayUnion([orderId]),
+        });
+
+        print('[FORCE_ASSIGN] Transaction prepared '
+            '(rider=$name)');
+      });
+
+      print('[FORCE_ASSIGN] SUCCESS: rider $riderId -> order $orderId '
+          '(status=Driver Assigned, orderRequestData updated)');
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Rider force-assigned!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      print('[FORCE_ASSIGN] ERROR: $e');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Force assign failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _debugCheckRiderStatus(
+    String riderId,
+  ) async {
+    print('[DEBUG] ===== CHECKING RIDER $riderId =====');
+
+    final riderDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(riderId)
+        .get();
+
+    if (!riderDoc.exists) {
+      print('[DEBUG] Rider not found!');
+      return;
+    }
+
+    final d = riderDoc.data()!;
+    print('[DEBUG] inProgressOrderID: '
+        '${d['inProgressOrderID']}');
+    print('[DEBUG] riderAvailability: '
+        '${d['riderAvailability']}');
+    print('[DEBUG] riderDisplayStatus: '
+        '${d['riderDisplayStatus']}');
+    print('[DEBUG] isActive: ${d['isActive']}');
+    print('[DEBUG] checkedOutToday: '
+        '${d['checkedOutToday']}');
+    print('[DEBUG] locationUpdatedAt: '
+        '${d['locationUpdatedAt']}');
+
+    const activeStatuses = [
+      'Awaiting Rider',
+      'Driver Accepted',
+      'Order Accepted',
+      'Order Shipped',
+      'In Transit',
+    ];
+
+    print('[DEBUG] Querying restaurant_orders '
+        'for this rider...');
+    for (final status in activeStatuses) {
+      final snap = await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .where('driverID', isEqualTo: riderId)
+          .where('status', isEqualTo: status)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        print('[DEBUG] $status: '
+            '${snap.docs.length} orders');
+        for (final o in snap.docs) {
+          print('[DEBUG]   -> ${o.id}');
+        }
+      }
+    }
+
+    print('[DEBUG] ===== END RIDER CHECK =====');
+  }
 }
 
 // =================== INFO CHIP ===================
@@ -1197,6 +1809,333 @@ class _InfoChip extends StatelessWidget {
       visualDensity: VisualDensity.compact,
       backgroundColor: color.withOpacity(0.1),
       side: BorderSide(color: color.withOpacity(0.3)),
+    );
+  }
+}
+
+// =================== HEALTH CHIP ===================
+
+class _HealthChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _HealthChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 10,
+        vertical: 4,
+      ),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =================== REJECTION HISTORY PANEL ===================
+
+class _RejectionHistoryPanel extends StatelessWidget {
+  final String orderId;
+
+  const _RejectionHistoryPanel({required this.orderId});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<QuerySnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('assignments_log')
+          .where('orderId', isEqualTo: orderId)
+          .orderBy('createdAt', descending: true)
+          .limit(20)
+          .get(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return const SizedBox.shrink();
+        if (!snapshot.hasData) return const SizedBox.shrink();
+
+        final logs = snapshot.data!.docs;
+        final rejectionCount =
+            logs.where((doc) => doc['status'] == 'rejected').length;
+
+        if (logs.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        return Card(
+          margin: const EdgeInsets.all(8),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Rejection History ($rejectionCount)',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                ...logs.map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  if (data['status'] != 'rejected') {
+                    return const SizedBox.shrink();
+                  }
+
+                  final driverId = data['driverId'] as String? ?? '';
+                  final driverIdDisplay = driverId.length > 8
+                      ? '${driverId.substring(0, 8)}...'
+                      : driverId.isNotEmpty
+                          ? driverId
+                          : 'Unknown';
+                  final reason =
+                      data['rejectionReason'] as String?;
+                  final responseTime =
+                      (data['responseTimeSeconds'] as num?)
+                              ?.toInt()
+                              .toString() ??
+                          '--';
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.close,
+                            color: Colors.orange.shade700, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Rider: $driverIdDisplay',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              if (reason != null && reason.isNotEmpty)
+                                Text('Reason: $reason'),
+                              Text(
+                                'Response: ${responseTime}s',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// =================== DISPATCH TIMELINE PANEL ===================
+
+class _DispatchTimelinePanel extends StatelessWidget {
+  final String orderId;
+
+  const _DispatchTimelinePanel({required this.orderId});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<QuerySnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('dispatch_events')
+          .where('orderId', isEqualTo: orderId)
+          .orderBy('createdAt', descending: false)
+          .limit(20)
+          .get(),
+      builder: (context, snap) {
+        if (!snap.hasData || snap.data!.docs.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        final events = snap.data!.docs;
+        return Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Dispatch Timeline',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade900,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...events.map((doc) {
+                final d = doc.data() as Map<String, dynamic>;
+                final type =
+                    d['type']?.toString() ?? 'unknown';
+                final ts = d['createdAt'] as Timestamp?;
+                final time = ts != null
+                    ? '${ts.toDate().hour}:${ts.toDate().minute.toString().padLeft(2, '0')}:${ts.toDate().second.toString().padLeft(2, '0')}'
+                    : '--';
+                final riderId =
+                    d['riderId']?.toString() ?? '';
+                final score = (d['totalScore'] as num?)
+                    ?.toStringAsFixed(3);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        margin: const EdgeInsets.only(top: 4),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.blue.shade400,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              type.replaceAll('_', ' '),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              '$time${riderId.isNotEmpty ? ' • Rider: ${riderId.substring(0, riderId.length > 6 ? 6 : riderId.length)}...' : ''}${score != null ? ' • Score: $score' : ''}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// =================== BATCH ORDER PANEL ===================
+
+class _BatchOrderPanel extends StatelessWidget {
+  final Map<String, dynamic> batchData;
+
+  const _BatchOrderPanel({required this.batchData});
+
+  @override
+  Widget build(BuildContext context) {
+    final batchId = batchData['batchId']?.toString() ?? '';
+    if (batchId.isEmpty) return const SizedBox.shrink();
+
+    return FutureBuilder<DocumentSnapshot>(
+      future: FirebaseFirestore.instance
+          .collection('order_batches')
+          .doc(batchId)
+          .get(),
+      builder: (context, snap) {
+        if (!snap.hasData || !snap.data!.exists) {
+          return const SizedBox.shrink();
+        }
+        final batch =
+            snap.data!.data() as Map<String, dynamic>? ?? {};
+        final orderIds =
+            (batch['orderIds'] as List?)?.cast<String>() ?? [];
+        final totalDistance =
+            (batch['totalDistanceKm'] as num?)
+                ?.toStringAsFixed(1) ??
+            '--';
+
+        return Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.purple.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Colors.purple.shade200,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.layers,
+                    size: 16,
+                    color: Colors.purple.shade700,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Batch: ${orderIds.length} orders • ${totalDistance}km',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.purple.shade900,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              ...orderIds.map((oid) => Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(
+                      '• #${oid.substring(0, oid.length > 8 ? 8 : oid.length)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.purple.shade700,
+                      ),
+                    ),
+                  )),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -1383,11 +2322,12 @@ String _statusToText(dynamic raw) {
         return 'Order Accepted';
       case 'driver assigned':
         return 'Driver Assigned';
-      case 'driver pending':
-        return 'Driver Pending';
+      case 'driver accepted':
+        return 'Driver Accepted';
+      case 'order shipped':
+        return 'Order Shipped';
       case 'released':
       case 'in transit':
-      case 'order shipped':
         return 'In Transit';
       case 'completed':
       case 'order completed':
@@ -1458,107 +2398,67 @@ Color _getStatusColor(String status) {
   }
 }
 
-// Change Order Status dialog and update helper
-Future<void> _showChangeStatusDialog(
-    BuildContext context, String orderId, String currentStatus) async {
-  String? selectedStatus = currentStatus;
-  final List<String> statuses = <String>[
-    'Order Placed',
-    'Order Accepted',
-    'Driver Assigned',
-    'Driver Pending',
-    'In Transit',
-    'Order Completed',
-    'Order Rejected',
-  ];
-
-  final String? result = await showDialog<String>(
+Future<void> _showDeleteOrderDialog(
+    BuildContext context, String orderId) async {
+  final ok = await showDialog<bool>(
     context: context,
-    builder: (context) {
-      return AlertDialog(
-        title: const Text('Change Order Status'),
-        content: StatefulBuilder(
-          builder: (context, setState) {
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Select a new status:'),
-                const SizedBox(height: 12),
-                DropdownButton<String>(
-                  isExpanded: true,
-                  value: selectedStatus,
-                  items: statuses.map((s) {
-                    return DropdownMenuItem<String>(
-                      value: s,
-                      child: Text(s),
-                    );
-                  }).toList(),
-                  onChanged: (v) => setState(() => selectedStatus = v),
-                ),
-              ],
-            );
-          },
+    builder: (_) => AlertDialog(
+      title: const Text('Delete order?'),
+      content: Text(
+        'Delete order #${orderId.length > 8 ? orderId.substring(0, 8) : orderId}? '
+        'This cannot be undone.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(selectedStatus),
-            child: const Text('Update'),
-          ),
-        ],
-      );
-    },
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          style: TextButton.styleFrom(foregroundColor: Colors.red),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
   );
-
-  if (result == null || result.isEmpty || result == currentStatus) return;
-
+  if (ok != true || !context.mounted) return;
   try {
-    await _updateOrderStatus(orderId, result);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.green,
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white),
-              const SizedBox(width: 8),
-              Expanded(child: Text('Status updated to "$result"')),
-            ],
-          ),
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+    await FirebaseFirestore.instance
+        .collection('restaurant_orders')
+        .doc(orderId)
+        .delete();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Order deleted'),
+        backgroundColor: Colors.green,
+      ),
+    );
   } catch (e) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.red,
-          content: Row(
-            children: [
-              const Icon(Icons.error_outline, color: Colors.white),
-              const SizedBox(width: 8),
-              Expanded(child: Text('Failed to update status: $e')),
-            ],
-          ),
-          duration: const Duration(seconds: 4),
-        ),
-      );
-    }
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Failed to delete: $e'),
+        backgroundColor: Colors.red,
+      ),
+    );
   }
 }
 
-Future<void> _updateOrderStatus(String orderId, String newStatus) async {
-  await FirebaseFirestore.instance
-      .collection('restaurant_orders')
-      .doc(orderId)
-      .update({
-    'status': newStatus,
-    'statusChangedAt': FieldValue.serverTimestamp(),
-  });
+// Change Order Status - navigates to page (fixes Driver Rejected dropdown error)
+Future<bool?> _showChangeStatusDialog(
+  BuildContext context,
+  String orderId,
+  Map<String, dynamic> order,
+) async {
+  return Navigator.of(context).push<bool>(
+    MaterialPageRoute<bool>(
+      builder: (_) => ChangeOrderStatusPage(
+        order: order,
+        orderId: orderId,
+      ),
+    ),
+  );
 }
 
 // Calculate distance between two coordinates using Haversine formula
@@ -1689,6 +2589,96 @@ class _TodaysOrdersList extends StatefulWidget {
 class _TodaysOrdersListState extends State<_TodaysOrdersList> {
   final Set<String> _sendingSMS = {}; // Track orders currently sending SMS
   final OrderRejectionService _orderRejectionService = OrderRejectionService();
+  final ManualDispatchService _manualDispatchService = ManualDispatchService();
+  final DriverAssignmentService _driverAssignmentService =
+      DriverAssignmentService();
+
+  final Map<String, String> _zoneNameCache = {};
+  final DeliveryZoneService _deliveryZoneService = DeliveryZoneService();
+
+  String? _resolveZoneName(String orderId, Map<String, dynamic> data) {
+    if (_zoneNameCache.containsKey(orderId)) {
+      return _zoneNameCache[orderId];
+    }
+    final addr = _manualDispatchService.extractDeliveryAddress(data);
+    final lat = addr['lat'] as double?;
+    final lng = addr['lng'] as double?;
+    final locality = addr['locality'] as String?;
+    if (lat == null &&
+        lng == null &&
+        (locality == null || locality.isEmpty)) {
+      _zoneNameCache[orderId] = '';
+      return '';
+    }
+    _zoneNameCache[orderId] = '';
+    _deliveryZoneService
+        .getZoneMatchForDelivery(
+          lat: lat,
+          lng: lng,
+          locality: locality,
+        )
+        .then((match) {
+      final name = match?.zone.name ?? '';
+      if (_zoneNameCache[orderId] != name) {
+        _zoneNameCache[orderId] = name;
+        if (mounted) setState(() {});
+      }
+    }).catchError((_) {});
+    return '';
+  }
+
+  List<Map<String, dynamic>>? _cachedDrivers;
+  DateTime? _driversCacheTime;
+  bool _loadingDrivers = false;
+  static const int _recommendationOrderLimit = 10;
+  static const Duration _driversCacheTtl = Duration(seconds: 60);
+
+  Future<void> _refreshDriverCacheIfNeeded() async {
+    final now = DateTime.now();
+    if (_cachedDrivers != null &&
+        _driversCacheTime != null &&
+        now.difference(_driversCacheTime!) < _driversCacheTtl) {
+      return;
+    }
+    if (mounted) setState(() => _loadingDrivers = true);
+    try {
+      final drivers =
+          await _driverAssignmentService.fetchActiveDriversWithLocations();
+      if (mounted) {
+        setState(() {
+          _cachedDrivers = drivers;
+          _driversCacheTime = now;
+        });
+      }
+    } catch (_) {
+      // Keep previous cache on error
+    } finally {
+      if (mounted) setState(() => _loadingDrivers = false);
+    }
+  }
+
+  Future<void> _openRestaurantMap(
+    BuildContext context,
+    double lat,
+    double lng,
+  ) async {
+    final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+    );
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (ok) return;
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open maps.')),
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open maps.')),
+      );
+    }
+  }
 
   Future<void> _sendRejectionSMS(
       BuildContext context, String orderId, Map<String, dynamic> data) async {
@@ -1914,6 +2904,10 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
           return const CenteredMessage('No active orders today.');
         }
 
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _refreshDriverCacheIfNeeded();
+        });
+
         return ListView.separated(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(12),
@@ -1946,6 +2940,7 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
             }
             final vendor = (data['vendor'] ?? {}) as Map<String, dynamic>;
             final vendorName = (vendor['title'] ?? '') as String? ?? '';
+            final zoneName = _resolveZoneName(id, data);
 
             final isOrderAccepted = status == 'Order Accepted';
             final isOrderPlaced = status == 'Order Placed';
@@ -1956,6 +2951,35 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                 !isOrderPlaced &&
                 !isOrderRejected &&
                 driverId.isNotEmpty;
+
+            final location =
+                _manualDispatchService.extractVendorLocation(data);
+            final hasValidVendor = location['latitude']! != 0.0 &&
+                location['longitude']! != 0.0;
+            Map<String, dynamic>? recommended;
+            if (driverId.isEmpty &&
+                i < _recommendationOrderLimit &&
+                _cachedDrivers != null &&
+                hasValidVendor) {
+              recommended =
+                  _driverAssignmentService.getRecommendedDriverFromListSync(
+                _cachedDrivers!,
+                location['latitude']!,
+                location['longitude']!,
+              );
+            }
+            final eligibleForRecommendationUi =
+                driverId.isEmpty && i < _recommendationOrderLimit;
+
+            if (i == 0) {
+              print(
+                  '[Recommendation] orderId=$id hasValidVendor=$hasValidVendor '
+                  'cachedDriversCount=${_cachedDrivers?.length ?? 0} '
+                  'recommended=${recommended != null}');
+              print(
+                  '[Recommendation] vendor lat=${location['latitude']} '
+                  'lng=${location['longitude']}');
+            }
 
             return Card(
               clipBehavior: Clip.antiAlias,
@@ -2024,8 +3048,26 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                             IconButton(
                               tooltip: 'Change Status',
                               icon: const Icon(Icons.edit, size: 18),
+                              onPressed: () async {
+                                final ok = await _showChangeStatusDialog(
+                                  context,
+                                  id,
+                                  data,
+                                );
+                                if (ok == true && context.mounted) {
+                                  setState(() {});
+                                }
+                              },
+                            ),
+                            IconButton(
+                              tooltip: 'Delete order',
+                              icon: Icon(
+                                Icons.delete,
+                                size: 18,
+                                color: Colors.red.shade700,
+                              ),
                               onPressed: () =>
-                                  _showChangeStatusDialog(context, id, status),
+                                  _showDeleteOrderDialog(context, id),
                             ),
                           ],
                         ),
@@ -2049,10 +3091,93 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                                 label: vendorName,
                                 color: Colors.orange,
                               ),
+                            if (zoneName != null &&
+                                zoneName.isNotEmpty)
+                              _InfoChip(
+                                icon: Icons.map_outlined,
+                                label: zoneName,
+                                color: Colors.blue,
+                              ),
+                            if (hasValidVendor)
+                              InkWell(
+                                onTap: () => _openRestaurantMap(
+                                  context,
+                                  location['latitude']!,
+                                  location['longitude']!,
+                                ),
+                                borderRadius: BorderRadius.circular(4),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Icon(
+                                    Icons.location_on,
+                                    color: Colors.orange,
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
                             if (shouldShowDriverName && !isOrderCompleted)
                               DriverNameChip(driverId: driverId),
                             // Show restaurant owner
                             RestaurantOwnerChip(orderData: data),
+                            if (eligibleForRecommendationUi) ...[
+                              if (_cachedDrivers == null && _loadingDrivers)
+                                _InfoChip(
+                                  icon: Icons.hourglass_empty,
+                                  label: 'Loading recommendation…',
+                                  color: Colors.grey,
+                                )
+                              else if (_cachedDrivers == null &&
+                                  !_loadingDrivers)
+                                _InfoChip(
+                                  icon: Icons.person_off,
+                                  label: 'No riders available',
+                                  color: Colors.grey,
+                                )
+                              else if (_cachedDrivers != null &&
+                                  recommended != null)
+                                _InfoChip(
+                                  icon: Icons.person_pin,
+                                  label:
+                                      'Recommended: ${recommended['driverName']} · '
+                                      '${(recommended['distance'] as double).toStringAsFixed(1)} km '
+                                      '${recommended['riderDisplayStatus'] ?? ''}',
+                                  color: Colors.teal,
+                                )
+                              else if (_cachedDrivers != null &&
+                                  recommended == null)
+                                _InfoChip(
+                                  icon: Icons.person_search,
+                                  label: 'No rider in range',
+                                  color: Colors.grey,
+                                ),
+                              const SizedBox(width: 4),
+                              TextButton.icon(
+                                onPressed: () =>
+                                    _showForceAssignDialog(
+                                  context,
+                                  id,
+                                ),
+                                icon: const Icon(
+                                  Icons.bolt,
+                                  size: 16,
+                                  color: Colors.orange,
+                                ),
+                                label: const Text(
+                                  'Force Assign',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.orange,
+                                  ),
+                                ),
+                                style: TextButton.styleFrom(
+                                  minimumSize: Size.zero,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                ),
+                              ),
+                            ],
                             if (eta != null)
                               _InfoChip(
                                 icon: Icons.timer,
@@ -2061,7 +3186,6 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
                               ),
                             if (readyAt != null &&
                                 (isOrderAccepted ||
-                                    status == 'Driver Pending' ||
                                     status == 'Driver Accepted' ||
                                     status == 'Order Shipped'))
                               _InfoChip(
@@ -2169,6 +3293,256 @@ class _TodaysOrdersListState extends State<_TodaysOrdersList> {
         );
       },
     );
+  }
+
+  Future<void> _showForceAssignDialog(
+    BuildContext context,
+    String orderId,
+  ) async {
+    print('[FORCE_ASSIGN] Opening dialog for '
+        'order $orderId');
+
+    final drivers = await FirebaseFirestore.instance
+        .collection('users')
+        .where('role', isEqualTo: 'driver')
+        .get();
+
+    print('[FORCE_ASSIGN] Found '
+        '${drivers.docs.length} total drivers');
+
+    if (!context.mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Force Assign Rider'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: ListView.builder(
+            itemCount: drivers.docs.length,
+            itemBuilder: (_, i) {
+              final doc = drivers.docs[i];
+              final d = doc.data();
+              final rid = doc.id;
+              final orders =
+                  d['inProgressOrderID'] as List? ?? [];
+              final status =
+                  d['riderAvailability'] ?? 'unknown';
+              final checkedOut =
+                  d['checkedOutToday'] == true;
+              final hasLoc = d['location'] != null;
+              final firstName =
+                  d['firstName'] ?? '';
+              final lastName = d['lastName'] ?? '';
+              final name =
+                  '$firstName $lastName'.trim();
+
+              return ListTile(
+                leading: Icon(
+                  checkedOut
+                      ? Icons.logout
+                      : hasLoc
+                          ? Icons.person_pin_circle
+                          : Icons.person_off,
+                  color: checkedOut
+                      ? Colors.grey
+                      : hasLoc
+                          ? Colors.green
+                          : Colors.red,
+                ),
+                title: Text(
+                  name.isNotEmpty ? name : rid,
+                  style: const TextStyle(fontSize: 14),
+                ),
+                subtitle: Text(
+                  '$status '
+                  '| orders: ${orders.length} '
+                  '${checkedOut ? "| CHECKED OUT" : ""}'
+                  '${!hasLoc ? "| NO LOC" : ""}',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(
+                        Icons.bug_report,
+                        size: 20,
+                        color: Colors.blue,
+                      ),
+                      tooltip: 'Check status',
+                      onPressed: () =>
+                          _debugCheckRiderStatus(rid),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _forceAssignRider(
+                          context,
+                          orderId,
+                          rid,
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                        padding:
+                            const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                      ),
+                      child: const Text(
+                        'Assign',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _forceAssignRider(
+    BuildContext context,
+    String orderId,
+    String riderId,
+  ) async {
+    print('[FORCE_ASSIGN] Assigning rider '
+        '$riderId to order $orderId');
+
+    try {
+      final orderRef = FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(orderId);
+      final riderRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(riderId);
+
+      await FirebaseFirestore.instance
+          .runTransaction((tx) async {
+        final orderDoc = await tx.get(orderRef);
+        final riderDoc = await tx.get(riderRef);
+
+        if (!orderDoc.exists) {
+          throw Exception('Order not found');
+        }
+        if (!riderDoc.exists) {
+          throw Exception('Rider not found');
+        }
+
+        final riderData = riderDoc.data() ?? {};
+        final name =
+            '${riderData['firstName'] ?? ''} '
+                '${riderData['lastName'] ?? ''}'
+                .trim();
+
+        tx.update(orderRef, {
+          'status': 'Driver Assigned',
+          'driverID': riderId,
+          'driverName': name,
+          'assignedAt':
+              FieldValue.serverTimestamp(),
+          'dispatch.forceAssigned': true,
+          'dispatch.forceAssignedBy':
+              'admin_debug',
+        });
+
+        tx.update(riderRef, {
+          'orderRequestData': FieldValue.arrayUnion([orderId]),
+        });
+
+        print('[FORCE_ASSIGN] Transaction prepared '
+            '(rider=$name)');
+      });
+
+      print('[FORCE_ASSIGN] SUCCESS: rider $riderId -> order $orderId '
+          '(status=Driver Assigned, orderRequestData updated)');
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Rider force-assigned!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      print('[FORCE_ASSIGN] ERROR: $e');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Force assign failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _debugCheckRiderStatus(
+    String riderId,
+  ) async {
+    print('[DEBUG] ===== CHECKING RIDER $riderId =====');
+
+    final riderDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(riderId)
+        .get();
+
+    if (!riderDoc.exists) {
+      print('[DEBUG] Rider not found!');
+      return;
+    }
+
+    final d = riderDoc.data()!;
+    print('[DEBUG] inProgressOrderID: '
+        '${d['inProgressOrderID']}');
+    print('[DEBUG] riderAvailability: '
+        '${d['riderAvailability']}');
+    print('[DEBUG] riderDisplayStatus: '
+        '${d['riderDisplayStatus']}');
+    print('[DEBUG] isActive: ${d['isActive']}');
+    print('[DEBUG] checkedOutToday: '
+        '${d['checkedOutToday']}');
+    print('[DEBUG] locationUpdatedAt: '
+        '${d['locationUpdatedAt']}');
+
+    const activeStatuses = [
+      'Awaiting Rider',
+      'Driver Accepted',
+      'Order Accepted',
+      'Order Shipped',
+      'In Transit',
+    ];
+
+    print('[DEBUG] Querying restaurant_orders '
+        'for this rider...');
+    for (final status in activeStatuses) {
+      final snap = await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .where('driverID', isEqualTo: riderId)
+          .where('status', isEqualTo: status)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        print('[DEBUG] $status: '
+            '${snap.docs.length} orders');
+        for (final o in snap.docs) {
+          print('[DEBUG]   -> ${o.id}');
+        }
+      }
+    }
+
+    print('[DEBUG] ===== END RIDER CHECK =====');
   }
 }
 

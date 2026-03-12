@@ -34,6 +34,7 @@ class User with ChangeNotifier {
   String role;
 
   String vendorID;
+  String? chainId;
   UserBankDetails userBankDetails;
   dynamic walletAmount;
 
@@ -54,7 +55,8 @@ class User with ChangeNotifier {
       this.photos = const [],
       this.role = '',
         this.createdAt,
-      this.vendorID = ''})
+      this.vendorID = '',
+      this.chainId})
       : this.lastOnlineTimestamp = lastOnlineTimestamp ?? Timestamp.now(),
         this.settings = settings ?? UserSettings(),
         this.userBankDetails = userBankDetails ?? UserBankDetails(),
@@ -81,6 +83,7 @@ class User with ChangeNotifier {
         photos: parsedJson['photos'] ?? [].cast<dynamic>(),
         role: parsedJson['role'] ?? '',
         vendorID: parsedJson['vendorID'] ?? '',
+        chainId: parsedJson['chainId']?.toString(),
         createdAt: parsedJson['createdAt'],
         userBankDetails: parsedJson.containsKey('userBankDetails') ? UserBankDetails.fromJson(parsedJson['userBankDetails']) : UserBankDetails(),
         settings: parsedJson.containsKey('settings') ? UserSettings.fromJson(parsedJson['settings']) : UserSettings());
@@ -110,6 +113,9 @@ class User with ChangeNotifier {
     };
     if (role == USER_ROLE_VENDOR) {
       json.addAll({'vendorID': this.vendorID});
+    }
+    if (chainId != null && chainId!.isNotEmpty) {
+      json['chainId'] = chainId;
     }
     return json;
   }

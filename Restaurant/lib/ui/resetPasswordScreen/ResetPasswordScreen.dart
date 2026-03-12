@@ -1,4 +1,3 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/constants.dart';
@@ -35,7 +34,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   child: Text(
                     'Reset Password',
                     style: TextStyle(color: Color(COLOR_PRIMARY), fontSize: 25.0, fontWeight: FontWeight.bold),
-                  ).tr(),
+                  ),
                 ),
               ),
               ConstrainedBox(
@@ -53,7 +52,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     cursorColor: Color(COLOR_PRIMARY),
                     decoration: InputDecoration(
                       contentPadding: new EdgeInsets.only(left: 16, right: 16),
-                      hintText: 'E-mail'.tr(),
+                      hintText: 'E-mail',
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(25.0),
                         borderSide: BorderSide(color: Color(COLOR_PRIMARY), width: 2.0),
@@ -91,7 +90,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     ),
                     onPressed: () => resetPassword(),
                     child: Text(
-                      'Send Link'.tr(),
+                      'Send Link',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
@@ -111,13 +110,13 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   resetPassword() async {
     if (_key.currentState?.validate() ?? false) {
       _key.currentState!.save();
-      showProgress(context, "SendingEmail".tr(), false);
+      showProgress(context, "SendingEmail", false);
       await auth.FirebaseAuth.instance.sendPasswordResetEmail(email: _emailAddress);
       hideProgress();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            "checkEmail".tr(),
+            "checkEmail",
           ),
         ),
       );

@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:datetime_picker_formfield_new/datetime_picker_formfield.dart';
-import 'package:easy_localization/easy_localization.dart';
+import 'package:intl/intl.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -25,7 +25,7 @@ class AddOfferScreen extends StatefulWidget {
 }
 
 class _AddOfferScreenState extends State<AddOfferScreen> {
-  var _result = "Fix Price".tr();
+  var _result = "Fix Price";
   final format = DateFormat("yyyy-MM-dd");
   TextEditingController txtCouponCode = TextEditingController();
   TextEditingController txtAddPrice = TextEditingController();
@@ -63,7 +63,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
         appBar: AppBar(
           elevation: 0,
           title: Text(
-            "Create Offer".tr(),
+            "Create Offer",
             style: TextStyle(fontFamily: "Poppins", letterSpacing: 0.5, fontWeight: FontWeight.normal, color: isDarkMode(context) ? Colors.white : Colors.black),
           ),
           centerTitle: false,
@@ -95,7 +95,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                       mainAxisAlignment: MainAxisAlignment.start,
                       children: [
                         Text(
-                          "Coupon Code".tr(),
+                          "Coupon Code",
                           style: TextStyle(color: isDarkMode(context) ? Colors.white : Color(0Xff696A75), fontSize: 17, fontFamily: "Poppins", fontWeight: FontWeight.bold),
                         ),
                         SizedBox(
@@ -106,7 +106,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                           validator: validateEmptyField,
                           textInputAction: TextInputAction.next,
                           decoration: InputDecoration(
-                              hintText: "Add coupon code".tr(),
+                              hintText: "Add coupon code",
                               contentPadding: EdgeInsets.fromLTRB(15, 10, 15, 10),
                               hintStyle: TextStyle(color: isDarkMode(context) ? Colors.white : Color(0Xff696A75), fontSize: 17, fontFamily: "Poppins", fontWeight: FontWeight.bold),
                               enabledBorder: OutlineInputBorder(
@@ -120,7 +120,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                           height: 10,
                         ),
                         Text(
-                          "Select Coupon Type".tr(),
+                          "Select Coupon Type",
                           style: TextStyle(color: isDarkMode(context) ? Colors.white : Color(0Xff696A75), fontSize: 17, fontFamily: "Poppins", fontWeight: FontWeight.bold),
                         ),
                         Row(
@@ -131,7 +131,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                                 child: RadioListTile(
                                     contentPadding: EdgeInsets.zero,
                                     title: Text(
-                                      'Fix Price'.tr(),
+                                      'Fix Price',
                                       style: TextStyle(color: Colors.grey, fontSize: 17, fontFamily: "Poppins", fontWeight: FontWeight.bold),
                                     ),
                                     value: "Fix Price",
@@ -154,7 +154,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                                 child: RadioListTile(
                                     contentPadding: EdgeInsets.zero,
                                     title: Text(
-                                      'Percentage'.tr(),
+                                      'Percentage',
                                       style: TextStyle(color: Colors.grey, fontSize: 17, fontFamily: "Poppins", fontWeight: FontWeight.bold),
                                     ),
                                     value: "Percentage",
@@ -178,7 +178,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                           textInputAction: TextInputAction.next,
                           validator: validateEmptyField,
                           decoration: InputDecoration(
-                              hintText: _result == "Percentage" ? "Add percentage".tr() : "Add price".tr(),
+                              hintText: _result == "Percentage" ? "Add percentage" : "Add price",
                               suffixIcon: Container(
                                 margin: EdgeInsets.only(top: 11, right: 0),
                                 child: Text(
@@ -199,7 +199,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                           height: 10,
                         ),
                         Text(
-                          "Expires at".tr(),
+                          "Expires at",
                           style: TextStyle(color: isDarkMode(context) ? Colors.white : Color(0Xff696A75), fontSize: 17, fontFamily: "Poppins", fontWeight: FontWeight.bold),
                         ),
                         SizedBox(
@@ -208,12 +208,12 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                         DateTimeField(
                           format: format,
                           controller: txtExpieryDate,
-                          validator: (date) => (txtExpieryDate.text == '') ? "notBeEmpty".tr() : null,
+                          validator: (date) => (txtExpieryDate.text == '') ? "notBeEmpty" : null,
                           textInputAction: TextInputAction.done,
                           style: TextStyle(color: isDarkMode(context) ? Colors.white : Color(0Xff696A75), fontSize: 17, fontFamily: "Poppins", fontWeight: FontWeight.bold),
                           decoration: InputDecoration(
                               contentPadding: EdgeInsets.fromLTRB(15, 10, 15, 10),
-                              hintText: "Select date".tr(),
+                              hintText: "Select date",
                               hintStyle: TextStyle(color: isDarkMode(context) ? Colors.white : Color(0Xff696A75), fontSize: 17, fontFamily: "Poppins", fontWeight: FontWeight.bold),
                               enabledBorder: OutlineInputBorder(
                                 borderSide: BorderSide(color: isDarkMode(context) ? Colors.white : Colors.black38, width: 1.0),
@@ -268,7 +268,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                           padding: EdgeInsets.zero,
                           child: SwitchListTile.adaptive(
                               activeColor: Color(COLOR_ACCENT),
-                              title: Text('Activate'.tr(),
+                              title: Text('Activate',
                                   style: TextStyle(fontSize: 15, color: isDarkMode(context) ? Colors.white : Color(0Xff696A75), fontWeight: FontWeight.bold, fontFamily: "Poppins")),
                               value: isOfferEnable,
                               onChanged: (bool newValue) async {
@@ -288,7 +288,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                           padding: EdgeInsets.zero,
                           child: SwitchListTile.adaptive(
                               activeColor: Color(COLOR_ACCENT),
-                              title: Text('Public'.tr(),
+                              title: Text('Public',
                                   style: TextStyle(fontSize: 15, color: isDarkMode(context) ? Colors.white : Color(0Xff696A75), fontWeight: FontWeight.bold, fontFamily: "Poppins")),
                               value: isPublic,
                               onChanged: (bool newValue) async {
@@ -307,7 +307,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
               onTap: () async {
                 if (_formKey.currentState?.validate() == false) {
                 } else {
-                  await showProgress(context, widget.offerModel == null ? 'Adding Offer...'.tr() : "Editing Offer...".tr(), false);
+                  await showProgress(context, widget.offerModel == null ? 'Adding Offer...' : "Editing Offer...", false);
                   if (_mediaFiles.length > 0) {
                     var uniqueID = Uuid().v4();
                     Reference upload = FirebaseStorage.instance.ref().child('flutter/uberEats/offerImages/$uniqueID'
@@ -357,7 +357,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
                   borderRadius: new BorderRadius.circular(7),
                 ),
                 child: Text(
-                  widget.offerModel == null ? "Create Coupon".tr() : "Edit Coupon".tr(),
+                  widget.offerModel == null ? "Create Coupon" : "Edit Coupon",
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white, fontSize: 17, fontFamily: "Poppins", fontWeight: FontWeight.bold),
                 ),
@@ -378,12 +378,12 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
   _pickImage() {
     final action = CupertinoActionSheet(
       message: Text(
-        'Add Picture'.tr(),
+        'Add Picture',
         style: TextStyle(fontSize: 15.0),
       ),
       actions: <Widget>[
         CupertinoActionSheetAction(
-          child: Text('Choose image from gallery'.tr()),
+          child: Text('Choose image from gallery'),
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -397,7 +397,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text('Take a picture'.tr()),
+          child: Text('Take a picture'),
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -412,7 +412,7 @@ class _AddOfferScreenState extends State<AddOfferScreen> {
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel'.tr()),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },

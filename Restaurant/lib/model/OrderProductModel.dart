@@ -59,17 +59,20 @@ class OrderProductModel {
         quanVal = (parsedJson['quantity'] is double) ? (parsedJson["quantity"].isNaN ? 0 : (parsedJson['quantity'] as double).toInt()) : parsedJson['quantity'];
       }
     }
+    final priceVal = parsedJson['price'];
+    final discountPriceVal = parsedJson['discount_price'];
+    final extrasPriceVal = parsedJson["extras_price"];
     return new OrderProductModel(
-      id: parsedJson['id'] ?? '',
+      id: (parsedJson['id'] ?? '').toString(),
       photo: parsedJson['photo'] == '' ? placeholderImage : parsedJson['photo'],
-      price: parsedJson['price'] ?? '',
-      discountPrice: parsedJson['discount_price'] ?? '',
+      price: priceVal != null ? priceVal.toString() : '',
+      discountPrice: discountPriceVal != null ? discountPriceVal.toString() : '',
       quantity: quanVal,
       name: parsedJson['name'] ?? '',
       vendorID: parsedJson['vendorID'] ?? '',
       categoryId: parsedJson['category_id'] ?? '',
       extras: extrasVal,
-      extrasPrice: parsedJson["extras_price"] != null ? parsedJson["extras_price"] : "",
+      extrasPrice: extrasPriceVal != null ? extrasPriceVal.toString() : "",
       variantInfo: (parsedJson.containsKey('variant_info') && parsedJson['variant_info'] != null) ? VariantInfo.fromJson(parsedJson['variant_info']) : null,
     );
   }

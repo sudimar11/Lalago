@@ -5,13 +5,17 @@ import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/FavouriteModel.dart';
 import 'package:foodie_customer/model/OrderModel.dart';
+import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
+import 'package:foodie_customer/model/LoyaltyData.dart';
+import 'package:foodie_customer/services/loyalty_service.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 import 'package:foodie_customer/ui/reviewScreen.dart/reviewScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:intl/intl.dart';
 
 class PostCompletionDialog extends StatefulWidget {
@@ -40,12 +44,36 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
   bool _isProcessingFavorite = false;
   Set<String> _selectedFeedbackTags = {};
   bool? _orderAccuracy;
+  double? _confirmationSpeedRating;
+  bool _savingConfirmationFeedback = false;
   final TextEditingController _reportController = TextEditingController();
+  LoyaltyData? _loyaltyData;
+  Map<String, dynamic>? _loyaltyConfig;
 
   @override
   void initState() {
     super.initState();
     _checkFavoriteStatus();
+    _fetchLoyaltyData();
+  }
+
+  Future<void> _fetchLoyaltyData() async {
+    if (MyAppState.currentUser == null) return;
+    try {
+      final config = await LoyaltyService.getLoyaltyConfig();
+      if (config?['enabled'] != true) return;
+      final user = await FireStoreUtils.getCurrentUser(
+        MyAppState.currentUser!.userID,
+      );
+      if (mounted && user?.loyalty != null) {
+        setState(() {
+          _loyaltyData = user!.loyalty;
+          _loyaltyConfig = config;
+        });
+      }
+    } catch (e) {
+      debugPrint('PostCompletionDialog: error fetching loyalty: $e');
+    }
   }
 
   @override
@@ -99,6 +127,7 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
         builder: (context) => ReviewScreen(
           product: firstProduct,
           orderId: widget.order.id,
+          driverId: widget.order.driverID,
         ),
       ),
     );
@@ -109,10 +138,10 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
     setState(() => _isProcessingReorder = true);
 
     try {
-      showProgress(context, "Please wait", false);
+      await showProgress(context, "Please wait", false);
 
       if (widget.order.products.isEmpty) {
-        hideProgress();
+        await hideProgress();
         showAlertDialog(
           context,
           "Reorder Failed",
@@ -157,7 +186,7 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
         }
       }
 
-      hideProgress();
+      await hideProgress();
 
       if (successCount > 0 && failCount == 0) {
         _dismissDialog();
@@ -188,7 +217,7 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
         );
       }
     } catch (e) {
-      hideProgress();
+      await hideProgress();
       showAlertDialog(
         context,
         "Reorder Failed",
@@ -226,6 +255,17 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
           extrasString = product.extras.toString();
         }
       }
+      // Treat empty/meaningless extras as null to avoid displaying "\\", "null", etc
+      if (extrasString != null) {
+        final s = extrasString.trim();
+        if (s.isEmpty ||
+            s == '[]' ||
+            s == 'null' ||
+            s == '\\' ||
+            s == r'\\') {
+          extrasString = null;
+        }
+      }
 
       return CartProduct(
         id: product.id,
@@ -238,6 +278,7 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
         quantity: product.quantity > 0 ? product.quantity : 1,
         extras: extrasString,
         variant_info: product.variant_info,
+        addedAt: product.addedAt,
       );
     } catch (e) {
       debugPrint("Error validating product: $e");
@@ -392,6 +433,36 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
     }
   }
 
+  Future<void> _handleConfirmationSpeedRating(double rating) async {
+    setState(() {
+      _confirmationSpeedRating = rating;
+      _savingConfirmationFeedback = true;
+    });
+    try {
+      await FirebaseFirestore.instance.collection(ORDER_FEEDBACK).add({
+        'orderId': widget.order.id,
+        'vendorId': widget.order.vendorID,
+        'userId': MyAppState.currentUser?.userID ?? '',
+        'confirmationSpeedRating': rating.toInt(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Thank you for your feedback!')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error saving confirmation feedback: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save feedback: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _savingConfirmationFeedback = false);
+    }
+  }
+
   void _toggleFeedbackTag(String tag) {
     setState(() {
       if (_selectedFeedbackTags.contains(tag)) {
@@ -505,6 +576,113 @@ class _PostCompletionDialogState extends State<PostCompletionDialog> {
                       ),
                     ),
 
+                    // Loyalty token earned
+                    if (_loyaltyData != null &&
+                        _loyaltyConfig != null &&
+                        _loyaltyData!.currentCycle.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 24),
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.shade50,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.amber.shade200,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.emoji_events,
+                                color: Colors.amber.shade700,
+                                size: 32,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'You earned 1 token!',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.amber.shade900,
+                                      ),
+                                    ),
+                                    Builder(
+                                      builder: (context) {
+                                        final tokensNeeded =
+                                            LoyaltyService.getTokensToNextTier(
+                                          _loyaltyData!.tokensThisCycle,
+                                          _loyaltyConfig,
+                                        );
+                                        final nextTier =
+                                            LoyaltyService.getNextTierName(
+                                          _loyaltyData!.tokensThisCycle,
+                                          _loyaltyConfig,
+                                        );
+                                        if (tokensNeeded <= 0 ||
+                                            nextTier == null) {
+                                          return Text(
+                                            'You\'re at the top tier!',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.amber.shade800,
+                                            ),
+                                          );
+                                        }
+                                        return Text(
+                                          '$tokensNeeded more orders to reach ${nextTier[0].toUpperCase() + nextTier.substring(1)}!',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.amber.shade800,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                    const SizedBox(height: 24),
+
+                    // Confirmation speed feedback
+                    Text(
+                      'How fast did the restaurant confirm your order?',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontFamily: 'Poppinsr',
+                        color: isDarkMode(context)
+                            ? Colors.white70
+                            : Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    RatingBar.builder(
+                      initialRating: _confirmationSpeedRating ?? 0,
+                      minRating: 1,
+                      direction: Axis.horizontal,
+                      allowHalfRating: false,
+                      itemCount: 5,
+                      itemSize: 28,
+                      itemPadding:
+                          const EdgeInsets.symmetric(horizontal: 2),
+                      itemBuilder: (context, _) => Icon(
+                        Icons.star,
+                        color: Color(COLOR_PRIMARY),
+                      ),
+                      onRatingUpdate: (rating) {
+                        _handleConfirmationSpeedRating(rating);
+                      },
+                      ignoreGestures: _savingConfirmationFeedback,
+                    ),
                     const SizedBox(height: 24),
 
                     // Secondary Actions

@@ -22,8 +22,6 @@ import 'package:foodie_customer/ui/home/view_all_popular_restaurant_screen.dart'
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:location/location.dart' as loc;
-import 'package:location/location.dart';
 import 'package:google_maps_place_picker_mb/google_maps_place_picker.dart';
 
 class DineInScreen extends StatefulWidget {
@@ -36,7 +34,6 @@ class DineInScreen extends StatefulWidget {
 }
 
 class _DineInScreenState extends State<DineInScreen> {
-  loc.Location location = new loc.Location();
   String? currentLocation = "", name = "";
   final fireStoreUtils = FireStoreUtils();
 
@@ -54,58 +51,39 @@ class _DineInScreenState extends State<DineInScreen> {
   @override
   void initState() {
     super.initState();
-    getLocationData();
+    _initializeLocation();
     cuisinesFuture = fireStoreUtils.getCuisines();
   }
 
   bool isLoading = true;
 
-  getLocationData() async {
-    await getCurrentLocation().then((value) {
-      setState(() {
-        AddressModel addressModel = AddressModel();
-        addressModel.location =
-            UserLocation(latitude: value.latitude, longitude: value.longitude);
-        MyAppState.selectedPosotion = addressModel;
-      });
-      getData();
-    }).onError((error, stackTrace) {
-      getPermission();
-    });
+  /// Uses existing location from MyAppState. Does NOT auto-request location.
+  /// If no valid location, shows empty state; user taps "Select" for PlacePicker.
+  Future<void> _initializeLocation() async {
+    final loc = MyAppState.selectedPosition.location;
+    final hasValidLocation = loc != null &&
+        !(loc.latitude == 0 && loc.longitude == 0);
 
-    await placemarkFromCoordinates(
-            MyAppState.selectedPosotion.location!.latitude,
-            MyAppState.selectedPosotion.location!.longitude)
-        .then((value) {
-      Placemark placeMark = value[0];
-
-      setState(() {
-        currentLocation =
-            "${placeMark.name}, ${placeMark.subLocality}, ${placeMark.locality}, ${placeMark.administrativeArea}, ${placeMark.postalCode}, ${placeMark.country}";
-      });
-    }).catchError((error) {
-      debugPrint("------>${error.toString()}");
-    });
-
-    setState(() {
-      isLoading = false;
-    });
-  }
-
-  getPermission() async {
-    setState(() {
-      isLoading = false;
-    });
-    PermissionStatus _permissionGranted = await location.hasPermission();
-    if (_permissionGranted == PermissionStatus.denied) {
-      _permissionGranted = await location.requestPermission();
-      if (_permissionGranted != PermissionStatus.granted) {
+    if (hasValidLocation) {
+      try {
+        final placeMarks =
+            await placemarkFromCoordinates(loc.latitude, loc.longitude);
+        if (placeMarks.isNotEmpty && mounted) {
+          final pm = placeMarks.first;
+          setState(() {
+            currentLocation =
+                "${pm.name}, ${pm.subLocality}, ${pm.locality}, "
+                "${pm.administrativeArea}, ${pm.postalCode}, ${pm.country}";
+          });
+        }
+        getData();
+      } catch (e) {
+        debugPrint("placemarkFromCoordinates error: $e");
         getData();
       }
     }
-    setState(() {
-      isLoading = false;
-    });
+
+    if (mounted) setState(() => isLoading = false);
   }
 
   void dispose() {
@@ -220,8 +198,8 @@ class _DineInScreenState extends State<DineInScreen> {
           isDarkMode(context) ? Color(DARK_COLOR) : Color(0xffFFFFFF),
       body: isLoading == true
           ? Center(child: CircularProgressIndicator())
-          : (MyAppState.selectedPosotion.location!.latitude == 0 &&
-                  MyAppState.selectedPosotion.location!.longitude == 0)
+          : (MyAppState.selectedPosition.location!.latitude == 0 &&
+                  MyAppState.selectedPosition.location!.longitude == 0)
               ? Center(
                   child: showEmptyState(
                       "We don't have your location.", context,
@@ -239,7 +217,7 @@ class _DineInScreenState extends State<DineInScreen> {
                               addressModel.location = UserLocation(
                                   latitude: result.geometry!.location.lat,
                                   longitude: result.geometry!.location.lng);
-                              MyAppState.selectedPosotion = addressModel;
+                              MyAppState.selectedPosition = addressModel;
 
                               currentLocation = result.formattedAddress;
                               getData();
@@ -307,11 +285,11 @@ class _DineInScreenState extends State<DineInScreen> {
                                       final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
                                           MyAppState.currentUser!.shippingAddress);
                                       if (resolvedDefaultAddress != null) {
-                                        MyAppState.selectedPosotion = resolvedDefaultAddress;
+                                        MyAppState.selectedPosition = resolvedDefaultAddress;
                                         currentLocation = resolvedDefaultAddress.getFullAddress();
                                       } else {
                                         // Fallback to returned address if no default found
-                                        MyAppState.selectedPosotion = value;
+                                        MyAppState.selectedPosition = value;
                                         currentLocation = value.getFullAddress();
                                       }
                                     } else {
@@ -319,7 +297,7 @@ class _DineInScreenState extends State<DineInScreen> {
                                       final resolvedDefaultAddress = MyAppState.resolveDefaultAddress(
                                           MyAppState.currentUser!.shippingAddress);
                                       if (resolvedDefaultAddress != null) {
-                                        MyAppState.selectedPosotion = resolvedDefaultAddress;
+                                        MyAppState.selectedPosition = resolvedDefaultAddress;
                                         currentLocation = resolvedDefaultAddress.getFullAddress();
                                       }
                                     }
@@ -612,8 +590,10 @@ class _DineInScreenState extends State<DineInScreen> {
                 )),
                 errorWidget: (context, url, error) => ClipRRect(
                   borderRadius: BorderRadius.circular(20),
-                  child: Image.network(
-                    AppGlobal.placeHolderImage!,
+                  child: CachedNetworkImage(
+                    imageUrl: AppGlobal.placeHolderImage!,
+                    memCacheWidth: 200,
+                    memCacheHeight: 200,
                     width: MediaQuery.of(context).size.width * 0.75,
                     fit: BoxFit.fitHeight,
                   ),
@@ -761,8 +741,10 @@ class _DineInScreenState extends State<DineInScreen> {
                 ),
                 errorWidget: (context, url, error) => ClipRRect(
                     borderRadius: BorderRadius.circular(15),
-                    child: Image.network(
-                      AppGlobal.placeHolderImage!,
+                    child: CachedNetworkImage(
+                      imageUrl: AppGlobal.placeHolderImage!,
+                      memCacheWidth: 200,
+                      memCacheHeight: 200,
                       fit: BoxFit.cover,
                       width: MediaQuery.of(context).size.width,
                       height: MediaQuery.of(context).size.height,
@@ -861,8 +843,10 @@ class _DineInScreenState extends State<DineInScreen> {
                   )),
                   errorWidget: (context, url, error) => ClipRRect(
                       borderRadius: BorderRadius.circular(20),
-                      child: Image.network(
-                        placeholderImage,
+                      child: CachedNetworkImage(
+                        imageUrl: placeholderImage,
+                        memCacheWidth: 200,
+                        memCacheHeight: 200,
                         width: MediaQuery.of(context).size.width * 0.75,
                         fit: BoxFit.fitWidth,
                       )),
@@ -1000,8 +984,8 @@ class _DineInScreenState extends State<DineInScreen> {
     double distanceInMeters = Geolocator.distanceBetween(
         latitude,
         longitude,
-        MyAppState.selectedPosotion.location!.latitude,
-        MyAppState.selectedPosotion.location!.longitude);
+        MyAppState.selectedPosition.location!.latitude,
+        MyAppState.selectedPosition.location!.longitude);
     double kilometer = distanceInMeters / 1000;
 
     return kilometer.toStringAsFixed(2).toString();
@@ -1054,8 +1038,10 @@ class _DineInScreenState extends State<DineInScreen> {
                         Center(child: CircularProgressIndicator()),
                     errorWidget: (context, url, error) => ClipRRect(
                         borderRadius: BorderRadius.circular(10),
-                        child: Image.network(
-                          AppGlobal.placeHolderImage!,
+                        child: CachedNetworkImage(
+                          imageUrl: AppGlobal.placeHolderImage!,
+                          memCacheWidth: 120,
+                          memCacheHeight: 120,
                           fit: BoxFit.cover,
                         )),
                   ),

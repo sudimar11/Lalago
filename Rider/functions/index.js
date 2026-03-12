@@ -25,6 +25,25 @@ function toRadians(degrees) {
 }
 
 /**
+ * Returns array of FCM tokens for a user. Prefers fcmTokens array,
+ * falls back to single fcmToken for backward compatibility.
+ */
+async function _getUserFcmTokens(db, userId) {
+  const doc = await db.collection('users').doc(userId).get();
+  if (!doc.exists) return [];
+  const data = doc.data() || {};
+  const arr = data.fcmTokens;
+  if (Array.isArray(arr) && arr.length > 0) {
+    return arr.filter(t => typeof t === 'string' && t.trim().length > 0).map(t => t.trim());
+  }
+  const single = data.fcmToken;
+  if (single && typeof single === 'string' && single.trim().length > 0) {
+    return [single.trim()];
+  }
+  return [];
+}
+
+/**
  * Group orders by restaurant location proximity (500m radius)
  */
 function groupByProximity(orders) {
@@ -434,58 +453,42 @@ exports.notifyCustomerOnDriverAssigned = functions
     try {
       const db = admin.firestore();
 
-      // Get customer FCM token
-      let customerFcmToken = null;
-      let customerId = null;
+      // Get customer ID and FCM tokens
+      const customerId = afterData.authorID || afterData.authorId ||
+        (afterData.author && (afterData.author.id || afterData.author.customerID)) || null;
 
-      // Try to get from order.author
-      const author = afterData.author || {};
-      customerFcmToken = author.fcmToken || null;
-      customerId = author.id || author.customerID || null;
-
-      // Fallback: read from users collection if token not in order
-      if (!customerFcmToken && customerId) {
-        try {
-          const userDoc = await db.collection('users').doc(customerId).get();
-          if (userDoc.exists) {
-            const userData = userDoc.data();
-            customerFcmToken = userData?.fcmToken || null;
-            console.log(
-              `[notifyCustomerOnDriverAssigned] Order ${orderId}: Retrieved FCM token from users collection`
-            );
-          }
-        } catch (userError) {
-          console.error(
-            `[notifyCustomerOnDriverAssigned] Order ${orderId}: Error reading user doc:`,
-            userError
-          );
-        }
+      if (!customerId) {
+        console.log(
+          `[notifyCustomerOnDriverAssigned] Order ${orderId}: No customer ID`
+        );
+        return null;
       }
 
-      if (!customerFcmToken) {
+      const customerTokens = await _getUserFcmTokens(db, customerId);
+
+      if (customerTokens.length === 0) {
         console.log(
           `[notifyCustomerOnDriverAssigned] Order ${orderId}: No FCM token found for customer`
         );
         return null;
       }
 
-      // Send notification
-      const message = {
+      // Send notification to all devices
+      const messagePayload = {
         notification: {
           title: 'Driver Accepted',
           body: 'Driver accepted your order',
         },
-        token: customerFcmToken,
         data: {
           type: 'order_update',
           orderId: orderId,
           status: afterData.status || 'Driver Accepted',
         },
       };
-
-      const messageId = await admin.messaging().send(message);
+      const multicastMessage = { ...messagePayload, tokens: customerTokens };
+      const resp = await admin.messaging().sendEachForMulticast(multicastMessage);
       console.log(
-        `[notifyCustomerOnDriverAssigned] Order ${orderId}: Notification sent. MessageId: ${messageId.substring(0, 20)}...`
+        `[notifyCustomerOnDriverAssigned] Order ${orderId}: Notification sent ${resp.successCount}/${customerTokens.length}`
       );
 
       // Write idempotency marker
@@ -619,50 +622,37 @@ exports.processDriverLocationLifecycle = functions
             restaurantLng
           );
 
-          // Get customer info
+          // Get customer info and tokens
           const author = orderData.author || {};
-          let customerFcmToken = author.fcmToken || null;
-          const customerId = author.id || author.customerID || null;
+          const customerId = orderData.authorID || orderData.authorId ||
+            author.id || author.customerID || null;
+          const customerTokens = customerId
+            ? await _getUserFcmTokens(db, customerId)
+            : [];
 
           // A) "Driver is on the way to the restaurant"
           if (
-            ['Driver Pending', 'Driver Accepted', 'Order Shipped'].includes(
+            ['Driver Accepted', 'Order Shipped'].includes(
               orderStatus
             ) &&
             distanceFromAccept > 100 &&
             !lifecycleNotifs.onWayToRestaurantAt
           ) {
-            // Fallback: get token from users collection if needed
-            if (!customerFcmToken && customerId) {
+            if (customerTokens.length > 0) {
               try {
-                const userDoc = await db.collection('users').doc(customerId).get();
-                if (userDoc.exists) {
-                  customerFcmToken = userDoc.data()?.fcmToken || null;
-                }
-              } catch (err) {
-                console.error(
-                  `[processDriverLocationLifecycle] Error reading customer user:`,
-                  err
-                );
-              }
-            }
-
-            if (customerFcmToken) {
-              try {
-                const message = {
+                const messagePayload = {
                   notification: {
                     title: 'Driver On The Way',
                     body: 'Driver is on the way to the restaurant',
                   },
-                  token: customerFcmToken,
                   data: {
                     type: 'order_update',
                     orderId: String(orderId),
                     status: orderStatus,
                   },
                 };
-
-                await admin.messaging().send(message);
+                const multicastMessage = { ...messagePayload, tokens: customerTokens };
+                await admin.messaging().sendEachForMulticast(multicastMessage);
                 batch.update(orderRef, {
                   'customerLifecycleNotifs.onWayToRestaurantAt':
                     admin.firestore.FieldValue.serverTimestamp(),
@@ -685,37 +675,21 @@ exports.processDriverLocationLifecycle = functions
             distanceToRestaurant <= 50 &&
             !lifecycleNotifs.arrivedRestaurantAt
           ) {
-            // Fallback: get token from users collection if needed
-            if (!customerFcmToken && customerId) {
+            if (customerTokens.length > 0) {
               try {
-                const userDoc = await db.collection('users').doc(customerId).get();
-                if (userDoc.exists) {
-                  customerFcmToken = userDoc.data()?.fcmToken || null;
-                }
-              } catch (err) {
-                console.error(
-                  `[processDriverLocationLifecycle] Error reading customer user:`,
-                  err
-                );
-              }
-            }
-
-            if (customerFcmToken) {
-              try {
-                const message = {
+                const messagePayload = {
                   notification: {
                     title: 'Driver At Restaurant',
                     body: 'Driver is at the restaurant',
                   },
-                  token: customerFcmToken,
                   data: {
                     type: 'order_update',
                     orderId: String(orderId),
                     status: orderStatus,
                   },
                 };
-
-                await admin.messaging().send(message);
+                const multicastMessage = { ...messagePayload, tokens: customerTokens };
+                await admin.messaging().sendEachForMulticast(multicastMessage);
                 batch.update(orderRef, {
                   'customerLifecycleNotifs.arrivedRestaurantAt':
                     admin.firestore.FieldValue.serverTimestamp(),
@@ -739,37 +713,21 @@ exports.processDriverLocationLifecycle = functions
             distanceToRestaurant >= 80 &&
             !lifecycleNotifs.leftRestaurantAt
           ) {
-            // Fallback: get token from users collection if needed
-            if (!customerFcmToken && customerId) {
+            if (customerTokens.length > 0) {
               try {
-                const userDoc = await db.collection('users').doc(customerId).get();
-                if (userDoc.exists) {
-                  customerFcmToken = userDoc.data()?.fcmToken || null;
-                }
-              } catch (err) {
-                console.error(
-                  `[processDriverLocationLifecycle] Error reading customer user:`,
-                  err
-                );
-              }
-            }
-
-            if (customerFcmToken) {
-              try {
-                const message = {
+                const messagePayload = {
                   notification: {
                     title: 'Driver On The Way',
                     body: 'Driver left the restaurant and is on the way',
                   },
-                  token: customerFcmToken,
                   data: {
                     type: 'order_update',
                     orderId: String(orderId),
                     status: 'In Transit',
                   },
                 };
-
-                await admin.messaging().send(message);
+                const multicastMessage = { ...messagePayload, tokens: customerTokens };
+                await admin.messaging().sendEachForMulticast(multicastMessage);
 
                 // Update status to "In Transit" if not already; set pickedUpAt for pipeline metrics
                 const updates = {
@@ -818,5 +776,537 @@ exports.processDriverLocationLifecycle = functions
         error
       );
       return null;
+    }
+  });
+
+/**
+ * HTTPS Callable: Check zone capacity for a rider before check-in.
+ * Accepts { zoneId: string }
+ * Returns { allowed, currentCount, maxRiders, utilizationPercentage }
+ */
+exports.checkZoneCapacity = functions
+  .region('us-central1')
+  .https.onCall(async (data, context) => {
+    const zoneId = data.zoneId;
+    if (!zoneId || typeof zoneId !== 'string') {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'zoneId is required and must be a string',
+      );
+    }
+
+    const db = admin.firestore();
+    const zoneDoc = await db
+      .collection('service_areas')
+      .doc(zoneId)
+      .get();
+
+    if (!zoneDoc.exists) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        `Zone ${zoneId} not found`,
+      );
+    }
+
+    const zoneData = zoneDoc.data();
+    const maxRiders = zoneData.maxRiders;
+    const assignedDriverIds = zoneData.assignedDriverIds || [];
+
+    if (
+      maxRiders === null ||
+      maxRiders === undefined ||
+      assignedDriverIds.length === 0
+    ) {
+      return {
+        allowed: true,
+        currentCount: 0,
+        maxRiders: maxRiders || null,
+        utilizationPercentage: 0,
+      };
+    }
+
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const driversSnap = await db
+      .collection('users')
+      .where('role', '==', 'driver')
+      .get();
+
+    let activeCount = 0;
+    for (const dDoc of driversSnap.docs) {
+      if (!assignedDriverIds.includes(dDoc.id)) continue;
+      const d = dDoc.data();
+      const isV2 = Number(d.statusSchemaVersion || 0) === 2;
+      if (isV2) {
+        if (d.isOnline !== true) continue;
+        const avail = String(d.riderAvailability || 'offline');
+        if (avail !== 'available' &&
+            avail !== 'on_delivery' &&
+            avail !== 'on_break') {
+          continue;
+        }
+      } else if (d.checkedOutToday === true) {
+        continue;
+      }
+      const locTs = d.locationUpdatedAt;
+      if (locTs && locTs.toDate() > fiveMinAgo) {
+        activeCount++;
+      }
+    }
+
+    const utilizationPercentage =
+      maxRiders > 0
+        ? Math.min((activeCount / maxRiders) * 100, 100)
+        : 0;
+
+    return {
+      allowed: activeCount < maxRiders,
+      currentCount: activeCount,
+      maxRiders: maxRiders,
+      utilizationPercentage: utilizationPercentage,
+    };
+  });
+
+/**
+ * Monitor rider inactivity and auto-logout riders who have been inactive
+ * for longer than the configured threshold. Runs every 2 minutes.
+ */
+exports.monitorRiderInactivity = functions.pubsub
+  .schedule('every 2 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    // Deprecated: canonical status writer moved to Admin/functions.
+    // Keep this scheduled function as a no-op during rollout to avoid
+    // duplicate status mutations from multiple codebases.
+    console.log('[monitorRiderInactivity] no-op (moved to Admin/functions)');
+    return null;
+  });
+
+/**
+ * Scheduled cleanup: check each order in every rider's
+ * inProgressOrderID array and remove entries whose actual
+ * status is completed, cancelled, rejected, or missing.
+ * Runs every 60 minutes.
+ */
+exports.cleanupStuckOrders = functions.pubsub
+  .schedule('every 60 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async (context) => {
+    const db = admin.firestore();
+    const ridersSnap = await db
+      .collection('users')
+      .where('role', '==', 'driver')
+      .get();
+
+    const doneStatuses = [
+      'Order Completed',
+      'Order Cancelled',
+      'Order Rejected',
+      'Driver Rejected',
+    ];
+
+    let totalCleaned = 0;
+
+    for (const rider of ridersSnap.docs) {
+      const data = rider.data();
+      const orders = data.inProgressOrderID || [];
+      if (orders.length === 0) continue;
+
+      const toRemove = [];
+
+      for (const orderId of orders) {
+        const orderDoc = await db
+          .collection('restaurant_orders')
+          .doc(orderId)
+          .get();
+
+        if (!orderDoc.exists) {
+          toRemove.push(orderId);
+          continue;
+        }
+
+        const status = orderDoc.data().status || '';
+        if (doneStatuses.includes(status)) {
+          toRemove.push(orderId);
+        }
+      }
+
+      if (toRemove.length > 0) {
+        await rider.ref.update({
+          inProgressOrderID:
+            admin.firestore.FieldValue.arrayRemove(toRemove),
+        });
+        totalCleaned += toRemove.length;
+        console.log(
+          `[CLEANUP] Rider ${rider.id}: removed ` +
+          `${toRemove.length} stuck orders ` +
+          `(${toRemove.join(', ')})`
+        );
+      }
+    }
+
+    if (totalCleaned > 0) {
+      console.log(
+        `[CLEANUP] Done – removed ${totalCleaned} ` +
+        `stuck order(s) total`
+      );
+    } else {
+      console.log('[CLEANUP] Done – no stuck orders');
+    }
+
+    return null;
+  });
+
+/**
+ * Resolve recipient tokens for rider/restaurant communication notifications.
+ */
+async function _resolveCommunicationRecipients(db, orderId, senderType) {
+  const orderDoc = await db.collection('restaurant_orders').doc(orderId).get();
+  if (!orderDoc.exists) {
+    return { tokens: [], recipientRole: null, recipientId: null };
+  }
+  const orderData = orderDoc.data() || {};
+  const riderId = orderData.driverID || orderData.driverId || null;
+  const vendorId = orderData.vendorID || (orderData.vendor || {}).id || null;
+
+  let recipientRole = null;
+  let recipientId = null;
+  if (senderType === 'rider') {
+    recipientRole = 'restaurant';
+    recipientId = vendorId;
+  } else if (senderType === 'restaurant') {
+    recipientRole = 'rider';
+    recipientId = riderId;
+  }
+  if (!recipientId) {
+    return { tokens: [], recipientRole, recipientId };
+  }
+  const tokens = await _getUserFcmTokens(db, recipientId);
+  return { tokens, recipientRole, recipientId };
+}
+
+/**
+ * Legacy bridge: notify receiver when order_messages are written.
+ */
+exports.notifyOnOrderMessageWrite = functions
+  .region('us-central1')
+  .firestore.document('order_messages/{orderId}/messages/{messageId}')
+  .onWrite(async (change, context) => {
+    console.log(
+      '[notifyOnOrderMessageWrite] disabled; Admin/functions handles legacy order_messages notifications'
+    );
+    return null;
+    if (!change.after.exists) return null;
+    const data = change.after.data() || {};
+    const senderType = String(data.senderType || '');
+    const messageText = String(data.messageText || data.text || 'New message');
+    const orderId = context.params.orderId;
+    const db = admin.firestore();
+
+    const { tokens, recipientRole, recipientId } =
+      await _resolveCommunicationRecipients(db, orderId, senderType);
+    if (!tokens.length || !recipientRole || !recipientId) return null;
+
+    const title =
+      senderType === 'rider'
+        ? `Driver update #${orderId.slice(0, 6)}`
+        : `Restaurant update #${orderId.slice(0, 6)}`;
+
+    const payload = {
+      notification: {
+        title,
+        body: messageText,
+      },
+      data: {
+        type: 'order_communication',
+        orderId: String(orderId),
+        target: 'communicationPanel',
+        senderRole: senderType,
+        recipientRole,
+        messageId: context.params.messageId,
+      },
+      android: {
+        priority: 'high',
+      },
+      apns: {
+        headers: { 'apns-priority': '10' },
+      },
+      tokens,
+    };
+
+    const resp = await admin.messaging().sendEachForMulticast(payload);
+    console.log(
+      `[notifyOnOrderMessageWrite] order=${orderId} success=${resp.successCount}/${tokens.length}`
+    );
+    return null;
+  });
+
+/**
+ * Canonical notifications for order_communications messages.
+ */
+exports.notifyOnOrderCommunicationMessage = functions
+  .region('us-central1')
+  .firestore.document('order_communications/{orderId}/messages/{messageId}')
+  .onCreate(async (snap, context) => {
+    const data = snap.data() || {};
+    const orderId = context.params.orderId;
+    const text = String(data.text || data.messageText || 'New message');
+    const senderRole = String(data.senderRole || '');
+    const receiverId = String(data.receiverId || '');
+
+    if (!receiverId || !senderRole) return null;
+
+    const db = admin.firestore();
+    const tokens = await _getUserFcmTokens(db, receiverId);
+    if (!tokens.length) return null;
+
+    const title =
+      senderRole === 'rider'
+        ? `Driver message #${orderId.slice(0, 6)}`
+        : `Restaurant message #${orderId.slice(0, 6)}`;
+    const payload = {
+      notification: { title, body: text },
+      data: {
+        type: 'order_communication',
+        orderId: String(orderId),
+        target: 'communicationThread',
+        messageId: context.params.messageId,
+        senderRole,
+      },
+      android: { priority: 'high' },
+      apns: { headers: { 'apns-priority': '10' } },
+      tokens,
+    };
+    const resp = await admin.messaging().sendEachForMulticast(payload);
+    console.log(
+      `[notifyOnOrderCommunicationMessage] order=${orderId} success=${resp.successCount}/${tokens.length}`
+    );
+    return null;
+  });
+
+/**
+ * Keep isRead in sync when readBy/readAt/status is changed.
+ */
+exports.syncMessageReadState = functions
+  .region('us-central1')
+  .firestore.document('order_communications/{orderId}/messages/{messageId}')
+  .onUpdate(async (change, context) => {
+    const beforeData = change.before.data() || {};
+    const afterData = change.after.data() || {};
+    const beforeReadByCount = Object.keys(beforeData.readBy || {}).length;
+    const afterReadByCount = Object.keys(afterData.readBy || {}).length;
+    const statusChanged = (beforeData.status || '') !== (afterData.status || '');
+    const readByChanged = beforeReadByCount !== afterReadByCount;
+
+    if (!statusChanged && !readByChanged) return null;
+
+    const shouldRead =
+      afterData.status === 'read' ||
+      afterReadByCount > 0 ||
+      afterData.readAt != null;
+    if (afterData.isRead === shouldRead) return null;
+
+    await change.after.ref.set(
+      {
+        isRead: shouldRead,
+        status: shouldRead ? 'read' : afterData.status || 'sent',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return null;
+  });
+
+/**
+ * Validate issue state transitions in canonical issue flow.
+ */
+exports.validateIssueStateTransition = functions
+  .region('us-central1')
+  .firestore.document('order_communications/{orderId}/issues/{issueId}')
+  .onUpdate(async (change, context) => {
+    const beforeData = change.before.data() || {};
+    const afterData = change.after.data() || {};
+    const from = String(beforeData.state || '');
+    const to = String(afterData.state || '');
+    if (!from || !to || from === to) return null;
+
+    const allowed = {
+      opened: ['acknowledged', 'escalated', 'closed'],
+      acknowledged: ['resolved', 'escalated', 'closed'],
+      resolved: ['confirmed', 'opened', 'escalated', 'closed'],
+      confirmed: ['closed'],
+      escalated: ['resolved', 'closed'],
+      closed: [],
+    };
+    const isAllowed = (allowed[from] || []).includes(to);
+    if (!isAllowed) {
+      await change.after.ref.set(
+        {
+          state: from,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      throw new Error(`Invalid issue state transition: ${from} -> ${to}`);
+    }
+
+    await change.after.ref.collection('transitions').add({
+      from,
+      to,
+      actorRole: afterData.lastActorRole || 'system',
+      actorId: afterData.lastActorId || '',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const orderId = context.params.orderId;
+    const db = admin.firestore();
+    const riderId = String(afterData.riderId || '');
+    const restaurantId = String(afterData.restaurantId || '');
+
+    const targetUser = to === 'resolved' || to === 'acknowledged'
+      ? riderId
+      : restaurantId;
+    if (targetUser) {
+      const tokens = await _getUserFcmTokens(db, targetUser);
+      if (tokens.length) {
+        await admin.messaging().sendEachForMulticast({
+          notification: {
+            title: `Issue ${to}`,
+            body: `Order #${orderId.slice(0, 6)} issue is now ${to}`,
+          },
+          data: {
+            type: 'order_issue_update',
+            orderId: String(orderId),
+            issueId: context.params.issueId,
+            issueState: to,
+            target: 'communicationPanel',
+          },
+          tokens,
+        });
+      }
+    }
+    return null;
+  });
+
+/**
+ * Aggregate communication KPIs every 15 minutes.
+ */
+exports.aggregateCommunicationMetrics = functions.pubsub
+  .schedule('every 15 minutes')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = admin.firestore();
+    const since = admin.firestore.Timestamp.fromDate(
+      new Date(Date.now() - 24 * 60 * 60 * 1000)
+    );
+
+    const messagesSnap = await db
+      .collectionGroup('messages')
+      .where('createdAt', '>=', since)
+      .get();
+    const issuesSnap = await db
+      .collectionGroup('issues')
+      .where('createdAt', '>=', since)
+      .get();
+
+    let responsePairs = 0;
+    let totalResponseMs = 0;
+    const byOrder = {};
+    messagesSnap.docs.forEach((doc) => {
+      const d = doc.data() || {};
+      const orderId = d.orderId || doc.ref.parent.parent.id;
+      if (!orderId || !d.createdAt) return;
+      if (!byOrder[orderId]) byOrder[orderId] = [];
+      byOrder[orderId].push(d);
+    });
+
+    Object.values(byOrder).forEach((arr) => {
+      arr.sort((a, b) => a.createdAt.toMillis() - b.createdAt.toMillis());
+      for (let i = 1; i < arr.length; i++) {
+        if (arr[i].senderRole !== arr[i - 1].senderRole) {
+          totalResponseMs +=
+            arr[i].createdAt.toMillis() - arr[i - 1].createdAt.toMillis();
+          responsePairs++;
+        }
+      }
+    });
+
+    const avgResponseMs =
+      responsePairs > 0 ? Math.round(totalResponseMs / responsePairs) : 0;
+    const unresolvedIssues = issuesSnap.docs.filter((doc) => {
+      const s = String((doc.data() || {}).state || '');
+      return ['opened', 'acknowledged', 'resolved'].includes(s);
+    }).length;
+
+    const metricDocId = new Date().toISOString().substring(0, 16);
+    await db.collection('communication_metrics').doc(metricDocId).set({
+      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      responsePairs,
+      avgResponseMs,
+      totalMessages24h: messagesSnap.size,
+      totalIssues24h: issuesSnap.size,
+      unresolvedIssues,
+    });
+
+    const thresholdMs = 10 * 60 * 1000;
+    if (avgResponseMs > thresholdMs || unresolvedIssues > 20) {
+      await db.collection('communication_alerts').add({
+        type: 'kpi_threshold',
+        avgResponseMs,
+        unresolvedIssues,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+    return null;
+  });
+
+exports.sendCommunicationAlertWebhook = functions
+  .region('us-central1')
+  .firestore.document('communication_alerts/{alertId}')
+  .onCreate(async (snap) => {
+    const alert = snap.data() || {};
+    const webhook = functions.config().alerts &&
+      functions.config().alerts.webhook;
+    if (!webhook) {
+      console.log('[sendCommunicationAlertWebhook] webhook not configured');
+      return null;
+    }
+    try {
+      const resp = await fetch(webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: `Communication Alert: ${alert.type || 'unknown'}`,
+          alert,
+        }),
+      });
+      console.log(
+        `[sendCommunicationAlertWebhook] status=${resp.status}`
+      );
+    } catch (e) {
+      console.error('[sendCommunicationAlertWebhook] failed', e);
+    }
+    return null;
+  });
+
+exports.getCommunicationExperimentConfig = functions
+  .region('us-central1')
+  .https.onRequest(async (req, res) => {
+    try {
+      const rc = admin.remoteConfig();
+      const tpl = await rc.getTemplate();
+      const params = tpl.parameters || {};
+      const output = {
+        quick_reply_variant:
+          (params.quick_reply_variant || {}).defaultValue?.value || 'control',
+        comm_panel_layout_variant:
+          (params.comm_panel_layout_variant || {}).defaultValue?.value ||
+          'compact',
+        notification_timing_strategy:
+          (params.notification_timing_strategy || {}).defaultValue?.value ||
+          'immediate',
+      };
+      return res.json({ success: true, data: output });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
     }
   });

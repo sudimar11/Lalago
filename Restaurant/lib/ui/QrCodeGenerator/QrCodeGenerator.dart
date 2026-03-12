@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
@@ -27,7 +26,7 @@ class _QrCodeGeneratorState extends State<QrCodeGenerator> {
             appBar: AppBar(
               elevation: 0,
               title: Text(
-                "QR Information".tr(),
+                "QR Information",
                 style: TextStyle(fontFamily: "Poppins", letterSpacing: 0.5, fontWeight: FontWeight.normal, color: isDarkMode(context) ? Colors.white : Colors.black),
               ),
               centerTitle: false,
@@ -93,7 +92,7 @@ class _QrCodeGeneratorState extends State<QrCodeGenerator> {
                       saveFile(context);
                     },
                     child: Text(
-                      'Download this QR-Code'.tr(),
+                      'Download this QR-Code',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
@@ -125,7 +124,7 @@ class _QrCodeGeneratorState extends State<QrCodeGenerator> {
 
     SnackBar snack = SnackBar(
       content: Text(
-        'Image saved successfully'.tr(),
+        'Image saved successfully',
         style: TextStyle(color: Colors.white),
       ),
       duration: Duration(seconds: 2),

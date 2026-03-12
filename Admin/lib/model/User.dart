@@ -12,6 +12,8 @@ class User with ChangeNotifier {
   String userID;
   String profilePictureURL;
   String role;
+  String? adminLevel;
+  String? userLevel;
 
   User({
     this.email = '',
@@ -24,6 +26,8 @@ class User with ChangeNotifier {
     Timestamp? lastOnlineTimestamp,
     Timestamp? createdAt,
     this.role = '',
+    this.adminLevel,
+    this.userLevel,
   })  : this.lastOnlineTimestamp = lastOnlineTimestamp ?? Timestamp.now(),
         this.createdAt = createdAt ?? Timestamp.now();
 
@@ -41,7 +45,9 @@ class User with ChangeNotifier {
       phoneNumber: parsedJson['phoneNumber'] ?? '',
       userID: parsedJson['id'] ?? parsedJson['userID'] ?? '',
       profilePictureURL: parsedJson['profilePictureURL'] ?? '',
-      role: parsedJson['role'] ?? '',
+      role: parsedJson['role'] ?? parsedJson['userLevel'] ?? '',
+      adminLevel: parsedJson['adminLevel'] as String?,
+      userLevel: parsedJson['userLevel'] as String?,
       createdAt: parsedJson['createdAt'],
     );
   }
@@ -57,6 +63,8 @@ class User with ChangeNotifier {
       'lastOnlineTimestamp': this.lastOnlineTimestamp,
       'profilePictureURL': this.profilePictureURL,
       'role': this.role,
+      'adminLevel': this.adminLevel,
+      'userLevel': this.userLevel,
       'createdAt': this.createdAt,
     };
   }

@@ -320,10 +320,12 @@ class _InboxDriverScreenState extends State<InboxDriverScreen> {
                       ),
                       errorWidget: (context, url, error) => ClipRRect(
                         borderRadius: BorderRadius.circular(30),
-                        child: Image.network(
-                          AppGlobal.placeHolderImage!,
+                        child: CachedNetworkImage(
+                          imageUrl: AppGlobal.placeHolderImage!,
                           width: 60,
                           height: 60,
+                          memCacheWidth: 120,
+                          memCacheHeight: 120,
                           fit: BoxFit.cover,
                         ),
                       ),

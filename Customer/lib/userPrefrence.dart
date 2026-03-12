@@ -200,6 +200,86 @@ class UserPreference {
     }
   }
 
+  // User-closed banners (orderId -> statusWhenClosed; re-show when status changes)
+  static const String _userClosedBannersKey = "user_closed_banners";
+
+  /// Mark an order banner as closed by the user for the current status.
+  static Future<void> markOrderBannerClosed(
+      String userId, String orderId, String statusWhenClosed) async {
+    if (userId.isEmpty || orderId.isEmpty) return;
+
+    try {
+      final String? existingJson =
+          _preferences.getString(_userClosedBannersKey);
+      Map<String, dynamic> root = {};
+
+      if (existingJson != null && existingJson.isNotEmpty) {
+        root = jsonDecode(existingJson) as Map<String, dynamic>;
+      }
+
+      Map<String, dynamic> userMap =
+          (root[userId] as Map<String, dynamic>?) ?? {};
+      userMap[orderId] = statusWhenClosed;
+      root[userId] = userMap;
+      await _preferences.setString(_userClosedBannersKey, jsonEncode(root));
+    } catch (e) {
+      debugPrint('Error marking order banner as closed: $e');
+    }
+  }
+
+  /// True if the user closed the banner for this order and status has not changed.
+  /// When status has changed, returns false and clears the stored entry.
+  static bool isOrderBannerClosed(
+      String userId, String orderId, String currentStatus) {
+    if (userId.isEmpty || orderId.isEmpty) return false;
+
+    try {
+      final String? existingJson =
+          _preferences.getString(_userClosedBannersKey);
+      if (existingJson == null || existingJson.isEmpty) return false;
+
+      final Map<String, dynamic> root =
+          jsonDecode(existingJson) as Map<String, dynamic>;
+      final Map<String, dynamic>? userMap =
+          root[userId] as Map<String, dynamic>?;
+      if (userMap == null) return false;
+
+      final Object? stored = userMap[orderId];
+      if (stored == null) return false;
+      final String storedStatus = stored as String;
+
+      if (storedStatus == currentStatus) return true;
+
+      // Status changed: clear this entry so banner shows again; clear async.
+      _clearOrderBannerClosed(userId, orderId);
+      return false;
+    } catch (e) {
+      debugPrint('Error checking user-closed banner status: $e');
+      return false;
+    }
+  }
+
+  static Future<void> _clearOrderBannerClosed(
+      String userId, String orderId) async {
+    try {
+      final String? existingJson =
+          _preferences.getString(_userClosedBannersKey);
+      if (existingJson == null || existingJson.isEmpty) return;
+
+      final Map<String, dynamic> root =
+          jsonDecode(existingJson) as Map<String, dynamic>;
+      final Map<String, dynamic>? userMap =
+          root[userId] as Map<String, dynamic>?;
+      if (userMap == null || !userMap.containsKey(orderId)) return;
+
+      userMap.remove(orderId);
+      root[userId] = userMap;
+      await _preferences.setString(_userClosedBannersKey, jsonEncode(root));
+    } catch (e) {
+      debugPrint('Error clearing user-closed banner: $e');
+    }
+  }
+
   // Completion dialog tracking
   static const String _completionDialogsShownKey = "completion_dialogs_shown";
 

@@ -16,6 +16,7 @@ import 'package:foodie_customer/constants.dart';
 
 import 'package:foodie_customer/main.dart';
 
+import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/User.dart';
 
 import 'package:foodie_customer/services/FirebaseHelper.dart';
@@ -546,18 +547,19 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
               if (MyAppState.currentUser!.shippingAddress!
                   .where((element) => element.isDefault == true)
                   .isNotEmpty) {
-                MyAppState.selectedPosotion = MyAppState
+                MyAppState.selectedPosition = MyAppState
                     .currentUser!.shippingAddress!
                     .where((element) => element.isDefault == true)
                     .single;
               } else {
-                MyAppState.selectedPosotion =
+                MyAppState.selectedPosition =
                     MyAppState.currentUser!.shippingAddress!.first;
               }
 
               pushAndRemoveUntil(context, ContainerScreen(user: result), false);
             } else {
-              pushAndRemoveUntil(context, LocationPermissionScreen(), false);
+              MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
+              pushAndRemoveUntil(context, ContainerScreen(user: result), false);
             }
           } else {
             showAlertDialog(
@@ -849,18 +851,19 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
               if (MyAppState.currentUser!.shippingAddress!
                   .where((element) => element.isDefault == true)
                   .isNotEmpty) {
-                MyAppState.selectedPosotion = MyAppState
+                MyAppState.selectedPosition = MyAppState
                     .currentUser!.shippingAddress!
                     .where((element) => element.isDefault == true)
                     .single;
               } else {
-                MyAppState.selectedPosotion =
+                MyAppState.selectedPosition =
                     MyAppState.currentUser!.shippingAddress!.first;
               }
 
               pushAndRemoveUntil(context, ContainerScreen(user: user), false);
             } else {
-              pushAndRemoveUntil(context, LocationPermissionScreen(), false);
+              MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
+              pushAndRemoveUntil(context, ContainerScreen(user: user), false);
             }
           } else {
             /// create a new user from phone login
@@ -920,18 +923,19 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                 if (MyAppState.currentUser!.shippingAddress!
                     .where((element) => element.isDefault == true)
                     .isNotEmpty) {
-                  MyAppState.selectedPosotion = MyAppState
+                  MyAppState.selectedPosition = MyAppState
                       .currentUser!.shippingAddress!
                       .where((element) => element.isDefault == true)
                       .single;
                 } else {
-                  MyAppState.selectedPosotion =
+                  MyAppState.selectedPosition =
                       MyAppState.currentUser!.shippingAddress!.first;
                 }
 
                 pushAndRemoveUntil(context, ContainerScreen(user: user), false);
               } else {
-                pushAndRemoveUntil(context, LocationPermissionScreen(), false);
+                MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
+                pushAndRemoveUntil(context, ContainerScreen(user: user), false);
               }
             } else {
               showAlertDialog(context, "failed",

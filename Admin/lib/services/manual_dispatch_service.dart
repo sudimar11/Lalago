@@ -9,11 +9,17 @@ class ManualDispatchService {
     required String orderId,
     required double vendorLat,
     required double vendorLng,
+    double? deliveryLat,
+    double? deliveryLng,
+    String? deliveryLocality,
     required Future<Map<String, dynamic>> Function({
       required String orderId,
       required double vendorLat,
       required double vendorLng,
       String? excludeDriverId,
+      double? deliveryLat,
+      double? deliveryLng,
+      String? deliveryLocality,
     }) findAndAssignDriver,
   }) async {
     try {
@@ -24,11 +30,13 @@ class ManualDispatchService {
 
       print('[Manual Dispatch AI] Searching for active drivers...');
 
-      // Try to find and assign a driver
       final result = await findAndAssignDriver(
         orderId: orderId,
         vendorLat: vendorLat,
         vendorLng: vendorLng,
+        deliveryLat: deliveryLat,
+        deliveryLng: deliveryLng,
+        deliveryLocality: deliveryLocality,
       );
 
       if (result['success']) {
@@ -57,25 +65,31 @@ class ManualDispatchService {
     required String orderId,
     required double vendorLat,
     required double vendorLng,
+    double? deliveryLat,
+    double? deliveryLng,
+    String? deliveryLocality,
     required Future<Map<String, dynamic>> Function({
       required String orderId,
       required double vendorLat,
       required double vendorLng,
       String? excludeDriverId,
+      double? deliveryLat,
+      double? deliveryLng,
+      String? deliveryLocality,
     }) findAndAssignDriver,
     int waitSeconds = 20,
   }) async {
     try {
-      // Wait before retrying
       await Future.delayed(Duration(seconds: waitSeconds));
-
       print('[Manual Dispatch AI] Retrying after $waitSeconds seconds...');
 
-      // Retry finding a driver
       final retryResult = await findAndAssignDriver(
         orderId: orderId,
         vendorLat: vendorLat,
         vendorLng: vendorLng,
+        deliveryLat: deliveryLat,
+        deliveryLng: deliveryLng,
+        deliveryLocality: deliveryLocality,
       );
 
       if (retryResult['success']) {
@@ -89,6 +103,23 @@ class ManualDispatchService {
       print('[Manual Dispatch AI] Retry error: $e\n$stackTrace');
       rethrow;
     }
+  }
+
+  /// Extract delivery address location and locality from order data
+  Map<String, dynamic> extractDeliveryAddress(Map<String, dynamic> orderData) {
+    final addr = (orderData['address'] ?? {}) as Map<String, dynamic>?;
+    if (addr == null) return {'lat': null, 'lng': null, 'locality': null};
+    final loc = (addr['location'] ?? {}) as Map<String, dynamic>?;
+    double? lat;
+    double? lng;
+    if (loc != null) {
+      final v = loc['latitude'] ?? loc['lat'];
+      if (v != null) lat = (v is num) ? v.toDouble() : double.tryParse('$v');
+      final w = loc['longitude'] ?? loc['lng'];
+      if (w != null) lng = (w is num) ? w.toDouble() : double.tryParse('$w');
+    }
+    final locality = (addr['locality'] ?? '').toString().trim();
+    return {'lat': lat, 'lng': lng, 'locality': locality.isEmpty ? null : locality};
   }
 
   /// Extract vendor location from order data

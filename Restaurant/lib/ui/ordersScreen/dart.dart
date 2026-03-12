@@ -5,8 +5,7 @@ import 'dart:math';
 import 'package:audioplayers/audioplayers.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-
-import 'package:easy_localization/easy_localization.dart';
+import 'package:intl/intl.dart';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 
@@ -140,8 +139,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
                 if (!snapshot.hasData || snapshot.data!.isEmpty) {
                   return Center(
-                    child: showEmptyState('No Orders'.tr(),
-                        'New order requests will show up here'.tr()),
+                    child: showEmptyState('No Orders',
+                        'New order requests will show up here'),
                   );
                 }
 
@@ -290,9 +289,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
                     const SizedBox(height: 4),
                     Text(
                       orderModel.takeAway == true
-                          ? 'Takeaway'.tr()
+                          ? 'Takeaway'
                           : 'Deliver to: ${orderModel.address.getFullAddress()}'
-                              .tr(),
+                              ,
                       style: const TextStyle(
                         fontSize: 14,
                         color: Colors.grey,
@@ -363,7 +362,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
           if (orderModel.notes != null && orderModel.notes!.isNotEmpty)
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: Text('Remarks'.tr(), style: TextStyle(color: Colors.grey)),
+              title: Text('Remarks', style: TextStyle(color: Colors.grey)),
               subtitle: Text(
                 orderModel.notes!,
                 style: TextStyle(
@@ -405,7 +404,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Order has been rejected by driver'.tr(),
+            'Order has been rejected by driver',
             style: TextStyle(
               fontSize: 14,
               color: Colors.red,
@@ -423,7 +422,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                   child: Text(
-                    'Find Another Driver'.tr(),
+                    'Find Another Driver',
                     style: const TextStyle(color: Colors.white),
                   ),
                 ),
@@ -446,7 +445,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
               child: Text(
-                'Accept'.tr(),
+                'Accept',
                 style: const TextStyle(color: Colors.white),
               ),
             ),
@@ -466,7 +465,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
               child: Text(
-                'Find Nearest Driver'.tr(),
+                'Find Nearest Driver',
                 style: const TextStyle(color: Colors.white),
               ),
             ),
@@ -474,8 +473,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
         ],
       );
     }
-    // Driver Pending => "Order Prepared" button
-    else if (orderModel.status == "Driver Pending") {
+    // Driver Accepted => "Order Prepared" button (rider accepted, restaurant preparing)
+    else if (orderModel.status == "Driver Accepted") {
       return Row(
         children: [
           Expanded(
@@ -486,7 +485,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
               child: Text(
-                'Order Prepared'.tr(),
+                'Order Prepared',
                 style: const TextStyle(color: Colors.white),
               ),
             ),
@@ -500,7 +499,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
-            'Waiting for Driver to Accept'.tr(),
+            'Waiting for Driver to Accept',
             style: TextStyle(
               fontSize: 16,
               color: Colors.green,
@@ -518,7 +517,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                   child: Text(
-                    'Change Driver'.tr(),
+                    'Change Driver',
                     style: const TextStyle(color: Colors.white),
                   ),
                 ),
@@ -746,119 +745,23 @@ class _OrdersScreenState extends State<OrdersScreen> {
 Future<Map<String, String?>> assignOrderToDriver(
     BuildContext context, OrderModel orderModel) async {
   try {
-    List<Map<String, dynamic>> drivers = [];
-    String? nearestDriverId;
-    double? nearestDistance;
-    String? driverName;
-    String? driverPhoto;
-
-    // Haversine formula
-    double calculateDistance(
-        double lat1, double lon1, double lat2, double lon2) {
-      const R = 6371;
-      final dLat = (lat2 - lat1) * (pi / 180);
-      final dLon = (lon2 - lon1) * (pi / 180);
-      final a = sin(dLat / 2) * sin(dLat / 2) +
-          cos(lat1 * (pi / 180)) *
-              cos(lat2 * (pi / 180)) *
-              sin(dLon / 2) *
-              sin(dLon / 2);
-      final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-      return R * c;
-    }
-
-    // Fetch only active drivers
-    Future<void> fetchDrivers() async {
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection("users")
-          .where("role", isEqualTo: "driver")
-          .where("isActive", isEqualTo: true)
-          .get();
-
-      drivers = querySnapshot.docs.map((doc) {
-        final data = doc.data();
-        final dist = calculateDistance(
-          orderModel.vendor.latitude,
-          orderModel.vendor.longitude,
-          data['location']['latitude'] ?? 0.0,
-          data['location']['longitude'] ?? 0.0,
-        );
-        return {
-          "id": doc.id,
-          "data": data,
-          "distance": dist,
-        };
-      }).toList();
-
-      drivers.sort((a, b) =>
-          (a["distance"] as double).compareTo(b["distance"] as double));
-
-      if (drivers.isNotEmpty) {
-        final nearest = drivers.first;
-        nearestDriverId = nearest["id"] as String;
-        nearestDistance = nearest["distance"] as double;
-        driverName =
-            "${nearest["data"]['firstName']} ${nearest["data"]['lastName']}";
-        driverPhoto = nearest["data"]['profilePictureURL'] as String?;
-      }
-    }
-
-    // Recursive assignment
-    Future<void> assignDriver() async {
-      await fetchDrivers();
-
-      if (nearestDriverId == null) {
-        // no active drivers found; wait and retry
-        await Future.delayed(const Duration(seconds: 10));
-        return assignDriver();
-      }
-
-      // double-check that this driver is still active
-      final userSnap = await FirebaseFirestore.instance
-          .collection("users")
-          .doc(nearestDriverId)
-          .get();
-      final stillActive = (userSnap.data()?['isActive'] ?? false) as bool;
-      if (!stillActive) {
-        // remove and retry with next driver
-        drivers.removeWhere((d) => d["id"] == nearestDriverId);
-        nearestDriverId = null;
-        return assignDriver();
-      }
-
-      // perform the assignment
-      await FirebaseFirestore.instance
-          .collection("restaurant_orders")
-          .doc(orderModel.id)
-          .update({
-        "status": "Driver Assigned",
-        "driverID": nearestDriverId,
-        "driverDistance": nearestDistance,
-      });
-
-      await FirebaseFirestore.instance
-          .collection("users")
-          .doc(nearestDriverId)
-          .update({
-        "isActive": false,
-        "inProgressOrderID": FieldValue.arrayUnion([orderModel.id]),
-      });
-    }
-
-    // kick off
-    await assignDriver();
+    await FirebaseFirestore.instance
+        .collection("restaurant_orders")
+        .doc(orderModel.id)
+        .update({
+      "status": "Order Accepted",
+      "dispatch.lock": false,
+      "dispatch.lastRetriggerAt": FieldValue.serverTimestamp(),
+    });
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Order successfully assigned to the nearest driver!'),
+        content: Text('Order queued for automatic rider dispatch.'),
         backgroundColor: Colors.green,
       ),
     );
 
-    return {
-      "driverName": driverName,
-      "driverPhoto": driverPhoto,
-    };
+    return {};
   } catch (e, stackTrace) {
     print("Error in assignOrderToDriver: $e\n$stackTrace");
     ScaffoldMessenger.of(context).showSnackBar(
@@ -931,7 +834,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
       if (snapshot.hasError) {
         return ListTile(
-          title: Text('Driver Selected'.tr(),
+          title: Text('Driver Selected',
               style: const TextStyle(color: Colors.grey)),
           subtitle: Text(
             'Error fetching order data',
@@ -945,7 +848,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
       if (!snapshot.hasData || !(snapshot.data?.exists ?? false)) {
         return ListTile(
-          title: Text('Driver Selected'.tr(),
+          title: Text('Driver Selected',
               style: const TextStyle(color: Colors.grey)),
           subtitle: Text(
             'No order data found',
@@ -962,7 +865,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
       if (driverID == null) {
         return ListTile(
-          title: Text('Driver Selected'.tr(),
+          title: Text('Driver Selected',
               style: const TextStyle(color: Colors.grey)),
           subtitle: Text(
             'No driver assigned',
@@ -984,7 +887,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
           if (driverSnapshot.hasError) {
             return ListTile(
-              title: Text('Driver Selected'.tr(),
+              title: Text('Driver Selected',
                   style: const TextStyle(color: Colors.grey)),
               subtitle: Text(
                 'Error fetching driver details',
@@ -998,7 +901,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
           if (!driverSnapshot.hasData || driverSnapshot.data == null) {
             return ListTile(
-              title: Text('Driver Selected'.tr(),
+              title: Text('Driver Selected',
                   style: const TextStyle(color: Colors.grey)),
               subtitle: Text(
                 'Driver details not available',
@@ -1017,7 +920,7 @@ Widget buildDriverContent(OrderModel orderModel) {
 
           return ListTile(
             title: Text(
-              'Driver Selected'.tr(),
+              'Driver Selected',
               style: const TextStyle(color: Colors.grey),
             ),
             subtitle: Row(

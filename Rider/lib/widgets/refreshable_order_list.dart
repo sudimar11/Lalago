@@ -5,12 +5,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:foodie_driver/constants.dart';
 import 'package:foodie_driver/model/notification_model.dart';
+import 'package:foodie_driver/services/audio_service.dart';
 import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/services/notification_service.dart';
 import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/utils/geo_utils.dart';
 import 'package:foodie_driver/ui/home/customermap.dart';
 import 'package:foodie_driver/widgets/replacement_search_dialog.dart';
+import 'package:foodie_driver/widgets/rejection_reason_dialog.dart';
+import 'package:foodie_driver/widgets/shrinking_timer_bar.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:foodie_driver/main.dart';
 import 'package:foodie_driver/ui/chat_screen/chat_screen.dart';
@@ -18,6 +21,9 @@ import 'package:foodie_driver/ui/chat_screen/admin_driver_chat_screen.dart';
 import 'package:foodie_driver/services/order_chat_service.dart';
 import 'package:foodie_driver/services/chat_read_service.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
+import 'package:foodie_driver/services/performance_tier_helper.dart';
+import 'package:foodie_driver/model/OrderModel.dart';
+import 'package:foodie_driver/services/batch_optimization_service.dart';
 import 'package:foodie_driver/utils/order_ready_time_helper.dart';
 import 'package:intl/intl.dart';
 
@@ -45,6 +51,8 @@ class _OrderCardData {
     required this.estimatedTimeToPrepare,
     this.orderTime,
     this.acceptedAt,
+    this.readyAt,
+    this.riderAcceptDeadline,
   });
 
   final int index;
@@ -68,17 +76,47 @@ class _OrderCardData {
   final String estimatedTimeToPrepare;
   final DateTime? orderTime;
   final DateTime? acceptedAt;
+  final DateTime? readyAt;
+  final Timestamp? riderAcceptDeadline;
+}
+
+/// Data for optimized pickup route display.
+class _OptimizedRouteData {
+  const _OptimizedRouteData({required this.route});
+
+  final List<OrderRoute> route;
+}
+
+/// Grouped data for a batch of orders.
+class _OrderBatchData {
+  final String batchId;
+  final List<_OrderCardData> orders;
+  final int totalStops;
+  final double totalEarnings;
+
+  const _OrderBatchData({
+    required this.batchId,
+    required this.orders,
+    required this.totalStops,
+    required this.totalEarnings,
+  });
 }
 
 /// A reusable widget that displays a refreshable list of orders
 class RefreshableOrderList extends StatefulWidget {
   final List<QueryDocumentSnapshot> docs;
   final VoidCallback onRefresh;
+  final Set<String> newOrderIds;
+  final Set<String> highlightedOrderIds;
+  final void Function(String orderId)? onOrderViewed;
 
   const RefreshableOrderList({
     Key? key,
     required this.docs,
     required this.onRefresh,
+    this.newOrderIds = const {},
+    this.highlightedOrderIds = const {},
+    this.onOrderViewed,
   }) : super(key: key);
 
   @override
@@ -177,7 +215,6 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
 
     // Only relevant while the rider is waiting for the order to become ready.
     const targetStatuses = <String>{
-      'Driver Pending',
       'Driver Accepted',
     };
     if (!targetStatuses.contains(status)) {
@@ -194,13 +231,18 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     final vendorLng = vendorLngRaw is num ? vendorLngRaw.toDouble() : 0.0;
     if (vendorLat == 0.0 && vendorLng == 0.0) return;
 
-    final baseTime = _readOrderBaseTime(data);
-    if (baseTime == null) return;
-
-    final prepMinutes = OrderReadyTimeHelper.parsePreparationMinutes(
-      data['estimatedTimeToPrepare']?.toString(),
-    );
-    final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    DateTime? readyAt;
+    final readyAtTs = data['readyAt'];
+    if (readyAtTs != null && readyAtTs is Timestamp) {
+      readyAt = readyAtTs.toDate();
+    } else {
+      final baseTime = _readOrderBaseTime(data);
+      if (baseTime == null) return;
+      final prepMinutes = OrderReadyTimeHelper.parsePreparationMinutes(
+        data['estimatedTimeToPrepare']?.toString(),
+      );
+      readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    }
 
     double distanceKm = 0.0;
     try {
@@ -321,33 +363,26 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
           .get();
       final settingsData = settingsDoc.data() ?? <String, dynamic>{};
 
-      // Determine tier and corresponding percent
-      num? percent;
-      if (perfValue < 75) {
-        percent = settingsData['silver'] as num?;
-      } else if (perfValue < 85) {
-        percent = settingsData['Platinum'] as num?;
-      } else {
-        percent = settingsData['Gold'] as num?;
-      }
+      final tier = PerformanceTierHelper.getTier(perfValue);
+      final commKey = PerformanceTierHelper.commissionKey(tier);
+      num? percent = settingsData[commKey] as num?;
 
       if (percent == null) {
         return;
       }
 
-      // Load incentive values from Firestore
       final incentiveGold =
           (settingsData['incentive_gold'] as num?)?.toDouble();
-      final incentivePlatinum =
-          (settingsData['incentive_platinum'] as num?)?.toDouble();
       final incentiveSilver =
           (settingsData['incentive_silver'] as num?)?.toDouble();
+      final incentiveBronze =
+          (settingsData['incentive_bronze'] as num?)?.toDouble();
 
       setState(() {
         _platformCommissionPercent = percent!.toDouble();
         _driverPerformance = perfValue;
         _incentiveGold = incentiveGold;
-        _incentivePlatinum = incentivePlatinum;
+        _incentivePlatinum = incentiveBronze;
         _incentiveSilver = incentiveSilver;
       });
     } catch (_) {
@@ -380,15 +415,15 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     }
   }
 
-  /// Get incentive amount per order based on driver performance tier
   double _getIncentivePerOrder() {
     if (_driverPerformance == null) return 0.0;
-    if (_driverPerformance! >= 85) {
-      return _incentiveGold ?? 0.0; // Gold
-    } else if (_driverPerformance! >= 75) {
-      return _incentivePlatinum ?? 0.0; // Platinum
+    final tier = PerformanceTierHelper.getTier(_driverPerformance!);
+    if (tier.name == 'Gold') {
+      return _incentiveGold ?? 0.0;
+    } else if (tier.name == 'Silver') {
+      return _incentiveSilver ?? 0.0;
     } else {
-      return _incentiveSilver ?? 0.0; // Silver
+      return _incentivePlatinum ?? 0.0;
     }
   }
 
@@ -867,6 +902,14 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
             data['acceptedAt'] is Timestamp
         ? (data['acceptedAt'] as Timestamp).toDate()
         : null;
+    final DateTime? readyAt = data['readyAt'] != null &&
+            data['readyAt'] is Timestamp
+        ? (data['readyAt'] as Timestamp).toDate()
+        : null;
+    final Map<String, dynamic> dispatch =
+        (data['dispatch'] as Map<String, dynamic>?) ?? {};
+    final Timestamp? riderAcceptDeadline =
+        dispatch['riderAcceptDeadline'] as Timestamp?;
     return _OrderCardData(
       index: index,
       doc: doc,
@@ -889,6 +932,8 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
       estimatedTimeToPrepare: estimatedTimeToPrepare,
       orderTime: orderTime,
       acceptedAt: acceptedAt,
+      readyAt: readyAt,
+      riderAcceptDeadline: riderAcceptDeadline,
     );
   }
 
@@ -896,6 +941,83 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
   Widget build(BuildContext context) {
     final currentTime = _now ?? DateTime.now();
     final docs = _sortDocsByLeaveByPriority(widget.docs, currentTime);
+
+    // Group docs: batched orders share a card, others stay individual.
+    final List<dynamic> items = []; // _OrderCardData | _OrderBatchData
+    final Map<String, List<_OrderCardData>> batchMap = {};
+    final List<_OrderCardData> singles = [];
+
+    for (int i = 0; i < docs.length; i++) {
+      final parsed = _parseOrderDoc(i, docs[i]);
+      final batchId =
+          parsed.data['batch']?['batchId'] as String?;
+      if (batchId != null && batchId.isNotEmpty) {
+        batchMap.putIfAbsent(batchId, () => []).add(parsed);
+      } else {
+        singles.add(parsed);
+      }
+    }
+
+    for (final entry in batchMap.entries) {
+      final orders = entry.value;
+      orders.sort((a, b) {
+        final sa = a.data['batch']?['sequence'] ?? 0;
+        final sb = b.data['batch']?['sequence'] ?? 0;
+        return (sa as int).compareTo(sb as int);
+      });
+      double earnings = 0;
+      for (final o in orders) {
+        earnings += o.totalPayment;
+      }
+      items.add(_OrderBatchData(
+        batchId: entry.key,
+        orders: orders,
+        totalStops: orders.length * 2,
+        totalEarnings: earnings,
+      ));
+    }
+    for (final s in singles) {
+      items.add(s);
+    }
+
+    // Add optimized route card when 2+ pickup-phase orders
+    final pickupDocs = docs
+        .where((d) {
+          final s = (d.data() as Map)['status']?.toString() ?? '';
+          return s == 'Driver Accepted' || s == 'Order Shipped';
+        })
+        .toList();
+    if (pickupDocs.length >= 2) {
+      try {
+        final orders = pickupDocs.map((d) {
+          final data = Map<String, dynamic>.from(d.data() as Map);
+          data['id'] = d.id;
+          return OrderModel.fromJson(data);
+        }).toList();
+        final riderLoc = MyAppState.currentUser?.location;
+        final route =
+            BatchOptimizationService.optimizePickupSequence(
+                orders, riderLocation: riderLoc);
+        if (route.isNotEmpty) {
+          items.insert(0, _OptimizedRouteData(route: route));
+        }
+      } catch (_) {}
+    }
+
+    // Only one order card shows a real map to avoid BLASTBufferQueue conflicts.
+    String? mapForOrderId;
+    for (final item in items) {
+      if (item is _OrderCardData) {
+        final isVendor = item.status == 'Order Shipped';
+        final lat = isVendor ? item.vendorLatitude : item.authorLatitude;
+        final lng = isVendor ? item.vendorLongitude : item.authorLongitude;
+        if (lat != 0.0 && lng != 0.0) {
+          mapForOrderId = item.doc.id;
+          break;
+        }
+      }
+    }
+
     return RefreshIndicator(
       onRefresh: () async {
         widget.onRefresh();
@@ -903,10 +1025,24 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
       },
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: docs.length,
+        itemCount: items.length,
         itemBuilder: (context, index) {
-          final doc = docs[index];
-          final parsed = _parseOrderDoc(index, doc);
+          final item = items[index];
+          if (item is _OptimizedRouteData) {
+            return _buildOptimizedRouteCard(context, item);
+          }
+          if (item is _OrderBatchData) {
+            return _buildBatchCard(
+              context,
+              currentTime,
+              item,
+              () {
+                widget.onRefresh();
+                setState(() {});
+              },
+            );
+          }
+          final parsed = item as _OrderCardData;
           return _buildOrderCard(
             context,
             currentTime,
@@ -915,8 +1051,321 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
               widget.onRefresh();
               setState(() {});
             },
+            mapForOrderId: mapForOrderId,
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildOptimizedRouteCard(
+    BuildContext context,
+    _OptimizedRouteData data,
+  ) {
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      color: Colors.blue.shade50,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.blue.shade300, width: 2),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.route, color: Colors.blue.shade700, size: 24),
+                const SizedBox(width: 8),
+                Text(
+                  'Optimized Pickup Route',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue.shade900,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ...data.route.map((r) {
+              final readyStr = r.readyAt != null
+                  ? DateFormat.jm().format(r.readyAt!)
+                  : '--';
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  backgroundColor: Colors.orange,
+                  child: Text(
+                    '${r.sequence}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                title: Text(
+                  r.order.vendor.title,
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+                subtitle: Text(
+                  'ETA: ${r.etaMinutes} min | Ready: $readyStr',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+                trailing: r.sequence == 1
+                    ? Icon(Icons.play_arrow, color: Colors.green)
+                    : null,
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBatchCard(
+    BuildContext context,
+    DateTime currentTime,
+    _OrderBatchData batch,
+    VoidCallback afterUpdate,
+  ) {
+    final firstStatus = batch.orders.first.status;
+    final showActions = firstStatus == 'Driver Assigned' ||
+        firstStatus == 'Order Accepted';
+
+    return Card(
+      margin: const EdgeInsets.symmetric(
+          horizontal: 12, vertical: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+            color: Colors.deepPurple.shade200, width: 2),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.deepPurple.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.layers,
+                      color: Colors.deepPurple, size: 24),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Batch Order • ${batch.orders.length} orders'
+                      ' • ${batch.totalStops} stops',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.deepPurple.shade800,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '₱${batch.totalEarnings.toStringAsFixed(0)}',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.deepPurple.shade800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Pickups
+            Text('Pickup Stops',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: Colors.grey.shade700)),
+            const SizedBox(height: 4),
+            for (int i = 0;
+                i < batch.orders.length;
+                i++) ...[
+              _buildBatchStop(
+                index: i + 1,
+                icon: Icons.store,
+                color: Colors.orange,
+                title: batch.orders[i].vendor['title']
+                        ?.toString() ??
+                    'Restaurant',
+                subtitle: '',
+              ),
+            ],
+            const Divider(),
+
+            // Deliveries
+            Text('Delivery Stops',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: Colors.grey.shade700)),
+            const SizedBox(height: 4),
+            for (int i = 0;
+                i < batch.orders.length;
+                i++) ...[
+              _buildBatchStop(
+                index: i + 1,
+                icon: Icons.location_on,
+                color: Colors.green,
+                title:
+                    '${batch.orders[i].author['firstName'] ?? ''} '
+                    '${batch.orders[i].author['lastName'] ?? ''}',
+                subtitle: batch.orders[i].fullAddress,
+              ),
+            ],
+
+            // Expandable order details
+            const Divider(),
+            Theme(
+              data: Theme.of(context).copyWith(
+                  dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: const Text('Order Details',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600)),
+                children: [
+                  for (final o in batch.orders) ...[
+                    ListTile(
+                      dense: true,
+                      title: Text(
+                        '${o.vendor['title'] ?? 'Order'}'
+                        ' • ${o.totalItemCount} item(s)',
+                      ),
+                      subtitle: o.notes.isNotEmpty
+                          ? Text(o.notes,
+                              maxLines: 2,
+                              overflow:
+                                  TextOverflow.ellipsis)
+                          : null,
+                      trailing: Text(
+                        '₱${o.totalPayment.toStringAsFixed(0)}',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+
+            // Accept/Reject
+            if (showActions) ...[
+              const Divider(),
+              Row(
+                mainAxisAlignment:
+                    MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final orders = batch.orders
+                          .map((o) => o.data)
+                          .toList();
+                      final ids = batch.orders
+                          .map((o) => o.doc.id)
+                          .toList();
+                      await OrderService.acceptBatch(
+                          orders, ids, context);
+                      afterUpdate();
+                    },
+                    icon: const Icon(Icons.check),
+                    label: Text(
+                        'Accept All (${batch.orders.length})'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final reason =
+                          await showRejectionReasonDialog(context);
+                      if (!context.mounted) return;
+                      final orders = batch.orders
+                          .map((o) => o.data)
+                          .toList();
+                      final ids = batch.orders
+                          .map((o) => o.doc.id)
+                          .toList();
+                      final ok = await OrderService.rejectBatch(
+                        orders,
+                        ids,
+                        context,
+                        reason: reason ?? 'other',
+                      );
+                      if (ok) afterUpdate();
+                    },
+                    icon: const Icon(Icons.close),
+                    label: Text(
+                        'Reject All (${batch.orders.length})'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBatchStop({
+    required int index,
+    required IconData icon,
+    required Color color,
+    required String title,
+    required String subtitle,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 14,
+            backgroundColor: color.withOpacity(0.15),
+            child: Text('$index',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: color)),
+          ),
+          const SizedBox(width: 8),
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13)),
+                if (subtitle.isNotEmpty)
+                  Text(subtitle,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -930,11 +1379,15 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     int groupFor(String status, bool leaveNow) {
       if (status == 'Order Shipped') return 0;
       if (leaveNow) return 1;
-      if (status == 'Driver Pending' || status == 'Driver Accepted') return 2;
+      if (status == 'Driver Accepted') return 2;
       return 3;
     }
 
     DateTime? computeReadyAt(Map<String, dynamic> data) {
+      final readyAtTs = data['readyAt'];
+      if (readyAtTs != null && readyAtTs is Timestamp) {
+        return readyAtTs.toDate();
+      }
       final baseTime = _readOrderBaseTime(data);
       if (baseTime == null) return null;
       final prepMinutes = OrderReadyTimeHelper.parsePreparationMinutes(
@@ -984,10 +1437,68 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     return indexed.map((e) => e.value).toList();
   }
 
+  Widget _buildPreparationCountdown({
+    required DateTime? acceptedAt,
+    required DateTime? orderTime,
+    required DateTime? readyAt,
+    required String estimatedTimeToPrepare,
+    required DateTime currentTime,
+  }) {
+    DateTime targetReadyAt;
+    if (readyAt != null) {
+      targetReadyAt = readyAt;
+    } else {
+      final baseTime = acceptedAt ?? orderTime;
+      if (baseTime == null) return const SizedBox.shrink();
+      final prepMinutes =
+          OrderReadyTimeHelper.parsePreparationMinutes(estimatedTimeToPrepare);
+      targetReadyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    }
+    final remaining = targetReadyAt.difference(currentTime);
+    final remainingMinutes = remaining.inMinutes.clamp(0, 999);
+    final isReadyNow = remainingMinutes <= 0;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: isReadyNow ? Colors.green.shade50 : Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isReadyNow ? Colors.green.shade300 : Colors.orange.shade300,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isReadyNow ? Icons.check_circle : Icons.schedule,
+            color: isReadyNow ? Colors.green.shade700 : Colors.orange.shade700,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isReadyNow
+                ? 'Ready now'
+                : 'Ready in ~$remainingMinutes min',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: isReadyNow
+                  ? Colors.green.shade800
+                  : Colors.orange.shade800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildWhenToLeaveChip({
     required String status,
     required DateTime? acceptedAt,
     required DateTime? orderTime,
+    required DateTime? readyAt,
     required String estimatedTimeToPrepare,
     required String docId,
     required double vendorLatitude,
@@ -1021,12 +1532,16 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
       );
     }
 
-    final baseTime = acceptedAt ?? orderTime;
-    if (baseTime == null) return const SizedBox.shrink();
-
-    final prepMinutes =
-        OrderReadyTimeHelper.parsePreparationMinutes(estimatedTimeToPrepare);
-    final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    DateTime targetReadyAt;
+    if (readyAt != null) {
+      targetReadyAt = readyAt;
+    } else {
+      final baseTime = acceptedAt ?? orderTime;
+      if (baseTime == null) return const SizedBox.shrink();
+      final prepMinutes =
+          OrderReadyTimeHelper.parsePreparationMinutes(estimatedTimeToPrepare);
+      targetReadyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    }
     final timeFormat = DateFormat.jm();
 
     return FutureBuilder<double>(
@@ -1048,7 +1563,7 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                 Icon(Icons.schedule, color: Colors.blue.shade700, size: 20),
                 const SizedBox(width: 8),
                 Text(
-                  'Ready at ~${timeFormat.format(readyAt)} • Calculating…',
+                  'Ready at ~${timeFormat.format(targetReadyAt)} • Calculating…',
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
@@ -1061,13 +1576,13 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
         }
         final distanceKm = snap.data ?? 0.0;
         final leaveBy =
-            OrderReadyTimeHelper.getLeaveBy(readyAt, distanceKm);
+            OrderReadyTimeHelper.getLeaveBy(targetReadyAt, distanceKm);
         final now = currentTime;
         final leaveNow = now.isAfter(leaveBy) || now.isAtSameMomentAs(leaveBy);
 
         final String label = leaveNow
-            ? 'Ready ~${timeFormat.format(readyAt)} • Leave now'
-            : 'Ready ~${timeFormat.format(readyAt)} • Leave by ${timeFormat.format(leaveBy)}';
+            ? 'Ready ~${timeFormat.format(targetReadyAt)} • Leave now'
+            : 'Ready ~${timeFormat.format(targetReadyAt)} • Leave by ${timeFormat.format(leaveBy)}';
 
         return Container(
           width: double.infinity,
@@ -1225,8 +1740,9 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     BuildContext context,
     DateTime currentTime,
     _OrderCardData parsed,
-    VoidCallback afterUpdate,
-  ) {
+    VoidCallback afterUpdate, {
+    String? mapForOrderId,
+  }) {
     final index = parsed.index;
     final doc = parsed.doc;
     final data = parsed.data;
@@ -1250,14 +1766,22 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
     final effectiveItemsTotal =
         totalPayment - deliveryCharge - tipAmount;
 
+    final isNew = widget.newOrderIds.contains(doc.id);
+    final isHighlighted = widget.highlightedOrderIds.contains(doc.id);
+
     return Card(
       color: isDarkMode(context) ? Color(DARK_CARD_BG_COLOR) : Colors.white,
       elevation: 2,
       margin: const EdgeInsets.only(bottom: 16),
       shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: const BorderSide(color: Colors.black, width: 1)),
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: isHighlighted ? Colors.green : Colors.black,
+          width: isHighlighted ? 3 : 1,
+        ),
+      ),
       child: Stack(
+        clipBehavior: Clip.none,
         children: [
           Padding(
             padding: const EdgeInsets.all(16.0),
@@ -1352,49 +1876,27 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                     ),
                   ),
                 ],
-                // Estimated Preparation Time
-                if (estimatedTimeToPrepare.isNotEmpty &&
-                    estimatedTimeToPrepare != 'null')
-                  Column(
-                    children: [
-                      const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.shade50,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.orange.shade300),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.schedule,
-                                color: Colors.orange.shade700, size: 20),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Estimated Preparation: $estimatedTimeToPrepare minutes',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.orange.shade800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                // Real-time countdown: Ready in X min / Ready now
+                if (status == 'Driver Accepted' ||
+                    status == 'Order Accepted') ...[
+                  const SizedBox(height: 12),
+                  _buildPreparationCountdown(
+                    acceptedAt: parsed.acceptedAt,
+                    orderTime: orderTime,
+                    readyAt: parsed.readyAt,
+                    estimatedTimeToPrepare: estimatedTimeToPrepare,
+                    currentTime: currentTime,
                   ),
-                // When to leave / Ready for pickup (Driver Pending, Driver Accepted, Order Shipped)
-                if (status == 'Driver Pending' ||
-                    status == 'Driver Accepted' ||
+                ],
+                // When to leave / Ready for pickup (Driver Accepted, Order Shipped)
+                if (status == 'Driver Accepted' ||
                     status == 'Order Shipped') ...[
                   const SizedBox(height: 12),
                   _buildWhenToLeaveChip(
                     status: status,
                     acceptedAt: parsed.acceptedAt,
                     orderTime: orderTime,
+                    readyAt: parsed.readyAt,
                     estimatedTimeToPrepare: estimatedTimeToPrepare,
                     docId: doc.id,
                     vendorLatitude: vendorLatitude,
@@ -1403,7 +1905,7 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                   ),
                 ],
                 const SizedBox(height: 8),
-                // Map placeholder with Distance - avoids multiple SurfaceViews (BLASTBufferQueue errors)
+                // Real map for one card; placeholder for others to avoid BLASTBufferQueue.
                 if (status == 'Order Shipped'
                     ? (vendorLatitude != 0.0 && vendorLongitude != 0.0)
                     : (authorLatitude != 0.0 && authorLongitude != 0.0)) ...[
@@ -1415,36 +1917,62 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                         SizedBox(
                           height: 200,
                           width: double.infinity,
-                          child: Container(
-                            color: Colors.grey.shade200,
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    status == 'Order Shipped'
-                                        ? Icons.store
-                                        : Icons.location_on,
-                                    size: 48,
-                                    color: Colors.grey.shade600,
+                          child: doc.id == mapForOrderId
+                              ? GoogleMap(
+                                  initialCameraPosition: CameraPosition(
+                                    target: LatLng(
+                                      status == 'Order Shipped'
+                                          ? vendorLatitude
+                                          : authorLatitude,
+                                      status == 'Order Shipped'
+                                          ? vendorLongitude
+                                          : authorLongitude,
+                                    ),
+                                    zoom: 14,
                                   ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    status == 'Order Shipped'
-                                        ? 'Restaurant'
-                                        : 'Customer',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.grey.shade700,
-                                      fontWeight: FontWeight.w500,
+                                  markers: {
+                                    Marker(
+                                      markerId: MarkerId(doc.id),
+                                      position: LatLng(
+                                        status == 'Order Shipped'
+                                            ? vendorLatitude
+                                            : authorLatitude,
+                                        status == 'Order Shipped'
+                                            ? vendorLongitude
+                                            : authorLongitude,
+                                      ),
+                                    ),
+                                  },
+                                )
+                              : Container(
+                                  color: Colors.grey.shade200,
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          status == 'Order Shipped'
+                                              ? Icons.store
+                                              : Icons.location_on,
+                                          size: 48,
+                                          color: Colors.grey.shade600,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          status == 'Order Shipped'
+                                              ? 'Restaurant'
+                                              : 'Customer',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.grey.shade700,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                ],
-                              ),
-                            ),
-                          ),
+                                ),
                         ),
-                        // Distance overlay (cached per doc.id)
                         Positioned(
                           top: 8,
                           right: 8,
@@ -1567,8 +2095,47 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                                   }
                                 }
 
-                                // Hide incentive display but keep functionality
-                                return const SizedBox.shrink();
+                                if (_driverPerformance == null) {
+                                  return const SizedBox.shrink();
+                                }
+                                final tier =
+                                    PerformanceTierHelper.getTier(
+                                  _driverPerformance!,
+                                );
+                                String bonusLabel = '';
+                                if (tier.name == 'Gold') {
+                                  bonusLabel = 'Gold +20%';
+                                } else if (tier.name == 'Silver') {
+                                  bonusLabel = 'Silver +10%';
+                                }
+                                if (bonusLabel.isEmpty) {
+                                  return const SizedBox.shrink();
+                                }
+                                return Padding(
+                                  padding:
+                                      const EdgeInsets.only(top: 4),
+                                  child: Container(
+                                    padding:
+                                        const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 3,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: tier.color
+                                          .withValues(alpha: 0.15),
+                                      borderRadius:
+                                          BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      bonusLabel,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: tier.color,
+                                      ),
+                                    ),
+                                  ),
+                                );
                               },
                             ),
                           ],
@@ -2032,6 +2599,57 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                 // Accept/Reject buttons for Driver Assigned or Order Accepted status
                 if (status == 'Driver Assigned' ||
                     status == 'Order Accepted') ...[
+                  if (parsed.riderAcceptDeadline != null) ...[
+                    Builder(
+                      builder: (context) {
+                        final deadline =
+                            parsed.riderAcceptDeadline!.toDate();
+                        final remaining = deadline
+                            .difference(DateTime.now())
+                            .inSeconds
+                            .clamp(0, 60);
+                        const totalSec = 60;
+                        if (remaining <= 0) {
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Text(
+                              'Order expired',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.red.shade700,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          );
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: ShrinkingTimerBar(
+                            key: ValueKey('timer_${doc.id}'),
+                            totalSeconds: totalSec,
+                            initialRemainingSeconds: remaining,
+                            orderId: doc.id,
+                            onTimeout: () {
+                              AudioService.instance
+                                  .playReassignSound(orderId: doc.id);
+                              afterUpdate();
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Order expired - '
+                                      'it will be reassigned.',
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                  ],
                   const Divider(),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -2046,8 +2664,16 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                         ),
                       ),
                       ElevatedButton.icon(
-                        onPressed: () =>
-                            OrderService.rejectOrder(data, doc.id, context),
+                        onPressed: () async {
+                          final ok = await OrderService.rejectOrderWithReason(
+                            context,
+                            doc.id,
+                            orderData: data,
+                          );
+                          if (ok && context.mounted && mounted) {
+                            afterUpdate();
+                          }
+                        },
                         icon: const Icon(Icons.close),
                         label: const Text('Reject Order'),
                         style: ElevatedButton.styleFrom(
@@ -2057,8 +2683,8 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                     ],
                   ),
                 ],
-                // Status-specific actions shown below the card content
-                if (status == 'Driver Pending') ...[
+                // Status-specific actions: Driver Accepted = waiting for restaurant to prepare
+                if (status == 'Driver Accepted') ...[
                   const SizedBox(height: 12),
                   const Divider(),
                   const SizedBox(height: 8),
@@ -2076,41 +2702,6 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  if (orderTime != null) ...[
-                    Builder(
-                      builder: (context) {
-                        final duration =
-                            currentTime.difference(orderTime!);
-                        final totalMinutes = duration.inMinutes;
-                        final isReady = totalMinutes >= 5;
-                        if (!isReady) return const SizedBox.shrink();
-                        return Center(
-                          child: ElevatedButton.icon(
-                            onPressed: () =>
-                                _markOrderAsShipped(doc.id, author),
-                            icon: const Icon(Icons.check_circle,
-                                color: Colors.white, size: 16),
-                            label: const Text(
-                              'Order is Ready',
-                              style: TextStyle(fontSize: 12),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.green,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 8),
-                              minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
                 ],
                 if (status == 'Order Shipped') ...[
                   const SizedBox(height: 12),
@@ -2285,49 +2876,72 @@ class _RefreshableOrderListState extends State<RefreshableOrderList> {
               ],
             ),
           ),
+          if (isNew)
+            Positioned(
+              top: -6,
+              right: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.orange,
+                  borderRadius: BorderRadius.circular(6),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: const Text(
+                  'NEW',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ),
+          if (isHighlighted)
+            Positioned(
+              top: -6,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.green,
+                  borderRadius: BorderRadius.circular(6),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.white, size: 14),
+                    SizedBox(width: 4),
+                    Text(
+                      'READY',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
-  }
-
-  void _markOrderAsShipped(String orderId, Map<String, dynamic> author) async {
-    try {
-      await FirebaseFirestore.instance
-          .collection('restaurant_orders')
-          .doc(orderId)
-          .update({
-        'status': 'Order Shipped',
-        'shippedAt': FieldValue.serverTimestamp(),
-      });
-
-      // Send system message
-      final customerId = author['id'] ?? author['customerID'];
-      final customerFcmToken = author['fcmToken'] as String?;
-      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-      if (customerId != null) {
-        await OrderChatService.sendSystemMessage(
-          orderId: orderId,
-          status: 'Order Shipped',
-          customerId: customerId.toString(),
-          customerFcmToken: customerFcmToken,
-          restaurantId: currentUserId,
-        );
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Order marked as shipped successfully!'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to mark order as shipped: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
   }
 
   void _pickupOrder(String orderId, Map<String, dynamic> author) async {

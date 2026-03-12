@@ -65,7 +65,7 @@ class _DineInRestaurantDetailsScreenState
 
   void _getUserLocation() async {
     setState(() {
-      position = LatLng(MyAppState.selectedPosotion.location?.latitude ?? 0.0, MyAppState.selectedPosotion.location?.longitude ?? 0.0);
+      position = LatLng(MyAppState.selectedPosition.location?.latitude ?? 0.0, MyAppState.selectedPosition.location?.longitude ?? 0.0);
     });
   }
 
@@ -264,8 +264,11 @@ class _DineInRestaurantDetailsScreenState
                               valueColor:
                                   AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
                             )),
-                            errorWidget: (context, url, error) => Image.network(
-                              placeHolderImage!,
+                            errorWidget: (context, url, error) =>
+                                CachedNetworkImage(
+                              imageUrl: placeHolderImage!,
+                              memCacheWidth: 200,
+                              memCacheHeight: 200,
                               fit: BoxFit.fitWidth,
                             ),
                             fit: BoxFit.fitWidth,
@@ -863,8 +866,10 @@ class _DineInRestaurantDetailsScreenState
                                                                     .circular(
                                                                         20),
                                                             child:
-                                                                Image.network(
-                                                              placeHolderImage!,
+                                                                CachedNetworkImage(
+                                                              imageUrl: placeHolderImage!,
+                                                              memCacheWidth: 200,
+                                                              memCacheHeight: 200,
                                                               fit: BoxFit.cover,
                                                             )),
                                                     fit: BoxFit.cover,

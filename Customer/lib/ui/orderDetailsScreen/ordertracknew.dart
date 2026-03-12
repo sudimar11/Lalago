@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:foodie_customer/services/ad_service.dart';
+import 'package:foodie_customer/widgets/banner_ad_widget.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -59,6 +61,9 @@ class _OrderTrackingPageState extends State<OrderTrackingPage>
   Timer? _idleTimer;
   final Duration _maxIdle = const Duration(minutes: 10);
 
+  DateTime? _eta;
+  Timer? _etaTimer;
+
   // Optional: poll driver location instead of live listener (cheaper for chattery drivers)
   Timer? _driverPollTimer;
   bool _useDriverPolling = false;
@@ -75,13 +80,14 @@ class _OrderTrackingPageState extends State<OrderTrackingPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadCustomMarker();
-    fetchInitialLocations();
+    fetchInitialLocations().then((_) => _calculateETA());
     _subscribeToRouteDocument();
     _subscribeToSettingsKillSwitch();
   }
 
   @override
   void dispose() {
+    _etaTimer?.cancel();
     driverLocationSubscription?.cancel(); // Cancel the Firestore subscription
     orderSubscription?.cancel();
     _settingsSubscription?.cancel();
@@ -674,11 +680,81 @@ class _OrderTrackingPageState extends State<OrderTrackingPage>
     );
   }
 
+  Future<void> _calculateETA() async {
+    if (driverLocation == null || authorLocation == null) return;
+    if (!mounted) return;
+
+    final origin =
+        '${driverLocation!.latitude},${driverLocation!.longitude}';
+    final destination =
+        '${authorLocation!.latitude},${authorLocation!.longitude}';
+    final url =
+        'https://maps.googleapis.com/maps/api/directions/json?origin=$origin&destination=$destination&key=$googleApiKey';
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode != 200 || !mounted) return;
+
+      final data = json.decode(response.body);
+      final routes = data['routes'] as List<dynamic>?;
+      if (routes == null || routes.isEmpty) return;
+
+      final legs = routes[0]['legs'] as List<dynamic>?;
+      if (legs == null || legs.isEmpty) return;
+
+      final duration = legs[0]['duration'];
+      if (duration == null) return;
+
+      final seconds = (duration['value'] as num?)?.toInt() ?? 0;
+      if (seconds <= 0) return;
+
+      if (!mounted) return;
+      setState(() {
+        _eta = DateTime.now().add(Duration(seconds: seconds));
+        _etaTimer?.cancel();
+        _etaTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+          if (mounted) setState(() {});
+        });
+      });
+    } catch (e) {
+      print('ETA fetch error: $e');
+    }
+  }
+
+  String _formatETA(DateTime? eta) {
+    if (eta == null) return '';
+    final diff = eta.difference(DateTime.now());
+    final totalMins = diff.inMinutes;
+    if (totalMins < 1) return 'Arriving now';
+    final h = diff.inHours;
+    final m = diff.inMinutes.remainder(60);
+    if (h > 0) return '${h}h ${m}min';
+    return '$totalMins min';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text("LalaGO Order Tracking"),
+        bottom: _eta != null
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(40),
+                child: Container(
+                  color: Colors.blue,
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'ETA: ${_formatETA(_eta)}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+              )
+            : null,
       ),
       body: authorLocation == null || driverLocation == null
           ? const Center(child: CircularProgressIndicator())
@@ -703,6 +779,10 @@ class _OrderTrackingPageState extends State<OrderTrackingPage>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
+                      children: [
+                        BannerAdWidget(
+                            adUnitId: AdService.instance.bannerAdUnitId),
+                      ],
                     ),
                   ),
                 ),

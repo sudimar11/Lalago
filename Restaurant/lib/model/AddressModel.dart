@@ -13,12 +13,12 @@ class AddressModel {
   AddressModel({this.address, this.landmark, this.locality, this.location, this.isDefault, this.addressAs, this.id});
 
   AddressModel.fromJson(Map<String, dynamic> json) {
-    id = json['id'];
-    address = json['address'];
-    landmark = json['landmark'];
-    locality = json['locality'];
-    isDefault = json['isDefault'];
-    addressAs = json['addressAs'];
+    id = json['id']?.toString();
+    address = json['address']?.toString();
+    landmark = json['landmark']?.toString();
+    locality = json['locality']?.toString();
+    isDefault = json['isDefault'] as bool?;
+    addressAs = json['addressAs']?.toString();
     location = json['location'] == null ? null : UserLocation.fromJson(json['location']);
   }
 

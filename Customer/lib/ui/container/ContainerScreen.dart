@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:firebase_ai/firebase_ai.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -14,22 +15,35 @@ import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/CurrencyModel.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/timezone_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/services/version_service.dart';
+import 'package:foodie_customer/services/cart_state_notifier.dart';
+import 'package:foodie_customer/services/cart_sync_service.dart';
+import 'package:foodie_customer/services/device_capability.dart';
+import 'package:foodie_customer/services/image_cache_config.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:foodie_customer/services/chat_read_service.dart';
+import 'package:foodie_customer/services/app_configuration_service.dart';
+import 'package:foodie_customer/utils/performance_logger.dart';
+import 'package:foodie_customer/widgets/performance_debug_overlay.dart';
 
+import 'package:foodie_customer/ui/chat_screen/inbox_driver_screen.dart';
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/signUp/SignUpScreen.dart';
 import 'package:foodie_customer/ui/cartScreen/CartScreen.dart';
 import 'package:foodie_customer/ui/home/HomeScreen.dart';
-import 'package:foodie_customer/ui/location_permission_screen.dart';
 import 'package:foodie_customer/ui/onBoarding/OnBoardingScreen.dart';
 
 import 'package:foodie_customer/ui/profile/ProfileScreen.dart';
 import 'package:foodie_customer/ui/searchScreen/SearchScreen.dart';
+import 'package:foodie_customer/screens/ai_chat_screen.dart';
+import 'package:foodie_customer/widgets/ash_avatar.dart';
 
 import 'package:foodie_customer/utils/DarkThemeProvider.dart';
 import 'package:foodie_customer/utils/notification_service.dart';
+import 'package:foodie_customer/services/analytics_service.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -53,7 +67,8 @@ class ContainerScreen extends StatefulWidget {
   }
 }
 
-class _ContainerScreen extends State<ContainerScreen> {
+class _ContainerScreen extends State<ContainerScreen>
+    with WidgetsBindingObserver {
   late CartDatabase cartDatabase;
 
   User? user;
@@ -77,9 +92,51 @@ class _ContainerScreen extends State<ContainerScreen> {
   bool _isInitializing = true;
   String? _initializationError;
 
+  int _loadingMessageIndex = 0;
+  int _pulseKey = 0;
+  Timer? _loadingMessageTimer;
+  Timer? _loadingPulseTimer;
+
+  static const List<String> _loadingMessages = [
+    'Setting up your experience...',
+    'Finding restaurants near you...',
+    'Almost ready...',
+    'Getting your favorites ready...',
+  ];
+  static const List<String> _loadingTips = [
+    'Discover new restaurants nearby',
+    'Order from your favorite spots in minutes',
+    'Earn rewards with every order',
+  ];
+
+  void _cycleLoadingMessage(Timer _) {
+    if (mounted && _isInitializing) {
+      setState(() {
+        _loadingMessageIndex =
+            (_loadingMessageIndex + 1) % _loadingMessages.length;
+      });
+    }
+  }
+
+  void _cyclePulse(Timer _) {
+    if (mounted && _isInitializing) {
+      setState(() => _pulseKey++);
+    }
+  }
+
+  void _cancelLoadingTimers() {
+    _loadingMessageTimer?.cancel();
+    _loadingMessageTimer = null;
+    _loadingPulseTimer?.cancel();
+    _loadingPulseTimer = null;
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    PerformanceLogger.markAppStart();
+    ImageCacheConfig.ensureInitialized();
 
     if (widget.user != null) {
       user = widget.user!;
@@ -87,7 +144,44 @@ class _ContainerScreen extends State<ContainerScreen> {
       _initializeAfterUserSet();
     } else {
       _performInitialization();
+      _loadingMessageTimer =
+          Timer.periodic(const Duration(milliseconds: 2500), _cycleLoadingMessage);
+      _loadingPulseTimer =
+          Timer.periodic(const Duration(milliseconds: 1500), _cyclePulse);
     }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _cancelLoadingTimers();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final userId = user?.userID ?? MyAppState.currentUser?.userID;
+    if (userId != null && userId.isNotEmpty) {
+      if (state == AppLifecycleState.resumed) {
+        AnalyticsService.trackUserEngagement(userId, 'app_open');
+      } else if (state == AppLifecycleState.paused) {
+        AnalyticsService.trackUserEngagement(userId, 'app_background');
+      }
+    }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _maybeClearImageCacheOnBackground();
+    }
+  }
+
+  void _maybeClearImageCacheOnBackground() async {
+    try {
+      final lowEnd = await DeviceCapability.isLowEndDevice();
+      if (lowEnd) {
+        await DefaultCacheManager().emptyCache();
+      }
+    } catch (_) {}
   }
 
   Future<void> _performInitialization() async {
@@ -109,53 +203,43 @@ class _ContainerScreen extends State<ContainerScreen> {
         return;
       }
 
-      // 2) Check FirebaseAuth user (wait for session restore if null)
-      auth.User? fbUser = auth.FirebaseAuth.instance.currentUser;
-      debugPrint('[AUTH_INIT] Initial currentUser: ${fbUser?.uid}');
-
-if (fbUser == null) {
-        MyAppState.currentUser = null;
-        user = null;
-        final loc = MyAppState.selectedPosotion.location;
-        final hasValidGuestLocation = loc != null &&
-            !(loc.latitude == 0 && loc.longitude == 0);
-        if (hasValidGuestLocation) {
-          debugPrint('[AUTH_INIT] Guest mode with valid location');
-          await _initializeAfterUserSet();
-          if (mounted) {
-            setState(() {
-              _isInitializing = false;
-            });
-          }
-          return;
-        }
-        debugPrint(
-            '[AUTH_INIT] No user, no location; redirecting to location pick');
-        if (mounted) {
-          pushReplacement(context, LocationPermissionScreen());
-        }
-        return;
+      // 2) Wait for Firebase Auth to restore session from local storage
+      debugPrint('[AUTH_INIT] Waiting for Firebase Auth session restoration...');
+      auth.User? fbUser;
+      try {
+        fbUser = await auth.FirebaseAuth.instance.authStateChanges().first
+            .timeout(
+          const Duration(seconds: 3),
+          onTimeout: () {
+            debugPrint(
+                '[AUTH_INIT] Auth restoration timeout, using currentUser');
+            return auth.FirebaseAuth.instance.currentUser;
+          },
+        );
+      } catch (e) {
+        debugPrint('[AUTH_INIT] Error during auth restoration: $e');
+        fbUser = auth.FirebaseAuth.instance.currentUser;
       }
+      debugPrint(
+          '[AUTH_INIT] Auth restoration complete. User: ${fbUser?.uid ?? "null"}');
+
       if (fbUser == null) {
         MyAppState.currentUser = null;
         user = null;
-        final loc = MyAppState.selectedPosotion.location;
+        final loc = MyAppState.selectedPosition.location;
         final hasValidGuestLocation = loc != null &&
             !(loc.latitude == 0 && loc.longitude == 0);
-        if (hasValidGuestLocation) {
-          debugPrint('[AUTH_INIT] Guest mode with valid location');
-          await _initializeAfterUserSet();
-          if (mounted) {
-            setState(() {
-              _isInitializing = false;
-            });
-          }
-          return;
+        if (!hasValidGuestLocation) {
+          debugPrint(
+              '[AUTH_INIT] Guest mode, setting default Jolo, Sulu location');
+          MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
         }
-        debugPrint(
-            '[AUTH_INIT] No user, no location; redirecting to location pick');
+        debugPrint('[AUTH_INIT] Guest mode with valid location');
+        await _initializeAfterUserSet();
         if (mounted) {
-          pushReplacement(context, LocationPermissionScreen());
+          setState(() {
+            _isInitializing = false;
+          });
         }
         return;
       }
@@ -164,10 +248,15 @@ if (fbUser == null) {
       // 3) Fetch Firestore user record
       final fetchedUser = await FireStoreUtils.getCurrentUser(fbUser.uid);
       if (fetchedUser == null || fetchedUser.role != USER_ROLE_CUSTOMER) {
+        await CartSyncService.onLogout();
         await auth.FirebaseAuth.instance.signOut();
         MyAppState.currentUser = null;
         user = null;
         if (mounted) {
+          setState(() {
+            _cancelLoadingTimers();
+            _isInitializing = false;
+          });
           pushReplacement(context, LoginScreen(isInitialScreen: true));
         }
         return;
@@ -179,6 +268,8 @@ if (fbUser == null) {
       await FireStoreUtils.updateCurrentUser(fetchedUser);
       MyAppState.currentUser = fetchedUser;
       user = fetchedUser;
+
+      unawaited(TimezoneService.updateUserTimezone());
 
       // 5) Check for app updates
       if (mounted) {
@@ -197,10 +288,11 @@ if (fbUser == null) {
             (a) => a.isDefault == true,
             orElse: () => addrs.first,
           );
-          MyAppState.selectedPosotion = defaultAddr;
+          MyAppState.selectedPosition = defaultAddr;
         } else {
-          pushAndRemoveUntil(context, LocationPermissionScreen(), false);
-          return;
+          debugPrint(
+              '[AUTH_INIT] User has no shipping address; using default Jolo');
+          MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
         }
       }
 
@@ -210,6 +302,7 @@ if (fbUser == null) {
       // 8) Mark initialization as complete
       if (mounted) {
         setState(() {
+          _cancelLoadingTimers();
           _isInitializing = false;
         });
       }
@@ -217,6 +310,7 @@ if (fbUser == null) {
       debugPrint('Initialization error: $e');
       if (mounted) {
         setState(() {
+          _cancelLoadingTimers();
           _isInitializing = false;
           _initializationError = e.toString();
         });
@@ -238,15 +332,20 @@ if (fbUser == null) {
         }
       });
     }
-    // Load placeholder image
+    // Load placeholder image (fire-and-forget)
     FireStoreUtils.getplaceholderimage().then((value) {
       AppGlobal.placeHolderImage = value;
     });
 
-    // Initialize currency and settings
-    await setCurrency();
+    // Start cart sync for logged-in users
+    if (MyAppState.currentUser != null && mounted) {
+      try {
+        final cartDb = Provider.of<CartDatabase>(context, listen: false);
+        CartSyncService.startCartSync(cartDb);
+      } catch (_) {}
+    }
 
-    // Initialize persistent tab screens once
+    // Build main scaffold immediately; defer currency/settings to background
     if (mounted) {
       setState(() {
         _homeScreen = widget.currentWidget is HomeScreen
@@ -283,6 +382,69 @@ if (fbUser == null) {
             NotificationService.showEnableNotificationsDialogIfNeeded(context);
           }
         });
+      }
+      // Defer non-critical config so main UI appears first
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadAppConfigurationInBackground();
+      });
+      // Log time to first paint once main scaffold is built
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          final elapsed = PerformanceLogger.elapsedSinceAppStart;
+          if (elapsed != null) {
+            PerformanceLogger.logPhase('time_to_first_paint', elapsed);
+          }
+        }
+      });
+    }
+  }
+
+  /// Loads theme, currency, tax, payment config in background; updates UI when done.
+  Future<void> _loadAppConfigurationInBackground() async {
+    try {
+      await AppConfigurationService.loadAsync();
+    } catch (e) {
+      debugPrint('[ContainerScreen] App config load error: $e');
+    }
+    if (mounted) {
+      setState(() {
+        // Refresh bottom nav selection from currentWidget when config is ready
+        if (widget.currentWidget is CartScreen) {
+          _currentBottomNav = BottomNavSelection.Cart;
+        } else if (widget.currentWidget is SearchScreen) {
+          _currentBottomNav = BottomNavSelection.Search;
+        } else if (widget.currentWidget is ProfileScreen) {
+          _currentBottomNav = BottomNavSelection.Profile;
+        } else {
+          _currentBottomNav = BottomNavSelection.Home;
+        }
+      });
+    }
+  }
+
+  Future<void> _testGemini() async {
+    try {
+      final model = FirebaseAI.googleAI().generativeModel(
+        model: 'gemini-2.5-flash-lite',
+      );
+      final response = await model.generateContent([
+        Content.text('Say hello in one word'),
+      ]);
+      debugPrint('Gemini says: ${response.text}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Response: ${response.text}')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -347,11 +509,11 @@ if (fbUser == null) {
     });
 
     // Only get country if location is available
-    if (MyAppState.selectedPosotion.location != null) {
+    if (MyAppState.selectedPosition.location != null) {
       try {
         List<Placemark> placeMarks = await placemarkFromCoordinates(
-            MyAppState.selectedPosotion.location!.latitude,
-            MyAppState.selectedPosotion.location!.longitude);
+            MyAppState.selectedPosition.location!.latitude,
+            MyAppState.selectedPosition.location!.longitude);
 
         if (placeMarks.isNotEmpty) {
           country = placeMarks.first.country;
@@ -416,6 +578,13 @@ if (fbUser == null) {
   DateTime preBackpress = DateTime.now();
 
   Widget _buildLoadingIndicator() {
+    final currentMessage =
+        _loadingMessages[_loadingMessageIndex % _loadingMessages.length];
+    final currentTip =
+        _loadingTips[_loadingMessageIndex % _loadingTips.length];
+    final pulseBegin = _pulseKey.isEven ? 0.95 : 1.05;
+    final pulseEnd = _pulseKey.isEven ? 1.05 : 0.95;
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: Center(
@@ -434,26 +603,38 @@ if (fbUser == null) {
                     backgroundColor: Colors.grey[200],
                   ),
                 ),
-                Container(
-                  width: 60,
-                  height: 60,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 8,
-                        offset: Offset(0, 2),
+                TweenAnimationBuilder<double>(
+                  key: ValueKey(_pulseKey),
+                  tween: Tween(begin: pulseBegin, end: pulseEnd),
+                  duration: const Duration(milliseconds: 1500),
+                  curve: Curves.easeInOut,
+                  builder: (context, value, child) {
+                    return Transform.scale(
+                      scale: value,
+                      child: child,
+                    );
+                  },
+                  child: Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Image.asset(
+                        'assets/images/app_logo.png',
+                        width: 40,
+                        height: 40,
+                        fit: BoxFit.contain,
                       ),
-                    ],
-                  ),
-                  child: Center(
-                    child: Image.asset(
-                      'assets/images/app_logo.png',
-                      width: 40,
-                      height: 40,
-                      fit: BoxFit.contain,
                     ),
                   ),
                 ),
@@ -461,15 +642,119 @@ if (fbUser == null) {
             ),
             SizedBox(height: 20),
             Text(
-              'Loading...',
+              currentMessage,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 22,
                 fontFamily: 'Poppinsm',
                 color: Color(COLOR_PRIMARY),
               ),
             ),
+            SizedBox(height: 8),
+            Text(
+              'This usually takes just a few seconds',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[600],
+              ),
+            ),
+            SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                currentTip,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[500],
+                ),
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildMessageFloatingButton() {
+    final userId = MyAppState.currentUser?.userID ?? '';
+    return FloatingActionButton(
+      onPressed: () {
+        if (MyAppState.currentUser != null) {
+          push(context, const InboxDriverScreen());
+        } else {
+          push(context, LoginScreen());
+        }
+      },
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: StreamBuilder<int>(
+        stream: ChatReadService.getTotalUnreadCountStream(userId),
+        builder: (context, snapshot) {
+          final count = snapshot.data ?? 0;
+          return Semantics(
+            button: true,
+            label:
+                'Messages, ${count > 0 ? '$count unread' : 'no unread messages'}',
+            child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.orange.shade400,
+                          Colors.orange.shade600,
+                        ],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.orange.withOpacity(0.3),
+                          blurRadius: 10,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.chat_bubble_outline,
+                      color: Colors.white,
+                      size: 29,
+                    ),
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: const BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 18,
+                          minHeight: 18,
+                        ),
+                        child: Text(
+                          count > 99 ? '99+' : '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+          );
+        },
       ),
     );
   }
@@ -588,7 +873,8 @@ if (fbUser == null) {
 
   Widget _buildMainScaffold(BuildContext context) {
     return Scaffold(
-        body: Column(
+        body: PerformanceDebugOverlay(
+          child: Column(
           children: [
             // Guest mode banner - only show on Home screen
             if (MyAppState.currentUser == null && _currentBottomNav == BottomNavSelection.Home)
@@ -621,6 +907,7 @@ if (fbUser == null) {
               ),
             ),
           ],
+          ),
         ),
         bottomNavigationBar: BottomNavigationBar(
                   currentIndex: _currentBottomNav.index,
@@ -641,15 +928,9 @@ if (fbUser == null) {
                       label: 'Search',
                     ),
                     BottomNavigationBarItem(
-                      icon: StreamBuilder<List<CartProduct>>(
-                        stream: cartDatabase.watchProducts,
-                        builder: (context, snapshot) {
-                          int totalQuantity = 0;
-                          if (snapshot.hasData) {
-                            totalQuantity = snapshot.data!
-                                .fold(0, (sum, item) => sum + item.quantity);
-                          }
-
+                      icon: Selector<CartStateNotifier, int>(
+                        selector: (_, notifier) => notifier.itemCount,
+                        builder: (context, totalQuantity, _) {
                           return Stack(
                             children: [
                               Icon(CupertinoIcons.cart),
@@ -661,7 +942,8 @@ if (fbUser == null) {
                                     padding: EdgeInsets.all(2),
                                     decoration: BoxDecoration(
                                       color: Colors.red,
-                                      borderRadius: BorderRadius.circular(8),
+                                      borderRadius:
+                                          BorderRadius.circular(8),
                                     ),
                                     constraints: BoxConstraints(
                                       minWidth: 16,
@@ -691,6 +973,38 @@ if (fbUser == null) {
                       label: 'Profile',
                     ),
                   ],
+                ),
+                floatingActionButton: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 280),
+                  switchInCurve: Curves.easeOut,
+                  switchOutCurve: Curves.easeIn,
+                  transitionBuilder: (Widget child, Animation<double> animation) {
+                    return FadeTransition(
+                      opacity: animation,
+                      child: ScaleTransition(
+                        scale: animation,
+                        child: child,
+                      ),
+                    );
+                  },
+                  child: _currentBottomNav == BottomNavSelection.Home
+                      ? Column(
+                          key: const ValueKey('fab_column'),
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            _buildMessageFloatingButton(),
+                            const SizedBox(height: 8),
+                            FloatingActionButton(
+                              key: const ValueKey('ai_fab'),
+                              onPressed: () => push(context, AiChatScreen()),
+                              backgroundColor: Colors.transparent,
+                              elevation: 0,
+                              child: AshAvatar(radius: 24, showGlow: true),
+                            ),
+                          ],
+                        )
+                      : const SizedBox(key: ValueKey('ai_fab_empty')),
                 ),
                 appBar: null);
   }

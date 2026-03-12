@@ -42,6 +42,15 @@ class OrderModel {
   String? referralAuditNote; // Audit note explaining referral vs promo decision
   String? rejectionReason; // Reason provided by restaurant for order rejection
 
+  // Enhanced failure tracking
+  String? failureType;
+  String? failureReason;
+  Map<String, dynamic>? failureDetails;
+  bool? recoveryAttempted;
+  bool? recoverySuccessful;
+  String? recoveredOrderId;
+  List<Map<String, dynamic>>? alternativeSuggestions;
+
   // First-order coupon tracking
   String? appliedCouponId; // Coupon ID if first-order coupon was applied
   double? couponDiscountAmount; // Discount amount from first-order coupon
@@ -58,6 +67,10 @@ class OrderModel {
 
   // Referral wallet usage
   double? referralWalletAmountUsed; // Amount of referral wallet used in this order
+
+  // Gift card usage
+  double? giftCardAmountUsed;
+  List<Map<String, dynamic>>? giftCardBreakdown; // [{cardId, amount}]
 
   double _tryParseDouble(dynamic value) {
     if (value == null) return 0.0;
@@ -119,6 +132,13 @@ class OrderModel {
       this.isReferralPath = false,
       this.referralAuditNote,
       this.rejectionReason,
+      this.failureType,
+      this.failureReason,
+      this.failureDetails,
+      this.recoveryAttempted,
+      this.recoverySuccessful,
+      this.recoveredOrderId,
+      this.alternativeSuggestions,
       this.appliedCouponId,
       this.couponDiscountAmount,
       this.appliedDiscountType,
@@ -127,7 +147,9 @@ class OrderModel {
       this.manualCouponId,
       this.manualCouponDiscountAmount,
       this.manualCouponImage,
-      this.referralWalletAmountUsed})
+      this.referralWalletAmountUsed,
+      this.giftCardAmountUsed,
+      this.giftCardBreakdown})
       : this.author = author ?? User(),
         this.createdAt = createdAt ?? Timestamp.now(),
         this.vendor = vendor ?? VendorModel();
@@ -155,6 +177,10 @@ class OrderModel {
       'extras_price': vOpt(p['extras_price']),
       'extras': p['extras'],
       if (p['variant_info'] != null) 'variant_info': p['variant_info'],
+      'bundleId': vOpt(p['bundleId']),
+      'bundleName': vOpt(p['bundleName']),
+      'addonPromoId': vOpt(p['addonPromoId']),
+      'addonPromoName': vOpt(p['addonPromoName']),
     };
   }
 
@@ -238,6 +264,19 @@ class OrderModel {
           : false,
       referralAuditNote: parsedJson['referralAuditNote'],
       rejectionReason: parsedJson['rejectionReason'],
+      failureType: parsedJson['failureType'],
+      failureReason: parsedJson['failureReason'],
+      failureDetails: parsedJson['failureDetails'] != null
+          ? Map<String, dynamic>.from(parsedJson['failureDetails'] as Map)
+          : null,
+      recoveryAttempted: parsedJson['recoveryAttempted'] as bool?,
+      recoverySuccessful: parsedJson['recoverySuccessful'] as bool?,
+      recoveredOrderId: parsedJson['recoveredOrderId'],
+      alternativeSuggestions: parsedJson['alternativeSuggestions'] != null
+          ? (parsedJson['alternativeSuggestions'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList()
+          : null,
 
       // First-order coupon tracking
       appliedCouponId: parsedJson['appliedCouponId'],
@@ -277,6 +316,17 @@ class OrderModel {
                       parsedJson['referralWalletAmountUsed'].toString()) ??
                   0.0)
           : null,
+      giftCardAmountUsed: parsedJson['giftCardAmountUsed'] != null
+          ? (parsedJson['giftCardAmountUsed'] is num
+              ? (parsedJson['giftCardAmountUsed'] as num).toDouble()
+              : double.tryParse(
+                      parsedJson['giftCardAmountUsed'].toString()) ?? 0.0)
+          : null,
+      giftCardBreakdown: parsedJson['giftCardBreakdown'] != null
+          ? (parsedJson['giftCardBreakdown'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList()
+          : null,
     );
   }
 
@@ -312,6 +362,13 @@ class OrderModel {
       "isReferralPath": this.isReferralPath,
       "referralAuditNote": this.referralAuditNote,
       "rejectionReason": this.rejectionReason,
+      "failureType": this.failureType,
+      "failureReason": this.failureReason,
+      "failureDetails": this.failureDetails,
+      "recoveryAttempted": this.recoveryAttempted,
+      "recoverySuccessful": this.recoverySuccessful,
+      "recoveredOrderId": this.recoveredOrderId,
+      "alternativeSuggestions": this.alternativeSuggestions,
 
       // First-order coupon tracking
       "appliedCouponId": this.appliedCouponId,
@@ -327,6 +384,8 @@ class OrderModel {
       "manualCouponDiscountAmount": this.manualCouponDiscountAmount,
       "manualCouponImage": this.manualCouponImage,
       "referralWalletAmountUsed": this.referralWalletAmountUsed,
+      "giftCardAmountUsed": this.giftCardAmountUsed,
+      "giftCardBreakdown": this.giftCardBreakdown,
     };
   }
 }

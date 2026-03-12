@@ -1,4 +1,5 @@
-import 'package:easy_localization/easy_localization.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
 
@@ -6,6 +7,7 @@ import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
 import 'package:foodie_restaurant/model/User.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
+import 'package:foodie_restaurant/services/timezone_service.dart';
 import 'package:foodie_restaurant/services/helper.dart';
 import 'package:foodie_restaurant/ui/container/ContainerScreen.dart';
 import 'package:foodie_restaurant/ui/resetPasswordScreen/ResetPasswordScreen.dart';
@@ -47,7 +49,7 @@ class _LoginScreen extends State<LoginScreen> {
               padding:
                   const EdgeInsets.only(top: 32.0, right: 16.0, left: 16.0),
               child: Text(
-                'Log In'.tr(),
+                'Log In',
                 style: TextStyle(
                     color: Color(COLOR_PRIMARY),
                     fontSize: 25.0,
@@ -72,7 +74,7 @@ class _LoginScreen extends State<LoginScreen> {
                   cursorColor: Color(COLOR_PRIMARY),
                   decoration: InputDecoration(
                     contentPadding: EdgeInsets.only(left: 16, right: 16),
-                    hintText: 'Email Address'.tr(),
+                    hintText: 'Email Address',
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(25.0),
                       borderSide:
@@ -124,7 +126,7 @@ class _LoginScreen extends State<LoginScreen> {
 
                   decoration: InputDecoration(
                     contentPadding: EdgeInsets.only(left: 16, right: 16),
-                    hintText: 'Password'.tr(),
+                    hintText: 'Password',
                     suffixIcon: IconButton(
                       icon: Icon(
                         _obscureTextLogin
@@ -173,7 +175,7 @@ class _LoginScreen extends State<LoginScreen> {
                 child: GestureDetector(
                   onTap: () => push(context, ResetPasswordScreen()),
                   child: Text(
-                    'Forgot password?'.tr(),
+                    'Forgot password?',
                     style: TextStyle(
                         color: Colors.lightBlue,
                         fontWeight: FontWeight.bold,
@@ -214,7 +216,7 @@ class _LoginScreen extends State<LoginScreen> {
                     ),
                   ),
                   child: Text(
-                    'Log In'.tr(),
+                    'Log In',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
@@ -234,13 +236,13 @@ class _LoginScreen extends State<LoginScreen> {
 
             //    child: Text(
 
-            //      'OR'.tr(),
+            //      'OR',
 
             //      style: TextStyle(
 
             //          color: isDarkMode(context) ? Colors.white : Colors.black),
 
-            //    ).tr(),
+            //    ),
 
             //  ),
 
@@ -262,7 +264,7 @@ class _LoginScreen extends State<LoginScreen> {
 
             //        label: Text(
 
-            //          'Facebook Login'.tr(),
+            //          'Facebook Login',
 
             //          textAlign: TextAlign.center,
 
@@ -274,7 +276,7 @@ class _LoginScreen extends State<LoginScreen> {
 
             //              color: Colors.grey.shade200),
 
-            //        ).tr(),
+            //        ),
 
             //        icon: Padding(
 
@@ -400,7 +402,7 @@ class _LoginScreen extends State<LoginScreen> {
 
             //          Text(
 
-            //            'Login with phone number'.tr(),
+            //            'Login with phone number',
 
             //            style: TextStyle(
 
@@ -455,7 +457,7 @@ class _LoginScreen extends State<LoginScreen> {
   // In your Login Screen (or wherever you call login)
 
   _loginWithEmailAndPassword(String email, String password) async {
-    await showProgress(context, "LoggInWait".tr(), false);
+    await showProgress(context, "LoggInWait", false);
 
     dynamic result = await FireStoreUtils.loginWithEmailAndPassword(
         email.trim(), password.trim());
@@ -465,16 +467,23 @@ class _LoginScreen extends State<LoginScreen> {
     if (result != null && result is User && result.role == 'vendor') {
       if (result.active == true) {
         await FireStoreUtils.updateCurrentUser(result);
-
+        if (result.fcmToken.isNotEmpty) {
+          await FireStoreUtils.addFcmTokenToArray(
+            result.userID,
+            result.fcmToken,
+            vendorId: result.vendorID.isEmpty ? null : result.vendorID,
+          );
+        }
+        unawaited(TimezoneService.updateUserTimezone());
         pushAndRemoveUntil(context, ContainerScreen(user: result), false);
       } else {
-        showAlertDialog(context, "accountDisabledContactAdmin".tr(), "", true);
+        showAlertDialog(context, "accountDisabledContactAdmin", "", true);
       }
     } else if (result != null && result is String) {
-      showAlertDialog(context, "notAuthenticate".tr(), result, true);
+      showAlertDialog(context, "notAuthenticate", result, true);
     } else {
-      showAlertDialog(context, "notAuthenticate".tr(),
-          'Login failed, Please try again.'.tr(), true);
+      showAlertDialog(context, "notAuthenticate",
+          'Login failed, Please try again.', true);
       print("result ans:" + result.toString());
     }
   }
@@ -492,7 +501,7 @@ class _LoginScreen extends State<LoginScreen> {
 
   loginWithFacebook() async {
     try {
-      await showProgress(context, "LoggInWait".tr(), false);
+      await showProgress(context, "LoggInWait", false);
 
       dynamic result = await FireStoreUtils.loginWithFacebook();
 
@@ -509,26 +518,26 @@ class _LoginScreen extends State<LoginScreen> {
           await FacebookAuth.instance.logOut();
 
           showAlertDialog(
-              context, "accountDisabledContactAdmin".tr(), "", true);
+              context, "accountDisabledContactAdmin", "", true);
         }
       } /*else if (result != null && result is String) {
-        showAlertDialog(context, 'Error'.tr(), "", true);
+        showAlertDialog(context, 'Error', "", true);
       } else {
         showAlertDialog(
-            context, 'Error', 'Couldn\'t login with facebook.'.tr(), true);
+            context, 'Error', 'Couldn\'t login with facebook.', true);
       }*/
     } catch (e, s) {
       await hideProgress();
 
       print('_LoginScreen.loginWithFacebook $e $s');
 
-      showAlertDialog(context, 'Error', "noLoginFacebook".tr(), true);
+      showAlertDialog(context, 'Error', "noLoginFacebook", true);
     }
   }
 
   loginWithApple() async {
     try {
-      await showProgress(context, "LoggInWait".tr(), false);
+      await showProgress(context, "LoggInWait", false);
 
       dynamic result = await FireStoreUtils.loginWithApple();
 
@@ -541,19 +550,19 @@ class _LoginScreen extends State<LoginScreen> {
           pushAndRemoveUntil(context, ContainerScreen(user: result), false);
         } else {
           showAlertDialog(
-              context, "accountDisabledContactAdmin".tr(), "", true);
+              context, "accountDisabledContactAdmin", "", true);
         }
       } else if (result != null && result is String) {
-        showAlertDialog(context, 'Error'.tr(), result.tr(), true);
+        showAlertDialog(context, 'Error', result, true);
       } else {
-        showAlertDialog(context, 'Error'.tr(), "notLoginApple.".tr(), true);
+        showAlertDialog(context, 'Error', "notLoginApple.", true);
       }
     } catch (e, s) {
       await hideProgress();
 
       print('_LoginScreen.loginWithApple $e $s');
 
-      showAlertDialog(context, 'Error'.tr(), "notLoginApple.".tr(), true);
+      showAlertDialog(context, 'Error', "notLoginApple.", true);
     }
   }
 }

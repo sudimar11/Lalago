@@ -5,10 +5,14 @@ import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
+import 'package:foodie_customer/model/bundle_model.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
+import 'package:foodie_customer/services/bundle_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/SearchHistoryService.dart';
 import 'package:foodie_customer/model/PopularSearchItem.dart';
+import 'package:foodie_customer/ui/bundle/bundle_card.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
@@ -52,9 +56,12 @@ class SearchScreenState extends State<SearchScreen> {
   late List<ProductModel> productList = [];
   late List<ProductModel> productSearchList = [];
 
+  late List<BundleModel> bundleSearchList = [];
+
   // Cached lists for optimized search performance
   late List<CachedVendor> _cachedVendors = [];
   late List<CachedProduct> _cachedProducts = [];
+  List<BundleModel> _cachedBundles = [];
 
   final FireStoreUtils fireStoreUtils = FireStoreUtils();
   final FocusNode _searchFocusNode = FocusNode(); // Add FocusNode
@@ -80,6 +87,8 @@ class SearchScreenState extends State<SearchScreen> {
   static const int _maxResultsPerCategory = 50;
   static const int _maxSuggestions = 6;
 
+  String? _currentSearchDocId;
+
   @override
   void initState() {
     super.initState();
@@ -93,21 +102,28 @@ class SearchScreenState extends State<SearchScreen> {
     });
 
     fireStoreUtils.getVendors().then((value) {
-      setState(() {
-        vendorList = value;
-        // Build cache for optimized search performance
-        _cachedVendors = value.map((v) => CachedVendor(v)).toList();
-        isLoadingVendors = false;
-      });
+      if (mounted) {
+        setState(() {
+          vendorList = value;
+          // Build cache for optimized search performance
+          _cachedVendors = value.map((v) => CachedVendor(v)).toList();
+          isLoadingVendors = false;
+        });
+      }
     });
     fireStoreUtils.getAllProducts().then((value) {
-      setState(() {
-        // only keep products that are published
-        productList = value.where((p) => p.publish == true).toList();
-        // Build cache for optimized search performance
-        _cachedProducts = productList.map((p) => CachedProduct(p)).toList();
-        isLoadingProducts = false;
-      });
+      if (mounted) {
+        setState(() {
+          // only keep products that are published
+          productList = value.where((p) => p.publish == true).toList();
+          // Build cache for optimized search performance
+          _cachedProducts = productList.map((p) => CachedProduct(p)).toList();
+          isLoadingProducts = false;
+        });
+      }
+    });
+    BundleService.getActiveBundles(limit: 100).then((value) {
+      if (mounted) setState(() => _cachedBundles = value);
     });
   }
 
@@ -195,11 +211,18 @@ class SearchScreenState extends State<SearchScreen> {
             // Food results
             if (productSearchList.isNotEmpty) _buildFoodSection(),
 
+            if (productSearchList.isNotEmpty && bundleSearchList.isNotEmpty)
+              const SizedBox(height: 20),
+
+            // Bundle results
+            if (bundleSearchList.isNotEmpty) _buildBundleSection(),
+
             // No results message
             if (!_isFiltering &&
                 _searchController.text.length >= _minSearchLength &&
                 vendorSearchList.isEmpty &&
-                productSearchList.isEmpty)
+                productSearchList.isEmpty &&
+                bundleSearchList.isEmpty)
               _buildNoResultsMessage(),
           ],
         ),
@@ -693,7 +716,9 @@ class SearchScreenState extends State<SearchScreen> {
     setState(() {
       vendorSearchList.clear();
       productSearchList.clear();
+      bundleSearchList.clear();
       _isFiltering = false;
+      _currentSearchDocId = null;
     });
   }
 
@@ -711,6 +736,10 @@ class SearchScreenState extends State<SearchScreen> {
       setState(() {
         vendorSearchList = cachedResults[0] as List<VendorModel>;
         productSearchList = cachedResults[1] as List<ProductModel>;
+        bundleSearchList =
+            cachedResults.length > 2
+                ? cachedResults[2] as List<BundleModel>
+                : <BundleModel>[];
         _isFiltering = false;
       });
       _trackSearch(text);
@@ -724,11 +753,16 @@ class SearchScreenState extends State<SearchScreen> {
       setState(() {
         vendorSearchList = results['vendors'] as List<VendorModel>;
         productSearchList = results['products'] as List<ProductModel>;
+        bundleSearchList = results['bundles'] as List<BundleModel>;
         _isFiltering = false;
       });
 
       // Cache the results
-      _searchCache[cacheKey] = [vendorSearchList, productSearchList];
+      _searchCache[cacheKey] = [
+        vendorSearchList,
+        productSearchList,
+        bundleSearchList,
+      ];
 
       // Clean old cache entries (keep only last 10 searches)
       if (_searchCache.length > 10) {
@@ -766,10 +800,76 @@ class SearchScreenState extends State<SearchScreen> {
       }
     }
 
+    // Sort vendors by performance (acceptance rate 30% weight) for ranking
+    filteredVendors.sort((a, b) {
+      final scoreA = _vendorPerformanceScore(a);
+      final scoreB = _vendorPerformanceScore(b);
+      return scoreB.compareTo(scoreA);
+    });
+
+    // Filter bundles by name/description
+    final List<BundleModel> filteredBundles = [];
+    for (final b in _cachedBundles) {
+      if (b.name.toLowerCase().contains(lowerText) ||
+          b.description.toLowerCase().contains(lowerText)) {
+        filteredBundles.add(b);
+        if (filteredBundles.length >= _maxResultsPerCategory) break;
+      }
+    }
+
     return {
       'vendors': filteredVendors,
       'products': filteredProducts,
+      'bundles': filteredBundles,
     };
+  }
+
+  double _vendorPerformanceScore(VendorModel v) {
+    final rate = v.acceptanceRate ?? 0;
+    return 0.7 + 0.3 * (rate / 100);
+  }
+
+  Widget _buildBundleSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Bundle Deals",
+          style: TextStyle(
+            color: Colors.black,
+            fontWeight: FontWeight.w600,
+            fontSize: 16,
+          ),
+        ),
+        const SizedBox(height: 10),
+        ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: bundleSearchList.length,
+          itemBuilder: (context, index) {
+            final bundle = bundleSearchList[index];
+            final vendor = vendorList.cast<VendorModel?>().firstWhere(
+                  (v) => v?.id == bundle.restaurantId,
+                  orElse: () => null,
+                );
+            return InkWell(
+              onTap: () {
+                if (vendor != null) {
+                  push(
+                    context,
+                    NewVendorProductsScreen(vendorModel: vendor),
+                  );
+                }
+              },
+              child: BundleCard(
+                bundle: bundle,
+                onAddToCart: null,
+              ),
+            );
+          },
+        ),
+      ],
+    );
   }
 
   void _trackSearch(String query) async {
@@ -799,7 +899,7 @@ class SearchScreenState extends State<SearchScreen> {
         );
 
         // Track in Firestore for analytics
-        await fireStoreUtils.trackSearchQuery(
+        final docId = await fireStoreUtils.trackSearchQuery(
           userId: MyAppState.currentUser?.userID ?? '',
           searchQuery: query.trim(),
           searchType: searchType,
@@ -808,6 +908,7 @@ class SearchScreenState extends State<SearchScreen> {
               ? '${MyAppState.currentUser!.location.latitude},${MyAppState.currentUser!.location.longitude}'
               : null,
         );
+        if (mounted) _currentSearchDocId = docId;
       } catch (e) {
         debugPrint('Error tracking search: $e');
       }
@@ -828,14 +929,23 @@ class SearchScreenState extends State<SearchScreen> {
     super.dispose();
   }
 
+  void _onRestaurantTapFromSearch(VendorModel vendorModel) {
+    if (_currentSearchDocId != null) {
+      fireStoreUtils.updateSearchClick(_currentSearchDocId!, vendorModel.id);
+      _currentSearchDocId = null;
+    }
+    ClickTrackingService.logClick(
+      userId: MyAppState.currentUser?.userID ?? 'guest',
+      restaurantId: vendorModel.id,
+      source: 'search_results',
+    );
+    push(context, NewVendorProductsScreen(vendorModel: vendorModel));
+  }
+
   Widget _buildVendorCard(VendorModel vendorModel) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onTap: () => push(
-          context,
-          NewVendorProductsScreen(
-            vendorModel: vendorModel,
-          )),
+      onTap: () => _onRestaurantTapFromSearch(vendorModel),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
@@ -878,6 +988,8 @@ class SearchScreenState extends State<SearchScreen> {
     return CachedNetworkImage(
       height: MediaQuery.of(context).size.height * 0.075,
       width: MediaQuery.of(context).size.width * 0.16,
+      memCacheWidth: 200,
+      memCacheHeight: 200,
       imageUrl: getImageVAlidUrl(vendorModel.photo),
       imageBuilder: (context, imageProvider) => Container(
         decoration: BoxDecoration(
@@ -890,10 +1002,12 @@ class SearchScreenState extends State<SearchScreen> {
       ),
       errorWidget: (context, url, error) => ClipRRect(
         borderRadius: BorderRadius.circular(5),
-        child: Image.network(
-          AppGlobal.placeHolderImage!,
+        child: CachedNetworkImage(
+          imageUrl: AppGlobal.placeHolderImage!,
+          memCacheWidth: 200,
+          memCacheHeight: 200,
           fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => Container(
+          errorWidget: (context, url, e) => Container(
             color: Colors.grey[300],
             child: const Icon(Icons.restaurant, color: Colors.grey),
           ),
@@ -1020,6 +1134,8 @@ class SearchScreenState extends State<SearchScreen> {
     return CachedNetworkImage(
       height: MediaQuery.of(context).size.height * 0.075,
       width: MediaQuery.of(context).size.width * 0.16,
+      memCacheWidth: 200,
+      memCacheHeight: 200,
       imageUrl: getImageVAlidUrl(productModel.photo),
       imageBuilder: (context, imageProvider) => Container(
         decoration: BoxDecoration(
@@ -1032,10 +1148,12 @@ class SearchScreenState extends State<SearchScreen> {
       ),
       errorWidget: (context, url, error) => ClipRRect(
         borderRadius: BorderRadius.circular(5),
-        child: Image.network(
-          AppGlobal.placeHolderImage!,
+        child: CachedNetworkImage(
+          imageUrl: AppGlobal.placeHolderImage!,
+          memCacheWidth: 200,
+          memCacheHeight: 200,
           fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => Container(
+          errorWidget: (context, url, e) => Container(
             color: Colors.grey[300],
             child: const Icon(Icons.fastfood, color: Colors.grey),
           ),

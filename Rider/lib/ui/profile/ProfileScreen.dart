@@ -1,10 +1,13 @@
-import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -19,15 +22,19 @@ import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/ui/contactUs/ContactUsScreen.dart';
 import 'package:foodie_driver/ui/reauthScreen/reauth_user_screen.dart';
 import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
+import 'package:foodie_driver/ui/communication/unified_communication_hub_screen.dart';
+import 'package:foodie_driver/ui/profile/zone_browser_screen.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
 import 'package:foodie_driver/widgets/more_options_bottom_sheet.dart';
 import 'package:foodie_driver/userPrefrence.dart';
-import 'package:foodie_driver/widgets/attendance_card.dart';
 import 'package:foodie_driver/widgets/time_input_dialog.dart';
 import 'package:foodie_driver/services/time_tracking_service.dart';
 import 'package:foodie_driver/services/driver_performance_service.dart';
-import 'package:foodie_driver/ui/profile/AttendanceHistoryScreen.dart';
+import 'package:foodie_driver/services/performance_tier_helper.dart';
+import 'package:foodie_driver/services/rider_preset_location_service.dart';
+import 'package:foodie_driver/ui/reviews/RiderReviewsScreen.dart';
 import 'package:foodie_driver/widgets/shared_app_bar.dart';
+import 'package:foodie_driver/services/order_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   final User user;
@@ -45,10 +52,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isSavingCheckIn = false;
   bool _isSavingCheckOut = false;
   bool _isSavingCheckOutToday = false;
+  RiderPresetLocationData? _currentZone;
+  bool _isLoadingZone = true;
+
+  Future<void> _loadCurrentZone() async {
+    final presetId =
+        MyAppState.currentUser?.selectedPresetLocationId;
+    if (presetId == null || presetId.trim().isEmpty) {
+      if (mounted) setState(() => _isLoadingZone = false);
+      return;
+    }
+    try {
+      final zone =
+          await RiderPresetLocationService.getPresetById(presetId);
+      if (mounted) {
+        setState(() {
+          _currentZone = zone;
+          _isLoadingZone = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingZone = false);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _loadCurrentZone();
 
     // Initialize fields if they don't exist in global user object
     if (MyAppState.currentUser!.checkInTime == null) {
@@ -94,7 +125,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (MyAppState.currentUser!.driverPerformance == null) {
       DriverPerformanceService.initializePerformance(
           MyAppState.currentUser!.userID);
-      MyAppState.currentUser!.driverPerformance = 100.0;
+      MyAppState.currentUser!.driverPerformance = 75.0;
     }
   }
 
@@ -153,6 +184,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() {});
     } catch (e) {
       print('❌ Error refreshing profile: $e');
+    }
+  }
+
+  Future<void> _openZoneBrowser() async {
+    final result = await Navigator.push<RiderPresetLocationData>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const ZoneBrowserScreen(),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() => _currentZone = result);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Work area changed to ${result.name}',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
   }
 
@@ -235,25 +286,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               textAlign: TextAlign.center,
             ),
           ),
-          // Attendance Card
-          AttendanceCard(
-            checkInTime: MyAppState.currentUser!.checkInTime,
-            checkOutTime: MyAppState.currentUser!.checkOutTime,
-            totalHours: _calculateTotalHours(),
-            onCheckInTap: _updateCheckInTime,
-            onCheckOutTap: _updateCheckOutTime,
-            canCheckInToday: _canCheckInToday(),
-            onCheckInTodayTap: _handleCheckInToday,
-            checkedInToday: MyAppState.currentUser!.checkedInToday,
-            todayCheckInTime: MyAppState.currentUser!.todayCheckInTime,
-            canCheckOutToday: _canCheckOutToday(),
-            onCheckOutTodayTap: _handleCheckOutToday,
-            checkedOutToday: MyAppState.currentUser!.checkedOutToday,
-            todayCheckOutTime: MyAppState.currentUser!.todayCheckOutTime,
-            isLate: _checkIfLate()['isLate'],
-            hoursLate: _checkIfLate()['hoursLate'],
-            lateMessage: _checkIfLate()['message'],
-          ),
+          const SizedBox.shrink(),
           // Activity Overview Section
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
@@ -369,96 +402,251 @@ class _ProfileScreenState extends State<ProfileScreen> {
               },
             ),
           ),
-          // Performance Score Card
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: Card(
-              elevation: 1,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: _getPerformanceColor(
-                                MyAppState.currentUser!.driverPerformance ??
-                                    100.0)
-                            .withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10),
+          StreamBuilder<DocumentSnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('users')
+                .doc(MyAppState.currentUser!.userID)
+                .snapshots(),
+            builder: (context, snapshot) {
+              final data = snapshot.data?.data()
+                  as Map<String, dynamic>? ??
+                  {};
+              final perf =
+                  (data['driver_performance'] as num?)
+                      ?.toDouble() ??
+                  75.0;
+              final accRate =
+                  (data['acceptance_rate'] as num?)
+                      ?.toDouble();
+              final avgRating =
+                  (data['average_rating'] as num?)
+                      ?.toDouble();
+              final attScore =
+                  (data['attendance_score'] as num?)
+                      ?.toDouble();
+              final tier = PerformanceTierHelper.getTier(perf);
+              final tierConfig =
+                  PerformanceTierHelper.defaultConfig;
+
+              double? nextThreshold;
+              String? nextTierName;
+              if (perf < tierConfig.bronzeThreshold) {
+                nextThreshold = tierConfig.bronzeThreshold;
+                nextTierName = 'Bronze';
+              } else if (perf < tierConfig.silverThreshold) {
+                nextThreshold = tierConfig.silverThreshold;
+                nextTierName = 'Silver';
+              } else if (perf < tierConfig.goldThreshold) {
+                nextThreshold = tierConfig.goldThreshold;
+                nextTierName = 'Gold';
+              }
+
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
+                    child: Card(
+                      elevation: 1,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Icon(
-                        Icons.trending_up,
-                        color: _getPerformanceColor(
-                            MyAppState.currentUser!.driverPerformance ?? 100.0),
-                        size: 24,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: tier.color
+                                    .withValues(alpha: 0.12),
+                                borderRadius:
+                                    BorderRadius.circular(10),
+                              ),
+                              child: Icon(
+                                Icons.trending_up,
+                                color: tier.color,
+                                size: 24,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Performance Score',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: isDarkMode(context)
+                                          ? Colors.grey.shade400
+                                          : Colors.grey.shade600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment
+                                            .baseline,
+                                    textBaseline:
+                                        TextBaseline.alphabetic,
+                                    children: [
+                                      Text(
+                                        '${perf.toStringAsFixed(1)}%',
+                                        style: TextStyle(
+                                          fontSize: 28,
+                                          fontWeight:
+                                              FontWeight.bold,
+                                          color: tier.color,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding:
+                                            const EdgeInsets
+                                                .symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: tier.color
+                                              .withValues(
+                                            alpha: 0.15,
+                                          ),
+                                          borderRadius:
+                                              BorderRadius
+                                                  .circular(8),
+                                        ),
+                                        child: Text(
+                                          tier.name,
+                                          style: TextStyle(
+                                            color: tier.color,
+                                            fontWeight:
+                                                FontWeight.w600,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Performance Score',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: isDarkMode(context)
-                                  ? Colors.grey.shade400
-                                  : Colors.grey.shade600,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.baseline,
-                            textBaseline: TextBaseline.alphabetic,
-                            children: [
-                              Text(
-                                '${(MyAppState.currentUser!.driverPerformance ?? 100.0).toStringAsFixed(1)}%',
-                                style: TextStyle(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.bold,
-                                  color: _getPerformanceColor(
-                                      MyAppState.currentUser!.driverPerformance ??
-                                          100.0),
-                                ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 2,
+                    ),
+                    child: Card(
+                      elevation: 1,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Performance Breakdown',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: isDarkMode(context)
+                                    ? Colors.grey.shade300
+                                    : Colors.grey.shade700,
                               ),
-                              const SizedBox(width: 8),
+                            ),
+                            const SizedBox(height: 12),
+                            _buildMetricRow(
+                              context,
+                              'Acceptance Rate',
+                              accRate != null
+                                  ? '${accRate.toStringAsFixed(1)}%'
+                                  : '--',
+                              accRate ?? 0,
+                              100,
+                              Colors.blue,
+                            ),
+                            const SizedBox(height: 8),
+                            _buildMetricRow(
+                              context,
+                              'Customer Rating',
+                              avgRating != null
+                                  ? '${avgRating.toStringAsFixed(1)}/5'
+                                  : '--',
+                              avgRating ?? 0,
+                              5,
+                              Colors.amber,
+                            ),
+                            const SizedBox(height: 8),
+                            _buildMetricRow(
+                              context,
+                              'Attendance',
+                              attScore != null
+                                  ? '${attScore.toStringAsFixed(1)}%'
+                                  : '--',
+                              attScore ?? 0,
+                              100,
+                              Colors.green,
+                            ),
+                            if (nextTierName != null &&
+                                nextThreshold != null) ...[
+                              const SizedBox(height: 12),
                               Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
+                                padding:
+                                    const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: _getPerformanceColor(MyAppState
-                                              .currentUser!.driverPerformance ??
-                                          100.0)
-                                      .withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
+                                  color: isDarkMode(context)
+                                      ? Colors.blueGrey.shade800
+                                      : Colors.blue.shade50,
+                                  borderRadius:
+                                      BorderRadius.circular(8),
                                 ),
                                 child: Text(
-                                  _getPerformanceLabel(
-                                      MyAppState.currentUser!.driverPerformance ??
-                                          100.0),
+                                  '${(nextThreshold - perf).toStringAsFixed(1)} points to $nextTierName',
                                   style: TextStyle(
-                                    color: _getPerformanceColor(
-                                        MyAppState.currentUser!.driverPerformance ??
-                                            100.0),
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 11,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                    color: isDarkMode(context)
+                                        ? Colors.blue.shade200
+                                        : Colors.blue.shade700,
                                   ),
                                 ),
                               ),
                             ],
-                          ),
-                        ],
+                            const SizedBox(height: 10),
+                            Text(
+                              'Gold: +20% per delivery  |  '
+                              'Silver: +10%  |  '
+                              'Bronze: base rate',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isDarkMode(context)
+                                    ? Colors.grey.shade500
+                                    : Colors.grey.shade500,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ),
+                  ),
+                ],
+              );
+            },
           ),
           // Today's Bonus Card
           Padding(
@@ -669,19 +857,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             padding: const EdgeInsets.only(top: 8),
             child: Column(
               children: <Widget>[
-                ListTile(
-                  onTap: () {
-                    push(context, const AttendanceHistoryScreen());
-                  },
-                  title: Text(
-                    'Attendance History',
-                    style: TextStyle(fontSize: 16),
-                  ),
-                  leading: Icon(
-                    CupertinoIcons.calendar,
-                    color: Colors.purple,
-                  ),
-                ),
+                const SizedBox.shrink(),
                 ListTile(
                   onTap: () {
                     push(context,
@@ -695,6 +871,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     CupertinoIcons.person_alt,
                     color: Colors.blue,
                   ),
+                ),
+                ListTile(
+                  onTap: () {
+                    push(context, const RiderReviewsScreen());
+                  },
+                  title: Text(
+                    'View My Reviews',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  leading: Icon(
+                    CupertinoIcons.star,
+                    color: Colors.amber,
+                  ),
+                ),
+                _WorkAreaCard(
+                  currentZone: _currentZone,
+                  riderLocation: MyAppState.currentUser?.location,
+                  isLoading: _isLoadingZone,
+                  onBrowseZones: _openZoneBrowser,
                 ),
                 // ListTile(
                 //   onTap: () {
@@ -803,9 +998,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 onPressed: () async {
                   //user.isActive = false;
-                  MyAppState.currentUser!.lastOnlineTimestamp = Timestamp.now();
-                  await FireStoreUtils.updateCurrentUser(
-                      MyAppState.currentUser!);
+                  final u = MyAppState.currentUser!;
+                  u.lastOnlineTimestamp = Timestamp.now();
+                  await FireStoreUtils.updateCurrentUser(u);
+                  if (u.fcmToken.isNotEmpty) {
+                    unawaited(FireStoreUtils.removeFcmToken(u.userID, u.fcmToken));
+                  }
                   await auth.FirebaseAuth.instance.signOut();
                   MyAppState.currentUser = null;
                   pushAndRemoveUntil(context, AuthScreen(), false);
@@ -833,6 +1031,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       appBar: SharedAppBar(
         title: 'My Profile',
         user: widget.user,
+        onWorkAreaTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const ZoneBrowserScreen(),
+            ),
+          );
+        },
       ),
       body: _buildBody(),
       bottomNavigationBar: BottomNavigationBar(
@@ -880,10 +1086,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // Handle driver ranking navigation if needed
                 },
                 onInboxTap: () {
-                  // Handle inbox navigation if needed
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const UnifiedCommunicationHubScreen(),
+                    ),
+                  );
                 },
                 onLocationUpdate: () {
                   // Handle location update if needed
+                },
+                onSelectWorkArea: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ZoneBrowserScreen(),
+                    ),
+                  );
                 },
               );
               break;
@@ -1890,6 +2109,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // Save to Firebase
       print('🔥 DEBUG: Saving check-in data to Firebase...');
       await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
+      await OrderService.updateRiderStatus();
       print('✅ DEBUG: Check-in data saved to Firebase successfully');
 
       // Save the last check-in date
@@ -2215,6 +2435,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       http.post(Uri.parse('http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),headers:{'Content-Type':'application/json'},body:json.encode({'location':'ProfileScreen.dart:2138','message':'Before Firebase save','data':{'checkedInToday':MyAppState.currentUser!.checkedInToday,'checkedOutToday':MyAppState.currentUser!.checkedOutToday,'isOnline':MyAppState.currentUser!.isOnline},'timestamp':DateTime.now().millisecondsSinceEpoch,'sessionId':'debug-session','runId':'checkout-test','hypothesisId':'E'})).catchError((_)=>http.Response('', 500));
       // #endregion
       await FireStoreUtils.updateCurrentUser(MyAppState.currentUser!);
+      await OrderService.updateRiderStatus();
       print('✅ DEBUG: Check-out data saved to Firebase successfully');
       // #region agent log
       http.post(Uri.parse('http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),headers:{'Content-Type':'application/json'},body:json.encode({'location':'ProfileScreen.dart:2140','message':'After Firebase save','data':{'checkedInToday':MyAppState.currentUser!.checkedInToday,'checkedOutToday':MyAppState.currentUser!.checkedOutToday,'isOnline':MyAppState.currentUser!.isOnline},'timestamp':DateTime.now().millisecondsSinceEpoch,'sessionId':'debug-session','runId':'checkout-test','hypothesisId':'E'})).catchError((_)=>http.Response('', 500));
@@ -2847,29 +3068,325 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // Get performance color based on score
   Color _getPerformanceColor(double score) {
-    if (score >= 90) {
-      return Colors.green;
-    } else if (score >= 75) {
-      return Colors.orange;
-    } else if (score >= 60) {
-      return Colors.amber;
-    } else {
-      return Colors.red;
-    }
+    return PerformanceTierHelper.getTier(score).color;
   }
 
-  // Get performance label based on score
   String _getPerformanceLabel(double score) {
-    if (score >= 90) {
-      return 'Excellent';
-    } else if (score >= 75) {
-      return 'Good';
-    } else if (score >= 60) {
-      return 'Fair';
-    } else {
-      return 'Needs Improvement';
-    }
+    return PerformanceTierHelper.getTier(score).name;
+  }
+
+  Widget _buildMetricRow(
+    BuildContext context,
+    String label,
+    String valueText,
+    double value,
+    double maxValue,
+    Color color,
+  ) {
+    final ratio = maxValue > 0
+        ? (value / maxValue).clamp(0.0, 1.0)
+        : 0.0;
+    return Row(
+      children: [
+        SizedBox(
+          width: 110,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: isDarkMode(context)
+                  ? Colors.grey.shade400
+                  : Colors.grey.shade600,
+            ),
+          ),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: ratio,
+              backgroundColor: isDarkMode(context)
+                  ? Colors.grey.shade800
+                  : Colors.grey.shade200,
+              valueColor:
+                  AlwaysStoppedAnimation<Color>(color),
+              minHeight: 6,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 48,
+          child: Text(
+            valueText,
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: isDarkMode(context)
+                  ? Colors.white70
+                  : Colors.black87,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+double _zoomForRadius(double radiusKm) {
+  if (radiusKm <= 0) return 14.0;
+  final diameter = radiusKm * 2;
+  final zoom = 14.0 - (math.log(diameter) / math.ln2);
+  return zoom.clamp(8.0, 17.0);
+}
+
+double _distanceInKm(LatLng a, LatLng b) {
+  const earthRadiusKm = 6371.0;
+  final dLat = (b.latitude - a.latitude) * (math.pi / 180.0);
+  final dLng = (b.longitude - a.longitude) * (math.pi / 180.0);
+  final lat1 = a.latitude * (math.pi / 180.0);
+  final lat2 = b.latitude * (math.pi / 180.0);
+
+  final hav = math.pow(math.sin(dLat / 2), 2).toDouble() +
+      math.cos(lat1) *
+          math.cos(lat2) *
+          math.pow(math.sin(dLng / 2), 2).toDouble();
+  final c = 2 * math.atan2(math.sqrt(hav), math.sqrt(1 - hav));
+  return earthRadiusKm * c;
+}
+
+class _WorkAreaCard extends StatelessWidget {
+  final RiderPresetLocationData? currentZone;
+  final UserLocation? riderLocation;
+  final bool isLoading;
+  final VoidCallback onBrowseZones;
+
+  const _WorkAreaCard({
+    required this.currentZone,
+    required this.riderLocation,
+    required this.isLoading,
+    required this.onBrowseZones,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 8,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              'MY WORK AREA',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.0,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ),
+          if (isLoading)
+            Container(
+              height: 120,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Center(
+                child: CircularProgressIndicator.adaptive(),
+              ),
+            )
+          else if (currentZone == null)
+            _buildNoZoneSelected(context)
+          else
+            _buildZonePreview(context),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: onBrowseZones,
+              icon: const Icon(Icons.map_outlined, size: 18),
+              label: const Text('BROWSE ALL ZONES'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Color(COLOR_PRIMARY),
+                side: BorderSide(
+                  color: Color(COLOR_PRIMARY),
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoZoneSelected(BuildContext context) {
+    return Container(
+      height: 120,
+      decoration: BoxDecoration(
+        color: isDarkMode(context)
+            ? Colors.grey.shade800
+            : Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.grey.shade300,
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.place_outlined,
+              size: 32,
+              color: Colors.grey.shade400,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No work area selected',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey.shade500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildZonePreview(BuildContext context) {
+    final zone = currentZone!;
+    final hasCircle = zone.hasRadius;
+    final center = LatLng(zone.latitude, zone.longitude);
+    final hasRiderLocation = riderLocation != null &&
+        riderLocation!.latitude.abs() > 0.0001 &&
+        riderLocation!.longitude.abs() > 0.0001;
+    final riderLatLng = hasRiderLocation
+        ? LatLng(riderLocation!.latitude, riderLocation!.longitude)
+        : null;
+    final isOutsideZone = hasCircle &&
+        riderLatLng != null &&
+        _distanceInKm(center, riderLatLng) > zone.radiusKm!;
+    final zoom = hasCircle
+        ? _zoomForRadius(zone.radiusKm!)
+        : 14.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          height: 120,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.grey.shade300,
+            ),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(11),
+            child: GoogleMap(
+              initialCameraPosition: CameraPosition(
+                target: center,
+                zoom: zoom,
+              ),
+              liteModeEnabled: Platform.isAndroid,
+              zoomGesturesEnabled: false,
+              scrollGesturesEnabled: false,
+              rotateGesturesEnabled: false,
+              tiltGesturesEnabled: false,
+              zoomControlsEnabled: false,
+              mapToolbarEnabled: false,
+              myLocationEnabled: false,
+              myLocationButtonEnabled: false,
+              markers: {
+                if (riderLatLng != null)
+                  Marker(
+                    markerId: const MarkerId('rider_current_location'),
+                    position: riderLatLng,
+                    icon: BitmapDescriptor.defaultMarkerWithHue(
+                      BitmapDescriptor.hueRed,
+                    ),
+                    infoWindow: const InfoWindow(
+                      title: 'Your current location',
+                    ),
+                  ),
+              },
+              circles: hasCircle
+                  ? {
+                      Circle(
+                        circleId: const CircleId(
+                          'zone_preview',
+                        ),
+                        center: center,
+                        radius: zone.radiusKm! * 1000,
+                        fillColor: Colors.blue
+                            .withOpacity(0.1),
+                        strokeColor: Colors.blue
+                            .withOpacity(0.5),
+                        strokeWidth: 2,
+                      ),
+                    }
+                  : {},
+            ),
+          ),
+        ),
+        if (isOutsideZone) ...[
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 8,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.red.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.red.withOpacity(0.35),
+              ),
+            ),
+            child: const Text(
+              'Note: Rider is outside the selected zone radius.',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.red,
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Icon(
+              Icons.place,
+              color: Colors.blue,
+              size: 20,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                zone.name,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 }

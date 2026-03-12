@@ -3,11 +3,11 @@ import 'dart:developer';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/model/User.dart';
@@ -23,9 +23,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize localization first
-  await EasyLocalization.ensureInitialized();
-
   // Initialize Firebase core
   await Firebase.initializeApp();
 
@@ -34,17 +31,7 @@ Future<void> main() async {
     androidProvider: AndroidProvider.debug,
   );
 
-  runApp(
-    EasyLocalization(
-      supportedLocales: [Locale('en'), Locale('ar')],
-      path: 'assets/translations',
-      fallbackLocale: Locale('en'),
-      useFallbackTranslations: true,
-      saveLocale: false,
-      useOnlyLangCode: true,
-      child: MyApp(),
-    ),
-  );
+  runApp(MyApp());
 }
 
 class MyApp extends StatefulWidget {
@@ -55,6 +42,8 @@ class MyApp extends StatefulWidget {
 class MyAppState extends State<MyApp> with WidgetsBindingObserver {
   final AudioPlayer audioPlayer = AudioPlayer(playerId: "playerId");
   static User? currentUser;
+  /// When chain_admin: null = chain-wide, else vendorID of selected location.
+  static String? selectedLocationId;
   final NotificationService notificationService = NotificationService();
 
   @override
@@ -124,6 +113,20 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
     try {
       final snap = await FirebaseFirestore.instance
           .collection(Setting)
+          .doc('geminiApiKey')
+          .get();
+      final key = snap.data()?['key']?.toString();
+      if (key != null && key.isNotEmpty) {
+        GEMINI_API_KEY = key;
+        log('🔹 GEMINI_API_KEY loaded');
+      }
+    } catch (e) {
+      log('❗ geminiApiKey load error: $e');
+    }
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection(Setting)
           .doc('emailSetting')
           .get();
       final data = snap.data();
@@ -144,10 +147,7 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      localizationsDelegates: context.localizationDelegates,
-      supportedLocales: context.supportedLocales,
-      locale: context.locale,
-      title: 'Restaurant Dashboard'.tr(),
+      title: 'Restaurant Dashboard',
       theme: ThemeData(
         useMaterial3: false,
         primaryColor: Color(COLOR_PRIMARY),
@@ -175,6 +175,7 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
             BottomSheetThemeData(backgroundColor: Colors.grey.shade900),
       ),
       debugShowCheckedModeBanner: false,
+      builder: EasyLoading.init(),
       home: OnBoarding(),
     );
   }

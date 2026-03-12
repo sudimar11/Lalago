@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'order_sound_player_stub.dart'
-    if (dart.library.html) 'order_sound_player_web.dart' as player;
+    if (dart.library.html) 'order_sound_player_web.dart'
+    if (dart.library.io) 'order_sound_player_native.dart' as player;
 
 class OrderSoundService {
   static const _prefsKey = 'order_sound_enabled';

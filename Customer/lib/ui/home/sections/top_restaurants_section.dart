@@ -11,12 +11,16 @@ import 'package:foodie_customer/model/FavouriteModel.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
+import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
+import 'package:foodie_customer/widgets/performance_badge.dart';
 import 'package:foodie_customer/ui/home/view_all_popular_restaurant_screen.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
 class TopRestaurantsSection extends StatelessWidget {
   final List<VendorModel> popularRestaurantLst;
@@ -24,6 +28,9 @@ class TopRestaurantsSection extends StatelessWidget {
   final List<String> lstFav;
   final VoidCallback onFavoriteChanged;
   final List<VendorModel> fallbackRestaurants;
+  final bool isLoading;
+  final bool hasError;
+  final VoidCallback? onRetry;
   final FireStoreUtils fireStoreUtils = FireStoreUtils();
 
   TopRestaurantsSection({
@@ -33,6 +40,9 @@ class TopRestaurantsSection extends StatelessWidget {
     required this.lstFav,
     required this.onFavoriteChanged,
     required this.fallbackRestaurants,
+    this.isLoading = false,
+    this.hasError = false,
+    this.onRetry,
   });
 
   @override
@@ -48,38 +58,49 @@ class TopRestaurantsSection extends StatelessWidget {
             );
           },
         ),
-        popularRestaurantLst.isEmpty
+        hasError && onRetry != null
+            ? HomeSectionUtils.sectionError(
+                message: 'Failed to load top restaurants',
+                onRetry: onRetry!,
+              )
+            : isLoading
+                ? Container(
+                    width: MediaQuery.of(context).size.width,
+                    height: 260,
+                    margin: const EdgeInsets.fromLTRB(10, 0, 0, 10),
+                    child: ShimmerWidgets.restaurantListShimmer(),
+                  )
+                : popularRestaurantLst.isEmpty
             ? (fallbackRestaurants.isEmpty
                 ? showEmptyState('No Popular restaurant', context)
                 : _buildRestaurantList(
                     context,
                     fallbackRestaurants,
                   ))
-            : Container(
-                width: MediaQuery.of(context).size.width,
-                height: 260,
-                margin: const EdgeInsets.fromLTRB(10, 0, 0, 10),
-                child: RepaintBoundary(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
-                    cacheExtent: 400.0,
-                    itemCount: popularRestaurantLst
-                                .toSet()
-                                .toList()
-                                .length >=
-                            5
-                        ? 5
-                        : popularRestaurantLst.toSet().toList().length,
-                    itemBuilder: (context, index) {
-                      final List uniqueRestaurants =
-                          popularRestaurantLst.toSet().toList();
-                      final VendorModel vendorModel = uniqueRestaurants[index];
-                      return _buildRestaurantCard(vendorModel);
-                    },
-                  ),
-                ),
+            : Builder(
+                builder: (context) {
+                  final uniqueRestaurants =
+                      popularRestaurantLst.toSet().toList();
+                  final count = uniqueRestaurants.length >= 5
+                      ? 5
+                      : uniqueRestaurants.length;
+                  return Container(
+                    width: MediaQuery.of(context).size.width,
+                    height: 260,
+                    margin: const EdgeInsets.fromLTRB(10, 0, 0, 10),
+                    child: RepaintBoundary(
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        cacheExtent: 400.0,
+                        itemCount: count,
+                        itemBuilder: (context, index) =>
+                            _buildRestaurantCard(uniqueRestaurants[index]),
+                      ),
+                    ),
+                  );
+                },
               ),
       ],
     );
@@ -165,10 +186,14 @@ class _TopRestaurantCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: GestureDetector(
-        onTap: () => push(
-          context,
-          NewVendorProductsScreen(vendorModel: vendorModel),
-        ),
+        onTap: () {
+          ClickTrackingService.logClick(
+            userId: MyAppState.currentUser?.userID ?? 'guest',
+            restaurantId: vendorModel.id,
+            source: 'top_restaurants',
+          );
+          push(context, NewVendorProductsScreen(vendorModel: vendorModel));
+        },
         child: SizedBox(
           width: MediaQuery.of(context).size.width * 0.75,
           child: Stack(
@@ -186,6 +211,8 @@ class _TopRestaurantCard extends StatelessWidget {
                             imageUrl: getImageVAlidUrl(cardImage),
                             width: double.infinity,
                             height: double.infinity,
+                            memCacheWidth: 280,
+                            memCacheHeight: 280,
                             fit: BoxFit.cover,
                             placeholder: (context, url) => Container(
                               decoration: BoxDecoration(
@@ -342,7 +369,7 @@ class _TopRestaurantCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Restaurant name and rating
+                        // Restaurant name, badge, and rating
                         Row(
                           children: [
                             Expanded(
@@ -360,6 +387,10 @@ class _TopRestaurantCard extends StatelessWidget {
                                       : Colors.black87,
                                 ),
                               ),
+                            ),
+                            PerformanceBadge(
+                              vendorModel: vendorModel,
+                              compact: true,
                             ),
                             const SizedBox(width: 8),
                             Container(
@@ -560,8 +591,8 @@ class _DistanceWidget extends StatelessWidget {
     double distanceInMeters = Geolocator.distanceBetween(
       vendorModel.latitude,
       vendorModel.longitude,
-      MyAppState.selectedPosotion.location!.latitude,
-      MyAppState.selectedPosotion.location!.longitude,
+      MyAppState.selectedPosition.location!.latitude,
+      MyAppState.selectedPosition.location!.longitude,
     );
     double kilometer = distanceInMeters / 1000;
 

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:brgy/services/order_notification_service.dart';
+import 'package:brgy/utils/order_ready_time_helper.dart';
 
 /// Service responsible for handling order acceptance business logic
 /// Separates Firebase operations from UI code
@@ -31,11 +32,17 @@ class OrderAcceptanceService {
 
       final orderData = orderDoc.data()!;
 
-      // Update order status to "Order Accepted" and add preparation time
+      final prepMinutes =
+          OrderReadyTimeHelper.parsePreparationMinutes(preparationTime);
+      final now = DateTime.now();
+      final readyAt = now.add(Duration(minutes: prepMinutes));
+
       await _firestore.collection('restaurant_orders').doc(orderId).update({
         'status': 'Order Accepted',
         'estimatedTimeToPrepare': preparationTime,
         'acceptedAt': FieldValue.serverTimestamp(),
+        'readyAt': Timestamp.fromDate(readyAt),
+        'prepMinutes': prepMinutes,
         'autoAccepted': false, // Mark as manually accepted
       });
 

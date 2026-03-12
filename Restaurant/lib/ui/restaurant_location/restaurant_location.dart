@@ -1,7 +1,8 @@
 // ignore_for_file: must_be_immutable
 
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/main.dart';
@@ -9,8 +10,9 @@ import 'package:foodie_restaurant/model/VendorModel.dart';
 import 'package:foodie_restaurant/services/FirebaseHelper.dart';
 import 'package:foodie_restaurant/services/helper.dart';
 import 'package:foodie_restaurant/ui/container/ContainerScreen.dart';
-import 'package:foodie_restaurant/ui/ordersScreen/OrdersScreen.dart';
+import 'package:foodie_restaurant/ui/ordersScreen/UnifiedOrdersScreen.dart';
 import 'package:geoflutterfire2/geoflutterfire2.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:place_picker_v2/entities/location_result.dart';
 import 'package:place_picker_v2/widgets/place_picker.dart';
 import 'package:uuid/uuid.dart';
@@ -95,7 +97,27 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
           }
         }
       }
+      if (widget.vendor!.latitude != 0.0 && widget.vendor!.longitude != 0.0) {
+        latValue = widget.vendor!.latitude;
+        longValue = widget.vendor!.longitude;
+      }
     }
+  }
+
+  LatLng get _mapCenter => LatLng(latValue, longValue);
+
+  bool get _hasValidCoordinates =>
+      latValue != 0.0 && longValue != 0.0;
+
+  Set<Marker> get _markers {
+    if (!_hasValidCoordinates) return {};
+    return {
+      Marker(
+        markerId: const MarkerId('restaurant'),
+        position: LatLng(latValue, longValue),
+        infoWindow: InfoWindow(title: 'Restaurant'),
+      ),
+    };
   }
 
   @override
@@ -114,7 +136,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
       backgroundColor:
           isDarkMode(context) ? Color(COLOR_DARK) : Color(0xFFFFFFFF),
       appBar: AppBar(
-        title: Text('Restaurant Location'.tr()),
+        title: Text('Restaurant Location'),
         centerTitle: false,
         iconTheme: IconThemeData(
             color: isDarkMode(context) ? Colors.white : Colors.black),
@@ -129,7 +151,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                     Container(
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "Address".tr(),
+                          "Address",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -158,7 +180,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                           // : widget.vendor!.location.split(',')[0],
                           decoration: InputDecoration(
                             // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                            hintText: 'Address'.tr(),
+                            hintText: 'Address',
                             hintStyle: TextStyle(
                                 color: isDarkMode(context)
                                     ? Colors.white
@@ -180,7 +202,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                         padding: EdgeInsets.only(top: 20),
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "Apartment,suite,etc.".tr(),
+                          "Apartment,suite,etc.",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -208,7 +230,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             // initialValue: MyAppState.currentUser!.shippingAddress.line1,
                             decoration: InputDecoration(
                               // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                              hintText: 'Apartment,suite,etc.'.tr(),
+                              hintText: 'Apartment,suite,etc.',
                               hintStyle: TextStyle(
                                   color: isDarkMode(context)
                                       ? Colors.white
@@ -230,7 +252,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                         padding: EdgeInsets.only(top: 20),
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "City".tr(),
+                          "City",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -255,7 +277,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             // initialValue: MyAppState.currentUser!.shippingAddress.line1,
                             decoration: InputDecoration(
                               // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                              hintText: 'City'.tr(),
+                              hintText: 'City',
                               hintStyle: TextStyle(
                                   color: isDarkMode(context)
                                       ? Colors.white
@@ -277,7 +299,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                         padding: EdgeInsets.only(top: 20),
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "State".tr(),
+                          "State",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -302,7 +324,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             // initialValue: MyAppState.currentUser!.shippingAddress.line1,
                             decoration: InputDecoration(
                               // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                              hintText: 'State'.tr(),
+                              hintText: 'State',
                               hintStyle: TextStyle(
                                   color: isDarkMode(context)
                                       ? Colors.white
@@ -324,7 +346,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                         padding: EdgeInsets.only(top: 20),
                         alignment: AlignmentDirectional.centerStart,
                         child: Text(
-                          "Country".tr(),
+                          "Country",
                           style: TextStyle(
                               fontSize: 15,
                               fontFamily: "Poppinsl",
@@ -349,7 +371,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             // initialValue: MyAppState.currentUser!.shippingAddress.line1,
                             decoration: InputDecoration(
                               // contentPadding: EdgeInsets.symmetric(horizontal: 24),
-                              hintText: 'Country'.tr(),
+                              hintText: 'Country',
                               hintStyle: TextStyle(
                                   color: isDarkMode(context)
                                       ? Colors.white
@@ -385,11 +407,11 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             ],
                           ),
                           title: Text(
-                            "Current Location".tr(),
+                            "Current Location",
                             style: TextStyle(color: Color(COLOR_PRIMARY)),
                           ),
                           subtitle: Text(
-                            "Using GPS".tr(),
+                            "Using GPS",
                             style: TextStyle(color: Color(COLOR_PRIMARY)),
                           ),
                           onTap: () async {
@@ -417,6 +439,32 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                             }
                           }),
                     ),
+                    if (_hasValidCoordinates) ...[
+                      SizedBox(height: 20),
+                      Card(
+                        elevation: 0.5,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: SizedBox(
+                            height: 220,
+                            child: GoogleMap(
+                              onMapCreated: (_) {},
+                              initialCameraPosition: CameraPosition(
+                                target: _mapCenter,
+                                zoom: 14.0,
+                              ),
+                              markers: _markers,
+                              myLocationEnabled: false,
+                              zoomControlsEnabled: false,
+                              mapType: MapType.normal,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ])))),
       bottomNavigationBar: Padding(
         padding: const EdgeInsets.all(20.0),
@@ -431,42 +479,27 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
               ),
             ),
           ),
-          onPressed: () => {
-            MyAppState.currentUser!.vendorID == ''
-                ? latValue == 0.0 && longValue == 0.0
-                    ? showDialog(
-                        barrierDismissible: false,
-                        context: context,
-                        builder: (_) {
-                          return AlertDialog(
-                            content:
-                                Text("selectLocationMovePinToLocation").tr(),
-                            actions: [
-                              // FlatButton(
-                              //   onPressed: () => Navigator.pop(
-                              //       context, false), // passing false
-                              //   child: Text('No'),
-                              // ),
-                              TextButton(
-                                onPressed: () {
-                                  hideProgress();
-                                  Navigator.pop(context, true);
-                                }, // passing true
-                                child: Text('OK'.tr()),
-                              ),
-                            ],
-                          );
-                        })
-                    : addRestaurant()
+          onPressed: () {
+            // #region agent log
+            final vendorID = MyAppState.currentUser!.vendorID;
+            final isNew = vendorID == '';
+            final latLongZero = isNew
+                ? (latValue == 0.0 && longValue == 0.0)
                 : (widget.vendor!.latitude == 0.0 &&
-                        widget.vendor!.longitude == 0.0)
-                    ? showDialog(
+                    widget.vendor!.longitude == 0.0);
+            debugPrint(
+                '[REST_SAVE] location button: isNew=$isNew '
+                'latLongZero=$latLongZero lat=$latValue long=$longValue');
+            // #endregion
+            if (MyAppState.currentUser!.vendorID == '') {
+              if (latValue == 0.0 && longValue == 0.0) {
+                showDialog(
                         barrierDismissible: false,
                         context: context,
                         builder: (_) {
                           return AlertDialog(
                             content:
-                                Text("selectLocationMovePinToLocation").tr(),
+                                Text("selectLocationMovePinToLocation"),
                             actions: [
                               // FlatButton(
                               //   onPressed: () => Navigator.pop(
@@ -478,17 +511,44 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
                                   hideProgress();
                                   Navigator.pop(context, true);
                                 }, // passing true
-                                child: Text('OK'.tr()),
+                                child: Text('OK'),
                               ),
                             ],
                           );
-                        })
-                    : updateRestaurant(add)
+                        });
+              } else {
+                addRestaurant();
+              }
+            } else {
+              if (widget.vendor!.latitude == 0.0 &&
+                  widget.vendor!.longitude == 0.0) {
+                showDialog(
+                    barrierDismissible: false,
+                    context: context,
+                    builder: (_) {
+                      return AlertDialog(
+                        content:
+                            Text("selectLocationMovePinToLocation"),
+                        actions: [
+                          TextButton(
+                            onPressed: () {
+                              hideProgress();
+                              Navigator.pop(context, true);
+                            },
+                            child: Text('OK'),
+                          ),
+                        ],
+                      );
+                    });
+              } else {
+                updateRestaurant(add);
+              }
+            }
           },
           child: Text(
             MyAppState.currentUser!.vendorID == ''
-                ? 'DONE'.tr()
-                : 'UPDATE'.tr(),
+                ? 'DONE'
+                : 'UPDATE',
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
@@ -501,21 +561,56 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
   }
 
   addRestaurant() async {
-    if (_formKey.currentState?.validate() ?? false) {
+    final locationFormValid = _formKey.currentState?.validate() ?? false;
+    // #region agent log
+    debugPrint(
+        '[REST_SAVE] addRestaurant: locationFormValid=$locationFormValid');
+    // #endregion
+    if (locationFormValid) {
       _formKey.currentState!.save();
-      await showProgress(context, 'Adding Restaurant...'.tr(), false);
+      await showProgress(context, 'Adding Restaurant...', false);
 
-      var uniqueID = Uuid().v4();
-      Reference upload = FirebaseStorage.instance
-          .ref()
-          .child('flutter/uberEats/productImages/$uniqueID'
-              '.png');
-      UploadTask uploadTask = upload.putFile(widget.pic);
-      uploadTask.whenComplete(() {});
-      var storageRef = (await uploadTask.whenComplete(() {})).ref;
-      var downloadUrl = await storageRef.getDownloadURL();
-      downloadUrl.toString();
-      GeoFirePoint myLocation =
+      try {
+        // #region agent log
+        debugPrint('[REST_SAVE] addRestaurant: starting upload');
+        // #endregion
+        String downloadUrl = '';
+        try {
+          var uniqueID = Uuid().v4();
+          Reference uploadRef = FirebaseStorage.instance
+              .ref()
+              .child('flutter/uberEats/productImages/$uniqueID.png');
+          final metadata = SettableMetadata(contentType: 'image/png');
+          UploadTask uploadTask = uploadRef.putFile(widget.pic, metadata);
+          var taskSnapshot = await uploadTask.whenComplete(() {})
+              .timeout(Duration(seconds: 90), onTimeout: () {
+            throw TimeoutException(
+                'Image upload timed out. Check network and try again.');
+          });
+          var storageRef = taskSnapshot.ref;
+          downloadUrl = await storageRef.getDownloadURL()
+              .timeout(Duration(seconds: 30), onTimeout: () {
+            throw TimeoutException(
+                'Getting image URL timed out. Check network and try again.');
+          });
+          // #region agent log
+          debugPrint('[REST_SAVE] addRestaurant: upload done');
+          // #endregion
+        } catch (uploadError) {
+          debugPrint(
+              '[REST_SAVE] addRestaurant: upload failed, continuing without '
+              'photo: $uploadError');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Photo upload failed. Restaurant will be saved without photo.',
+                ),
+              ),
+            );
+          }
+        }
+        GeoFirePoint myLocation =
           GeoFlutterFire().point(latitude: latValue, longitude: longValue);
       print("--->${widget.catid}");
       print("--->${widget.cat}");
@@ -555,13 +650,48 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
           deliveryCharge: widget.deliveryChargeModel,
           fcmToken: MyAppState.currentUser!.fcmToken,
           title: widget.restname);
-      await FireStoreUtils.firebaseCreateNewVendor(vendors);
-
-      print('sending...');
-      await hideProgress();
-      showAlertDialog(this.context);
-      // Navigator.popr(context, MaterialPageRoute(builder: (context)=> OrdersScreen());
-      return vendors;
+        // #region agent log
+        debugPrint(
+            '[REST_SAVE] addRestaurant: calling firebaseCreateNewVendor');
+        // #endregion
+        await FireStoreUtils.firebaseCreateNewVendor(vendors)
+            .timeout(Duration(seconds: 60), onTimeout: () {
+          throw TimeoutException(
+              'Saving restaurant timed out. Check network and try again.');
+        });
+        // #region agent log
+        debugPrint(
+            '[REST_SAVE] addRestaurant: firebaseCreateNewVendor done');
+        // #endregion
+        print('sending...');
+        await hideProgress();
+        showAlertDialog(this.context);
+        return vendors;
+      } catch (e, st) {
+        // #region agent log
+        debugPrint(
+            '[REST_SAVE] addRestaurant: error e=$e st=${st.toString()}');
+        // #endregion
+        await hideProgress();
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text('Error'),
+              content: SelectableText(
+                e.toString(),
+                style: TextStyle(color: Colors.red),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+      }
     } else {
       setState(() {
         _autoValidateMode = AutovalidateMode.onUserInteraction;
@@ -571,9 +701,14 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
 
   updateRestaurant(add) async {
     print(mapName.text);
-    if (_formKey.currentState?.validate() ?? false) {
+    final locationFormValid = _formKey.currentState?.validate() ?? false;
+    // #region agent log
+    debugPrint(
+        '[REST_SAVE] updateRestaurant: locationFormValid=$locationFormValid');
+    // #endregion
+    if (locationFormValid) {
       _formKey.currentState!.save();
-      await showProgress(context, 'Updating Restaurant...'.tr(), false);
+      await showProgress(context, 'Updating Restaurant...', false);
       query = mapName.text +
           "," +
           mapAddress.text +
@@ -643,8 +778,13 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
           fcmToken: MyAppState.currentUser!.fcmToken);
       print(latValue.toString() + "===LAT");
       print(longValue.toString() + "===LONG");
+      // #region agent log
+      debugPrint('[REST_SAVE] updateRestaurant: calling updateVendor');
+      // #endregion
       await FireStoreUtils.updateVendor(vendors);
-
+      // #region agent log
+      debugPrint('[REST_SAVE] updateRestaurant: updateVendor done');
+      // #endregion
       print('sending...');
       await hideProgress();
       showUpdateDialog(this.context);
@@ -665,7 +805,7 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
             context,
             ContainerScreen(
               user: MyAppState.currentUser!,
-              currentWidget: OrdersScreen(),
+              currentWidget: UnifiedOrdersScreen(),
               appBarTitle: 'Orders',
               drawerSelection: DrawerSelection.Orders,
             ),
@@ -675,8 +815,8 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
 
     // set up the AlertDialog
     AlertDialog alert = AlertDialog(
-      title: Text("Add Restaurant".tr()),
-      content: Text("Data is saved to database.".tr()),
+      title: Text("Add Restaurant"),
+      content: Text("Data is saved to database."),
       actions: [
         okButton,
       ],
@@ -700,8 +840,8 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
             context,
             ContainerScreen(
               user: MyAppState.currentUser!,
-              currentWidget: OrdersScreen(),
-              appBarTitle: 'Orders'.tr(),
+              currentWidget: UnifiedOrdersScreen(),
+              appBarTitle: 'Orders',
               drawerSelection: DrawerSelection.Orders,
             ),
             false);
@@ -710,8 +850,8 @@ class _RestaurantLocationScreenState extends State<RestaurantLocationScreen> {
 
     // set up the AlertDialog
     AlertDialog alert = AlertDialog(
-      title: Text("Updating Restaurant".tr()),
-      content: Text("Data is updated in database.".tr()),
+      title: Text("Updating Restaurant"),
+      content: Text("Data is updated in database."),
       actions: [
         okButton,
       ],

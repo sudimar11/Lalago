@@ -12,6 +12,7 @@ import '../../../model/WorkingHoursModel.dart';
 import '../../../services/helper.dart';
 import 'ficon_button.dart';
 import '../../../ui/home/sections/widgets/restaurant_eta_fee_row.dart';
+import 'restaurant_performance_section.dart';
 
 class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
   final BuildContext context;
@@ -47,8 +48,8 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
     // double distanceInMeters = Geolocator.distanceBetween(
     //   vendorModel.latitude,
     //   vendorModel.longitude,
-    //   MyAppState.selectedPosotion.location!.latitude,
-    //   MyAppState.selectedPosotion.location!.longitude,
+    //   MyAppState.selectedPosition.location!.latitude,
+    //   MyAppState.selectedPosition.location!.longitude,
     // );
 
     // double kilometer = distanceInMeters / 1000;
@@ -115,8 +116,12 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                                 ),
                               ),
                               errorWidget: (context, url, error) =>
-                                  Image.network(placeholderImage,
-                                      fit: BoxFit.cover),
+                                  CachedNetworkImage(
+                                imageUrl: placeholderImage,
+                                memCacheWidth: 200,
+                                memCacheHeight: 200,
+                                fit: BoxFit.cover,
+                              ),
                             ),
                           ),
                         ],
@@ -168,7 +173,52 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                                   ],
                                 ),
                               ),
-                              _buildTiming(isOpen),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _buildTiming(isOpen),
+                                  const SizedBox(width: 8),
+                                  InkWell(
+                                    onTap: () {
+                                      showModalBottomSheet(
+                                        isScrollControlled: true,
+                                        isDismissible: true,
+                                        context: context,
+                                        backgroundColor: Colors.transparent,
+                                        enableDrag: true,
+                                        builder: (ctx) => showTiming(ctx),
+                                      );
+                                    },
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 4,
+                                        horizontal: 4,
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.schedule_outlined,
+                                            size: 14,
+                                            color: Color(COLOR_PRIMARY),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            "Schedule",
+                                            style: TextStyle(
+                                              fontFamily: "Poppinsm",
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500,
+                                              color: Color(COLOR_PRIMARY),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ],
                           ),
                           const SizedBox(height: 8),
@@ -178,7 +228,20 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                             runSpacing: 6,
                             crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              if (vendorModel.reviewsCount != 0)
+                              if (vendorModel.serviceRating != null)
+                                Text(
+                                  'Food: ${vendorModel.foodRating.toStringAsFixed(1)} | '
+                                  'Service: ${vendorModel.serviceRating!.toStringAsFixed(1)}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontFamily: 'Poppinsm',
+                                    fontWeight: FontWeight.w600,
+                                    color: isDarkMode(context)
+                                        ? Colors.white
+                                        : const Color(0xff2A2A2A),
+                                  ),
+                                )
+                              else if (vendorModel.reviewsCount != 0)
                                 _StatChip(
                                   icon: Icons.star_rounded,
                                   iconColor: Colors.amber,
@@ -201,6 +264,7 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                                 ),
                             ],
                           ),
+                          RestaurantPerformanceSection(vendorModel: vendorModel),
                           RestaurantEtaFeeRow(
                             vendorModel: vendorModel,
                             currencyModel: null,
@@ -233,47 +297,6 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
                                 ),
                               ),
                             ],
-                          ),
-                          const SizedBox(height: 6),
-                          // View Schedule
-                          InkWell(
-                            onTap: () {
-                              showModalBottomSheet(
-                                isScrollControlled: true,
-                                isDismissible: true,
-                                context: context,
-                                backgroundColor: Colors.transparent,
-                                enableDrag: true,
-                                builder: (context) => showTiming(context),
-                              );
-                            },
-                            borderRadius: BorderRadius.circular(6),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 4,
-                                horizontal: 2,
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.schedule_outlined,
-                                    size: 16,
-                                    color: Color(COLOR_PRIMARY),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    "View Schedule",
-                                    style: TextStyle(
-                                      fontFamily: "Poppinsm",
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
-                                      color: Color(COLOR_PRIMARY),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
                           ),
                           const SizedBox(height: 2),
                           if (searchController != null &&
@@ -658,7 +681,7 @@ class VendorHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 
   @override
-  double get maxExtent => 440;
+  double get maxExtent => 700;
 
   @override
   double get minExtent => kToolbarHeight + 20;

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:developer';
 
-//import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -13,23 +12,32 @@ import 'package:foodie_driver/model/OrderModel.dart';
 import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/helper.dart';
-import 'package:foodie_driver/services/driver_performance_service.dart';
+import 'package:foodie_driver/services/audio_service.dart';
 import 'package:foodie_driver/services/order_location_service.dart';
 import 'package:foodie_driver/services/order_chat_service.dart';
+import 'package:foodie_driver/services/proximity_config_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/utils/dialog_utils.dart';
 import 'package:foodie_driver/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_driver/ui/home/pick_order.dart';
+import 'package:foodie_driver/ui/container/ContainerScreen.dart';
 import 'package:foodie_driver/ui/home/confirm_delivery_summary_page.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:foodie_driver/utils/order_ready_time_helper.dart';
+import 'package:foodie_driver/widgets/shrinking_timer_bar.dart';
 
 const String _keyAutoMarkPickedUpAtRestaurant =
     'auto_mark_picked_up_at_restaurant';
+const String _keyPickupOverrideSkipFarWarning =
+    'pickup_override_skip_far_warning';
 
 // Dark map style JSON (cached to avoid repeated string operations)
 const String _darkMapStyle = '[{"featureType": "all","elementType": "geometry","stylers": [{"color": "#242f3e"}]},{"featureType": "all","elementType": "labels.text.stroke","stylers": [{"lightness": -80}]},{"featureType": "administrative","elementType": "labels.text.fill","stylers": [{"color": "#746855"}]},{"featureType": "administrative.locality","elementType": "labels.text.fill","stylers": [{"color": "#d59563"}]},{"featureType": "poi","elementType": "labels.text.fill","stylers": [{"color": "#d59563"}]},{"featureType": "poi.park","elementType": "geometry","stylers": [{"color": "#263c3f"}]},{"featureType": "poi.park","elementType": "labels.text.fill","stylers": [{"color": "#6b9a76"}]},{"featureType": "road","elementType": "geometry.fill","stylers": [{"color": "#2b3544"}]},{"featureType": "road","elementType": "labels.text.fill","stylers": [{"color": "#9ca5b3"}]},{"featureType": "road.arterial","elementType": "geometry.fill","stylers": [{"color": "#38414e"}]},{"featureType": "road.arterial","elementType": "geometry.stroke","stylers": [{"color": "#212a37"}]},{"featureType": "road.highway","elementType": "geometry.fill","stylers": [{"color": "#746855"}]},{"featureType": "road.highway","elementType": "geometry.stroke","stylers": [{"color": "#1f2835"}]},{"featureType": "road.highway","elementType": "labels.text.fill","stylers": [{"color": "#f3d19c"}]},{"featureType": "road.local","elementType": "geometry.fill","stylers": [{"color": "#38414e"}]},{"featureType": "road.local","elementType": "geometry.stroke","stylers": [{"color": "#212a37"}]},{"featureType": "transit","elementType": "geometry","stylers": [{"color": "#2f3948"}]},{"featureType": "transit.station","elementType": "labels.text.fill","stylers": [{"color": "#d59563"}]},{"featureType": "water","elementType": "geometry","stylers": [{"color": "#17263c"}]},{"featureType": "water","elementType": "labels.text.fill","stylers": [{"color": "#515c6d"}]},{"featureType": "water","elementType": "labels.text.stroke","stylers": [{"lightness": -20}]}]';
@@ -213,6 +221,7 @@ class HomeScreenState extends State<HomeScreen> {
   StreamSubscription<String>? _customerArrivalDetectionSubscription;
   StreamSubscription<OrderModel?>? _orderSubscription;
   StreamSubscription<User>? _driverSubscription;
+  List<String> _lastOrderRequestIds = [];
 
   getCurrentOrder() async {
     if (singleOrderReceive == true) {
@@ -301,6 +310,18 @@ class HomeScreenState extends State<HomeScreen> {
     driverStream = FireStoreUtils().getDriver(MyAppState.currentUser!.userID);
     _driverSubscription?.cancel();
     _driverSubscription = driverStream.listen((event) async {
+      final currentIds = (event.orderRequestData ?? [])
+          .map((e) => e.toString())
+          .where((id) => id.isNotEmpty)
+          .toList();
+      final newIds = currentIds
+          .where((id) => !_lastOrderRequestIds.contains(id))
+          .toList();
+      for (final orderId in newIds) {
+        AudioService.instance.playNewOrderSound(orderId: orderId);
+      }
+      _lastOrderRequestIds = List.from(currentIds);
+
       final driverChanged = event.userID != _driverModel?.userID ||
           event.location.latitude != _driverModel?.location.latitude ||
           event.location.longitude != _driverModel?.location.longitude;
@@ -388,7 +409,7 @@ class HomeScreenState extends State<HomeScreen> {
       OrderLocationService.markArrivalDialogShown(orderId);
       return;
     }
-    if (currentOrder!.status != ORDER_STATUS_DRIVER_PENDING &&
+    if (currentOrder!.status != ORDER_STATUS_DRIVER_ACCEPTED &&
         currentOrder!.status != ORDER_STATUS_DRIVER_ACCEPTED &&
         currentOrder!.status != ORDER_STATUS_SHIPPED) {
       return;
@@ -417,16 +438,23 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   /// Mark order as picked up (In Transit) and set restaurantArrivalConfirmed.
-  Future<void> _doPickupAtRestaurant(String orderId) async {
+  /// When [fromMapOverride] is true, logs pickupMethod and pickedUpFarFromRestaurant.
+  Future<void> _doPickupAtRestaurant(String orderId,
+      {bool fromMapOverride = false}) async {
     try {
-      await FirebaseFirestore.instance
-          .collection(ORDERS)
-          .doc(orderId)
-          .update({
+      final data = <String, dynamic>{
         'status': 'In Transit',
         'pickedUpAt': FieldValue.serverTimestamp(),
         'restaurantArrivalConfirmed': true,
-      });
+      };
+      if (fromMapOverride) {
+        data['pickupMethod'] = 'map_override';
+        data['pickedUpFarFromRestaurant'] = true;
+      }
+      await FirebaseFirestore.instance
+          .collection(ORDERS)
+          .doc(orderId)
+          .update(data);
 
       final currentUserId = MyAppState.currentUser?.userID;
       if (currentOrder != null && currentUserId != null) {
@@ -461,6 +489,54 @@ class HomeScreenState extends State<HomeScreen> {
           backgroundColor: Colors.red,
         );
       }
+    }
+  }
+
+  /// Handles tap on pickup-phase button: near opens PickOrder, far shows dialog
+  /// or direct pickup (when "Don't show again" is set).
+  Future<void> _handlePickupButtonTap() async {
+    if (currentOrder == null) return;
+    final orderId = currentOrder!.id;
+    final driverLocation = MyAppState.currentUser?.location;
+
+    bool isNear;
+    int distanceMeters = 0;
+    if (driverLocation == null) {
+      isNear = false;
+    } else {
+      await ProximityConfigService.instance.getConfig();
+      final threshold =
+          ProximityConfigService.instance.enterThreshold;
+      distanceMeters = Geolocator.distanceBetween(
+        currentOrder!.vendor.latitude,
+        currentOrder!.vendor.longitude,
+        driverLocation.latitude,
+        driverLocation.longitude,
+      ).round();
+      isNear = distanceMeters <= threshold;
+    }
+
+    if (isNear) {
+      push(context, PickOrder(currentOrder: currentOrder));
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_keyPickupOverrideSkipFarWarning) == true) {
+      await _doPickupAtRestaurant(orderId, fromMapOverride: true);
+      return;
+    }
+
+    final result = await DialogUtils.showConfirmPickupWhenFarDialog(
+      context,
+      distanceMeters: distanceMeters,
+    );
+    if (!mounted) return;
+    if (result == null || !result.confirmed) return;
+
+    await _doPickupAtRestaurant(orderId, fromMapOverride: true);
+    if (result.dontShowAgain) {
+      await prefs.setBool(_keyPickupOverrideSkipFarWarning, true);
     }
   }
 
@@ -521,7 +597,7 @@ class HomeScreenState extends State<HomeScreen> {
     }
 
     // Only update if current status is appropriate
-    if (currentOrder!.status != ORDER_STATUS_DRIVER_PENDING &&
+    if (currentOrder!.status != ORDER_STATUS_DRIVER_ACCEPTED &&
         currentOrder!.status != ORDER_STATUS_DRIVER_ACCEPTED &&
         currentOrder!.status != ORDER_STATUS_SHIPPED) {
       return;
@@ -724,7 +800,7 @@ class HomeScreenState extends State<HomeScreen> {
                                     onPressed: () async {
                                       if (currentOrder != null) {
                                         if (currentOrder!.status !=
-                                            ORDER_STATUS_DRIVER_PENDING) {
+                                            ORDER_STATUS_DRIVER_ACCEPTED) {
                                           if (currentOrder!.status ==
                                               ORDER_STATUS_SHIPPED) {
                                             FireStoreUtils.redirectMap(
@@ -773,16 +849,22 @@ class HomeScreenState extends State<HomeScreen> {
                         ),
                 ),
                 currentOrder != null &&
-                        currentOrder!.status != ORDER_STATUS_DRIVER_PENDING &&
+                        currentOrder!.status != ORDER_STATUS_DRIVER_ACCEPTED &&
                         isShow == true
                     ? buildOrderActionsCard()
                     : Container(),
                 currentOrder != null &&
-                        currentOrder!.status == ORDER_STATUS_DRIVER_PENDING
+                        currentOrder!.status == ORDER_STATUS_DRIVER_ACCEPTED
                     ? _DriverBottomSheet(
                         currentOrder: currentOrder!,
                         onAccept: acceptOrder,
-                        onReject: rejectOrder,
+                        onReject: () => rejectOrder(),
+                        onTimeout: () {
+                          AudioService.instance.playReassignSound(
+                            orderId: currentOrder!.id,
+                          );
+                          rejectOrder(preselectedReason: 'timeout');
+                        },
                       )
                     : Container()
               ],
@@ -790,7 +872,7 @@ class HomeScreenState extends State<HomeScreen> {
       floatingActionButton: currentOrder == null
           ? Container()
           : mapType == "inappmap" &&
-                  currentOrder!.status != ORDER_STATUS_DRIVER_PENDING &&
+                  currentOrder!.status != ORDER_STATUS_DRIVER_ACCEPTED &&
                   _driverModel!.inProgressOrderID != null &&
                   _driverModel!.inProgressOrderID!.isNotEmpty
               ? FloatingActionButton(
@@ -1124,28 +1206,36 @@ class HomeScreenState extends State<HomeScreen> {
               child: SizedBox(
                 height: 40,
                 width: MediaQuery.of(context).size.width,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.all(
-                        Radius.circular(4),
+                child: Builder(
+                  builder: (context) {
+                    final isPickupPhase = currentOrder!.status ==
+                            ORDER_STATUS_SHIPPED ||
+                        currentOrder!.status == ORDER_STATUS_DRIVER_ACCEPTED;
+                    final enabled = isPickupPhase || _isNearRequiredLocation;
+                    final backgroundColor = isPickupPhase
+                        ? (_isNearRequiredLocation
+                            ? Color(COLOR_PRIMARY)
+                            : Colors.orange)
+                        : (_isNearRequiredLocation
+                            ? Color(COLOR_PRIMARY)
+                            : Color(COLOR_PRIMARY).withValues(alpha: 0.5));
+                    return ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: const BorderRadius.all(
+                            Radius.circular(4),
+                          ),
+                        ),
+                        backgroundColor: backgroundColor,
                       ),
-                    ),
-                    backgroundColor: _isNearRequiredLocation
-                        ? Color(COLOR_PRIMARY)
-                        : Color(COLOR_PRIMARY).withValues(alpha: 0.5),
-                  ),
-                  onPressed: _isNearRequiredLocation
-                      ? () async {
-                          if (currentOrder!.status == ORDER_STATUS_SHIPPED ||
-                              currentOrder!.status ==
-                                  ORDER_STATUS_DRIVER_ACCEPTED) {
-                            push(
-                              context,
-                              PickOrder(currentOrder: currentOrder),
-                            );
-                          } else if (currentOrder!.status ==
-                              ORDER_STATUS_IN_TRANSIT) {
+                      onPressed: enabled
+                          ? () async {
+                              if (isPickupPhase) {
+                                await _handlePickupButtonTap();
+                                return;
+                              }
+                              if (currentOrder!.status ==
+                                  ORDER_STATUS_IN_TRANSIT) {
                             push(
                               context,
                               Scaffold(
@@ -1431,18 +1521,34 @@ class HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                             );
-                          }
-                        }
-                      : null,
-                  child: Text(
-                    _isNearRequiredLocation
-                        ? (buttonText ?? "")
-                        : "Move closer to ${currentOrder!.status == ORDER_STATUS_IN_TRANSIT ? 'customer' : 'restaurant'} (within 50m)",
-                    style: TextStyle(
-                        color: Color(0xffFFFFFF),
-                        fontFamily: "Poppinsm",
-                        letterSpacing: 0.5),
-                  ),
+                              }
+                            }
+                          : null,
+                      child: Text(
+                        isPickupPhase
+                            ? (_isNearRequiredLocation
+                                ? (buttonText ?? "")
+                                : 'CONFIRM PICKUP (OVERRIDE)')
+                            : (_isNearRequiredLocation
+                                ? (buttonText ?? "")
+                                : "Move closer to ${currentOrder!.status == ORDER_STATUS_IN_TRANSIT ? 'customer' : 'restaurant'} (within 50m)"),
+                        style: const TextStyle(
+                            color: Color(0xffFFFFFF),
+                            fontFamily: "Poppinsm",
+                            letterSpacing: 0.5),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: TextButton(
+                onPressed: _showEmergencyUnassignDialog,
+                child: Text(
+                  'Emergency? Unassign',
+                  style: TextStyle(color: Colors.red, fontSize: 13),
                 ),
               ),
             ),
@@ -1459,15 +1565,16 @@ class HomeScreenState extends State<HomeScreen> {
     final remittanceOk = await _guardRemittance();
     if (!remittanceOk) return;
 
-    if (_driverModel!.checkedInToday != true ||
-        _driverModel!.todayCheckInTime == null ||
-        _driverModel!.todayCheckInTime!.isEmpty) {
+    final canAccept = _driverModel!.isOnline == true &&
+        _driverModel!.riderAvailability != 'offline' &&
+        _driverModel!.riderAvailability != 'on_break';
+    if (!canAccept) {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Check In Required'),
+          title: const Text('Go Online Required'),
           content: const Text(
-            'You must check in today to accept orders.',
+            'Please go online to accept orders.',
           ),
           actions: [
             TextButton(
@@ -1491,6 +1598,7 @@ class HomeScreenState extends State<HomeScreen> {
 
     await FireStoreUtils.updateOrder(currentOrder!);
 
+    AudioService.instance.markOrderAsNotified(currentOrder!.id);
     setState(() {
       isShow = true;
     });
@@ -1529,6 +1637,7 @@ class HomeScreenState extends State<HomeScreen> {
 
     _driverModel!.inProgressOrderID!.remove(currentOrder!.id);
     await FireStoreUtils.updateCurrentUser(_driverModel!);
+    await OrderService.updateRiderStatus();
     hideProgress();
     _markers.clear();
     polyLines.clear();
@@ -1549,23 +1658,16 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  rejectOrder() async {
-    final canProceed = await _guardAttendance();
-    if (!canProceed) return;
+  rejectOrder({String? preselectedReason}) async {
+    final ok = await OrderService.rejectOrderWithReason(
+      context,
+      currentOrder!.id,
+      orderData: currentOrder!.toJson(),
+      preselectedReason: preselectedReason,
+    );
+    if (!ok || !mounted) return;
 
-    if (currentOrder!.rejectedByDrivers == null) {
-      currentOrder!.rejectedByDrivers = [];
-    }
-
-    currentOrder!.rejectedByDrivers!.add(_driverModel!.userID);
-    currentOrder!.status = ORDER_STATUS_DRIVER_REJECTED;
-    await FireStoreUtils.updateOrder(currentOrder!);
-
-    // Apply performance penalty for driver-fault cancellation
     if (_driverModel != null) {
-      await DriverPerformanceService.applyCancellationPenalty(
-          _driverModel!.userID);
-      // Refresh driver model to get updated performance
       final updatedDriver =
           await FireStoreUtils.getCurrentUser(_driverModel!.userID);
       if (updatedDriver != null) {
@@ -1573,25 +1675,123 @@ class HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    _driverModel!.orderRequestData!.remove(currentOrder!.id);
-    await FireStoreUtils.updateCurrentUser(_driverModel!);
-
     setState(() {
       currentOrder = null;
       _markers.clear();
       polyLines.clear();
-      // Clear route cache
       _lastRouteId = null;
       _lastDriverLocation = null;
       _lastOrderStatus = null;
       _cachedPolylineCoordinates = null;
-      // Reset rate limiting variables
       _routeRequestDebounceTimer?.cancel();
       _lastApiCallTime = null;
       _isRouteRequestInProgress = false;
     });
-    if (singleOrderReceive == false) {
+    if (singleOrderReceive == false && mounted) {
       Navigator.pop(context);
+    }
+  }
+
+  void _showEmergencyUnassignDialog() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Emergency Unassign'),
+        content: const SelectableText(
+          'If you have an emergency and cannot complete this delivery, '
+          'you can unassign yourself. A new rider will be assigned to '
+          'complete the order.\n\n'
+          'Note: Frequent unassignments may affect your performance score.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('CANCEL'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('UNASSIGN'),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true && mounted) {
+      await _emergencyUnassign();
+    }
+  }
+
+  Future<void> _emergencyUnassign() async {
+    if (currentOrder == null || _driverModel == null || !mounted) return;
+
+    try {
+      final orderId = currentOrder!.id;
+      final riderId = _driverModel!.userID;
+
+      await FirebaseFirestore.instance
+          .collection('restaurant_orders')
+          .doc(orderId)
+          .update({
+        'status': 'Order Accepted',
+        'driverID': FieldValue.delete(),
+        'assignedDriverName': FieldValue.delete(),
+        'dispatch.emergencyUnassign': true,
+        'dispatch.emergencyUnassignAt': FieldValue.serverTimestamp(),
+        'dispatch.emergencyUnassignBy': riderId,
+        'dispatch.excludedDriverIds': FieldValue.arrayUnion([riderId]),
+        'dispatch.retryCount': FieldValue.increment(1),
+      });
+
+      await FirebaseFirestore.instance.collection('users').doc(riderId).set(
+        {'inProgressOrderID': FieldValue.arrayRemove([orderId])},
+        SetOptions(merge: true),
+      );
+
+      await FirebaseFirestore.instance.collection('system_logs').add({
+        'type': 'emergency_unassign',
+        'orderId': orderId,
+        'riderId': riderId,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+      setState(() {
+        currentOrder = null;
+        _markers.clear();
+        polyLines.clear();
+        _lastRouteId = null;
+        _lastDriverLocation = null;
+        _lastOrderStatus = null;
+        _cachedPolylineCoordinates = null;
+        _routeRequestDebounceTimer?.cancel();
+        _lastApiCallTime = null;
+        _isRouteRequestInProgress = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'You have been unassigned from this order. '
+            'A new rider will be assigned.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => ContainerScreen()),
+        (route) => false,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -1794,7 +1994,7 @@ class HomeScreenState extends State<HomeScreen> {
     // Set in-progress flag before making API call
     _isRouteRequestInProgress = true;
 
-    if (currentOrder!.status != ORDER_STATUS_DRIVER_PENDING) {
+    if (currentOrder!.status != ORDER_STATUS_DRIVER_ACCEPTED) {
       if (currentOrder!.status == ORDER_STATUS_SHIPPED) {
         await _fetchAndCacheRoute(
           PointLatLng(_driverModel!.location.latitude,
@@ -1933,7 +2133,7 @@ class HomeScreenState extends State<HomeScreen> {
           CameraPosition(
             target: source,
             zoom: currentOrder == null ||
-                    currentOrder!.status == ORDER_STATUS_DRIVER_PENDING
+                    currentOrder!.status == ORDER_STATUS_DRIVER_ACCEPTED
                 ? 16
                 : 20,
             bearing: double.parse(_driverModel!.rotation.toString()),
@@ -2021,7 +2221,7 @@ class _MapViewState extends State<_MapView> {
         widget.onMapCreated(controller);
       },
       myLocationEnabled: widget.currentOrder != null &&
-              widget.currentOrder!.status == ORDER_STATUS_DRIVER_PENDING
+              widget.currentOrder!.status == ORDER_STATUS_DRIVER_ACCEPTED
           ? false
           : true,
       myLocationButtonEnabled: true,
@@ -2041,12 +2241,14 @@ class _MapViewState extends State<_MapView> {
 class _DriverBottomSheet extends StatefulWidget {
   final OrderModel currentOrder;
   final VoidCallback onAccept;
-  final VoidCallback onReject;
+  final Future<void> Function() onReject;
+  final VoidCallback? onTimeout;
 
   const _DriverBottomSheet({
     required this.currentOrder,
     required this.onAccept,
     required this.onReject,
+    this.onTimeout,
   });
 
   @override
@@ -2074,6 +2276,14 @@ class _DriverBottomSheetState extends State<_DriverBottomSheet> {
   @override
   Widget build(BuildContext context) {
     final kilometer = _getDistance();
+    final order = widget.currentOrder;
+    final baseTime = order.acceptedAt?.toDate() ?? order.createdAt.toDate();
+    final prepMinutes = OrderReadyTimeHelper.parsePreparationMinutes(
+      order.estimatedTimeToPrepare,
+    );
+    final readyAt = OrderReadyTimeHelper.getReadyAt(baseTime, prepMinutes);
+    final readyAtStr = DateFormat.jm().format(readyAt);
+
     return Padding(
       padding: EdgeInsets.all(10),
       child: Container(
@@ -2085,6 +2295,62 @@ class _DriverBottomSheetState extends State<_DriverBottomSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            SizedBox(height: 5),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                Expanded(
+                  child: Text(
+                    "Restaurant",
+                    style: TextStyle(
+                        color: Color(0xffADADAD),
+                        fontFamily: "Poppinsr",
+                        letterSpacing: 0.5),
+                  ),
+                ),
+                Flexible(
+                  child: Text(
+                    order.vendor.title.isNotEmpty
+                        ? order.vendor.title
+                        : "Restaurant",
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: Color(0xffFFFFFF),
+                        fontFamily: "Poppinsm",
+                        letterSpacing: 0.5),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 5),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                Expanded(
+                  child: Text(
+                    "Order ID",
+                    style: TextStyle(
+                        color: Color(0xffADADAD),
+                        fontFamily: "Poppinsr",
+                        letterSpacing: 0.5),
+                  ),
+                ),
+                Flexible(
+                  child: Text(
+                    order.id.length > 12
+                        ? "${order.id.substring(0, 12)}..."
+                        : order.id,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: Color(0xffFFFFFF),
+                        fontFamily: "Poppinsm",
+                        letterSpacing: 0.5),
+                  ),
+                ),
+              ],
+            ),
             SizedBox(height: 5),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -2106,6 +2372,32 @@ class _DriverBottomSheetState extends State<_DriverBottomSheet> {
                       letterSpacing: 0.5),
                 ),
               ],
+            ),
+            SizedBox(height: 5),
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade700),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.schedule, color: Colors.orange.shade300, size: 18),
+                  SizedBox(width: 8),
+                  Text(
+                    "Preparing food • Ready at ~$readyAtStr",
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.orange.shade100,
+                      fontFamily: "Poppinsm",
+                    ),
+                  ),
+                ],
+              ),
             ),
             SizedBox(height: 5),
             Row(
@@ -2177,6 +2469,28 @@ class _DriverBottomSheetState extends State<_DriverBottomSheet> {
               ),
             ),
             SizedBox(height: 10),
+            if (order.riderAcceptDeadline != null) ...[
+              Builder(
+                builder: (context) {
+                  final deadline = order.riderAcceptDeadline!.toDate();
+                  final remaining =
+                      deadline.difference(DateTime.now()).inSeconds.clamp(0, 60);
+                  const totalSec = 60;
+                  if (remaining > 0) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: ShrinkingTimerBar(
+                        totalSeconds: totalSec,
+                        initialRemainingSeconds: remaining,
+                        orderId: order.id,
+                        onTimeout: widget.onTimeout ?? () => widget.onReject(),
+                      ),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+            ],
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
@@ -2204,10 +2518,10 @@ class _DriverBottomSheetState extends State<_DriverBottomSheet> {
                     onPressed: () async {
                       try {
                         showProgress(context, 'Rejecting order...', false);
-                        widget.onReject();
-                        hideProgress();
+                        await widget.onReject();
+                        if (context.mounted) hideProgress();
                       } catch (e) {
-                        hideProgress();
+                        if (context.mounted) hideProgress();
                       }
                     },
                   ),

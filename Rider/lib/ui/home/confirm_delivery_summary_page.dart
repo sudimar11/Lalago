@@ -10,9 +10,11 @@ import '../../services/connectivity_service.dart';
 import '../../services/offline_transaction_service.dart';
 import '../../services/background_sync_service.dart';
 import '../../widgets/pending_transactions_indicator.dart';
-import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
+import 'package:foodie_driver/ui/container/ContainerScreen.dart';
 import '../../constants.dart';
+import '../../main.dart';
 import '../../services/order_service.dart';
+import '../../services/performance_tier_helper.dart';
 
 class ConfirmDeliverySummaryPage extends StatefulWidget {
   final String orderId;
@@ -86,34 +88,28 @@ class _ConfirmDeliverySummaryPageState
           .get();
       final settingsData = settingsDoc.data() ?? <String, dynamic>{};
 
-      // Determine tier and corresponding percent
-      num? percent;
-      if (perfValue < 75) {
-        percent = settingsData['silver'] as num?;
-      } else if (perfValue < 85) {
-        percent = settingsData['Platinum'] as num?;
-      } else {
-        percent = settingsData['Gold'] as num?;
-      }
+      final tier = PerformanceTierHelper.getTier(perfValue);
+      final commKey = PerformanceTierHelper.commissionKey(tier);
+      num? percent = settingsData[commKey] as num?;
 
       if (percent == null) {
         return;
       }
 
-      // Load incentive values from Firestore
       final incentiveGold =
           (settingsData['incentive_gold'] as num?)?.toDouble();
-      final incentivePlatinum =
-          (settingsData['incentive_platinum'] as num?)?.toDouble();
       final incentiveSilver =
           (settingsData['incentive_silver'] as num?)?.toDouble();
+      final incentiveBronze =
+          (settingsData['incentive_bronze'] as num?)?.toDouble();
 
       setState(() {
         _platformCommissionPercent = percent!.toDouble();
-        _walletAmount = (userData?['wallet_amount'] ?? 0.0 as num).toDouble();
+        _walletAmount =
+            (userData?['wallet_amount'] ?? 0.0 as num).toDouble();
         _driverPerformance = perfValue;
         _incentiveGold = incentiveGold;
-        _incentivePlatinum = incentivePlatinum;
+        _incentivePlatinum = incentiveBronze;
         _incentiveSilver = incentiveSilver;
       });
     } catch (_) {
@@ -121,15 +117,18 @@ class _ConfirmDeliverySummaryPageState
     }
   }
 
-  /// Get incentive amount per order based on driver performance tier
   double _getIncentivePerOrder() {
     if (_driverPerformance == null) return 0.0;
-    if (_driverPerformance! >= 85) {
-      return _incentiveGold ?? 0.0; // Gold
-    } else if (_driverPerformance! >= 75) {
-      return _incentivePlatinum ?? 0.0; // Platinum
-    } else {
-      return _incentiveSilver ?? 0.0; // Silver
+    final tier = PerformanceTierHelper.getTier(_driverPerformance!);
+    switch (tier.name) {
+      case 'Gold':
+        return _incentiveGold ?? 0.0;
+      case 'Silver':
+        return _incentiveSilver ?? 0.0;
+      case 'Bronze':
+        return _incentivePlatinum ?? 0.0;
+      default:
+        return _incentivePlatinum ?? 0.0;
     }
   }
 
@@ -659,7 +658,7 @@ class _ConfirmDeliverySummaryPageState
       BackgroundSyncService.triggerImmediateSync();
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const OrdersBlankScreen()),
+        MaterialPageRoute(builder: (_) => ContainerScreen()),
         (route) => false, // Remove all previous routes
       );
       return;
@@ -794,12 +793,50 @@ class _ConfirmDeliverySummaryPageState
               'discountAmount': totalDiscountAmount,
               'adminPromoCost': totalDiscountAmount,
             });
+
+            // Atomically remove order from rider's array
+            // within the same transaction
+            tx.update(userRef, {
+              'inProgressOrderID':
+                  FieldValue.arrayRemove([widget.orderId]),
+            });
           });
         },
       );
 
       // 4. REMOVE FROM QUEUE if successful
       await offlineService.removePending(widget.orderId);
+
+      // 4b. Verify array removal and sync in-memory state
+      // (primary removal already happened inside the transaction)
+      final verifyDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      final updatedOrders =
+          verifyDoc.data()?['inProgressOrderID'] as List? ??
+              [];
+
+      if (updatedOrders.contains(widget.orderId)) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .update({
+          'inProgressOrderID':
+              FieldValue.arrayRemove([widget.orderId]),
+        });
+      }
+
+      final user = MyAppState.currentUser;
+      if (user != null) {
+        user.inProgressOrderID = List<dynamic>.from(
+          updatedOrders
+              .where((id) => id != widget.orderId)
+              .toList(),
+        );
+      }
+
+      await OrderService.updateRiderStatus();
 
       // 5. Send FCM notification to customer after successful order completion
       try {
@@ -826,7 +863,7 @@ class _ConfirmDeliverySummaryPageState
       );
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const OrdersBlankScreen()),
+        MaterialPageRoute(builder: (_) => ContainerScreen()),
         (route) => false, // Remove all previous routes
       );
     } catch (e) {

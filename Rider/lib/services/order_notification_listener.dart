@@ -3,6 +3,7 @@ import 'dart:developer';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:foodie_driver/model/notification_model.dart';
+import 'package:foodie_driver/services/audio_service.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/notification_service.dart';
 import 'package:foodie_driver/utils/shared_preferences_helper.dart';
@@ -85,11 +86,14 @@ class OrderNotificationListener {
           .where((id) => !_lastOrderRequestData.contains(id))
           .toList();
 
+      log('🔍 [RIDER_NOTIFY] orderRequestData changed: $currentOrderIds, '
+          'new=$newOrderIds');
+
       if (newOrderIds.isNotEmpty) {
         log('📦 New orders detected: $newOrderIds');
 
-        // Show notification for each new order
         for (final orderId in newOrderIds) {
+          AudioService.instance.playNewOrderSound(orderId: orderId);
           await _showOrderNotification(orderId);
         }
       }
@@ -193,11 +197,14 @@ class OrderNotificationHandler {
           .where((id) => !_lastOrderRequestData.contains(id))
           .toList();
 
+      log('🔍 [RIDER_NOTIFY] orderRequestData changed: $currentOrderIds, '
+          'new=$newOrderIds');
+
       if (newOrderIds.isNotEmpty) {
         log('📦 New orders detected: $newOrderIds');
 
-        // Show notification for each new order
         for (final orderId in newOrderIds) {
+          AudioService.instance.playNewOrderSound(orderId: orderId);
           await _showOrderNotification(orderId);
         }
       }

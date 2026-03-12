@@ -233,14 +233,62 @@ class HappyHourConfig {
   }
 }
 
+/// Notification template for Happy Hour auto-create.
+class NotificationTemplate {
+  final String title;
+  final String body;
+  final String? imageUrl;
+  final String? deepLink;
+
+  NotificationTemplate({
+    this.title = '',
+    this.body = '',
+    this.imageUrl,
+    this.deepLink,
+  });
+
+  factory NotificationTemplate.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return NotificationTemplate();
+    return NotificationTemplate(
+      title: json['title']?.toString() ?? '',
+      body: json['body']?.toString() ?? '',
+      imageUrl: json['imageUrl']?.toString().trim().isEmpty == true
+          ? null
+          : json['imageUrl']?.toString().trim(),
+      deepLink: json['deepLink']?.toString().trim().isEmpty == true
+          ? null
+          : json['deepLink']?.toString().trim(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'title': title,
+      'body': body,
+      if (imageUrl != null && imageUrl!.isNotEmpty) 'imageUrl': imageUrl,
+      if (deepLink != null && deepLink!.isNotEmpty) 'deepLink': deepLink,
+    };
+  }
+
+  bool get isValid => title.trim().isNotEmpty && body.trim().isNotEmpty;
+}
+
 class HappyHourSettings {
   bool enabled;
   List<HappyHourConfig> configs;
+  bool autoCreateNotification;
+  NotificationTemplate notificationTemplate;
+  Timestamp? lastTriggeredAt;
+  String? lastTriggeredConfigId;
 
   HappyHourSettings({
     this.enabled = false,
     this.configs = const [],
-  });
+    this.autoCreateNotification = false,
+    NotificationTemplate? notificationTemplate,
+    this.lastTriggeredAt,
+    this.lastTriggeredConfigId,
+  }) : notificationTemplate = notificationTemplate ?? NotificationTemplate();
 
   factory HappyHourSettings.fromJson(Map<String, dynamic> json) {
     List<HappyHourConfig> configsList = [];
@@ -253,9 +301,28 @@ class HappyHourSettings {
       }).toList();
     }
 
+    Timestamp? lastTriggeredAt;
+    if (json['lastTriggeredAt'] != null) {
+      final t = json['lastTriggeredAt'];
+      if (t is Timestamp) {
+        lastTriggeredAt = t;
+      } else if (t is Map) {
+        lastTriggeredAt = Timestamp(
+          (t['_seconds'] ?? 0) as int,
+          (t['_nanoseconds'] ?? 0) as int,
+        );
+      }
+    }
+
     return HappyHourSettings(
       enabled: json['enabled'] ?? false,
       configs: configsList,
+      autoCreateNotification: json['autoCreateNotification'] ?? false,
+      notificationTemplate: NotificationTemplate.fromJson(
+        json['notificationTemplate'] as Map<String, dynamic>?,
+      ),
+      lastTriggeredAt: lastTriggeredAt,
+      lastTriggeredConfigId: json['lastTriggeredConfigId']?.toString(),
     );
   }
 
@@ -263,6 +330,11 @@ class HappyHourSettings {
     return {
       'enabled': enabled,
       'configs': configs.map((config) => config.toJson()).toList(),
+      'autoCreateNotification': autoCreateNotification,
+      'notificationTemplate': notificationTemplate.toJson(),
+      if (lastTriggeredAt != null) 'lastTriggeredAt': lastTriggeredAt,
+      if (lastTriggeredConfigId != null)
+        'lastTriggeredConfigId': lastTriggeredConfigId,
     };
   }
 

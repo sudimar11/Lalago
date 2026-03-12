@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
+import '../services/performance_logger.dart';
 import '../constants.dart';
 import '../model/ProductModel.dart';
 import '../services/localDatabase.dart';
@@ -125,6 +127,7 @@ class _AddIconButtonState extends State<AddIconButton>
         vendorID: '',
         quantity: 0,
         category_id: '',
+        addedAt: DateTime.now(),
       ),
     );
 
@@ -259,7 +262,10 @@ class _AddIconButtonState extends State<AddIconButton>
     });
 
     // Then sync with actual cart state
+    final stopwatch = Stopwatch()..start();
     await cartDatabase.addProduct(widget.productModel, cartDatabase, true);
+    stopwatch.stop();
+    PerformanceLogger.logAddToCart(stopwatch.elapsed);
 
     // Trigger cart update callback to refresh parent UI
     if (widget.onCartUpdated != null) {
@@ -297,8 +303,11 @@ class _AddIconButtonState extends State<AddIconButton>
             ? widget.productModel.variantInfo!.variantId.toString()
             : "");
 
+    final stopwatch = Stopwatch()..start();
     if (wasQuantityOne) {
       await cartDatabase.removeProduct(productId);
+      stopwatch.stop();
+      PerformanceLogger.logRemoveFromCart(stopwatch.elapsed);
     } else {
       final cartItem = _cartProducts.firstWhere(
         (product) => product.id == productId,
@@ -314,7 +323,10 @@ class _AddIconButtonState extends State<AddIconButton>
         extras_price: cartItem.extras_price,
         extras: cartItem.extras,
         discountPrice: cartItem.discountPrice,
+        addedAt: cartItem.addedAt,
       ));
+      stopwatch.stop();
+      PerformanceLogger.logUpdateQuantity(stopwatch.elapsed);
     }
 
     // Don't call _loadCartQuantity() here as it resets the state

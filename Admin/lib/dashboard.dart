@@ -5,6 +5,8 @@ import 'package:brgy/order_dispatcher.dart';
 import 'package:brgy/main.dart';
 import 'package:brgy/restaurants_page.dart';
 import 'package:brgy/foods_page.dart';
+import 'package:brgy/pages/bundles_page.dart';
+import 'package:brgy/pages/addons_page.dart';
 import 'package:brgy/analytics_today.dart';
 import 'package:brgy/analytics_weekly.dart';
 import 'package:brgy/riders_orders_today_page.dart';
@@ -28,6 +30,7 @@ import 'package:brgy/top_restaurants_orders_today_page.dart';
 import 'package:brgy/restaurants_zero_orders_today_page.dart';
 import 'package:brgy/restaurant_orders_weekly_page.dart';
 import 'package:brgy/restaurant_orders_earning_page.dart';
+import 'package:brgy/pages/restaurant_performance_page.dart';
 import 'package:brgy/driver_reports_page.dart';
 import 'package:brgy/remittance.dart';
 import 'package:brgy/confirmed_transactions.dart';
@@ -35,24 +38,54 @@ import 'package:brgy/payout.dart';
 import 'package:brgy/confirmed_payouts.dart';
 import 'package:brgy/payout_remittance_page.dart';
 import 'package:brgy/driver_suspension.dart';
-import 'package:brgy/attendance_page.dart';
+import 'package:brgy/driverlist.dart';
 import 'package:brgy/pages/ads_management_page.dart';
 import 'package:brgy/pages/happy_hour_settings_page.dart';
 import 'package:brgy/pages/notification_management_page.dart';
+import 'package:brgy/pages/order_recovery_dashboard.dart';
+import 'package:brgy/pages/reorder_analytics_page.dart';
+import 'package:brgy/pages/ash_voice_dashboard.dart';
+import 'package:brgy/pages/hunger_reminder_analytics.dart';
+import 'package:brgy/pages/cart_recovery_dashboard.dart';
 import 'package:brgy/pages/first_order_coupon_settings_page.dart';
 import 'package:brgy/pages/coupon_management_page.dart';
 import 'package:brgy/pages/new_user_promo_settings_page.dart';
+import 'package:brgy/pages/pautos_settings_page.dart';
 import 'package:brgy/pages/referral_settings_page.dart';
+import 'package:brgy/pages/loyalty_settings_page.dart';
+import 'package:brgy/pages/gift_card_settings_page.dart';
+import 'package:brgy/pages/delivery_zone_settings_page.dart';
+import 'package:brgy/pages/rider_overview_page.dart';
+import 'package:brgy/pages/dispatch_analytics_page.dart';
+import 'package:brgy/pages/dispatch_config_page.dart';
+import 'package:brgy/pages/rider_time_settings_page.dart';
 import 'package:brgy/driver_wallet_page.dart';
 import 'package:brgy/driver_collection_page.dart';
 import 'package:brgy/pages/customer_suggestions_page.dart';
 import 'package:brgy/pages/customer_feedback_page.dart';
 import 'package:brgy/pages/search_history_page.dart';
+import 'package:brgy/pages/search_analytics_dashboard.dart';
+import 'package:brgy/pages/click_analytics_dashboard.dart';
+import 'package:brgy/pages/recommendation_performance.dart';
+import 'package:brgy/pages/full_operations_page.dart';
+import 'package:brgy/pages/user_segments_page.dart';
 import 'package:brgy/map_page.dart';
+import 'package:brgy/widgets/dashboard/analytics_kpi_cards.dart';
+import 'package:brgy/widgets/dashboard/health_score_gauge.dart';
+import 'package:brgy/widgets/dashboard/forecast_card.dart';
+import 'package:brgy/widgets/dashboard/alert_item.dart';
+import 'package:brgy/widgets/dashboard/promo_impact_card.dart';
+import 'package:brgy/widgets/dashboard/health_sparkline.dart';
+import 'package:brgy/services/main_dashboard_service.dart';
+import 'package:brgy/pages/demand_health_dashboard.dart';
+import 'package:brgy/pages/forecast_dashboard.dart';
+import 'package:brgy/pages/demand_alerts_page.dart';
+import 'package:brgy/pages/promo_dashboard.dart';
 import 'package:brgy/constants.dart';
 import 'package:brgy/services/order_sound_service.dart';
 import 'package:brgy/utils/order_ready_time_helper.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -159,9 +192,62 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final int safeIndex = _selectedIndex < _screens.length ? _selectedIndex : 0;
 
     return Scaffold(
+      drawer: const _AnalyticsDrawer(),
       appBar: AppBar(
         title: Text('LalaGO'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.trending_up),
+            tooltip: 'View Trends',
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+          StreamBuilder<int>(
+            stream: MainDashboardService.streamActiveAlertCount(),
+            builder: (context, snapshot) {
+              final count = snapshot.data ?? 0;
+              return Stack(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.warning_amber),
+                    tooltip: 'Demand Alerts',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const DemandAlertsPage(),
+                        ),
+                      );
+                    },
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(2),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 16,
+                          minHeight: 16,
+                        ),
+                        child: Text(
+                          count > 9 ? '9+' : '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
           // Notification icon with badge
           StreamBuilder<int>(
             stream: NotificationService.getUnreadCount(),
@@ -346,19 +432,16 @@ class DashboardBlankPage extends StatefulWidget {
 }
 
 class _DashboardBlankPageState extends State<DashboardBlankPage> {
-  late Future<_AvgDeliveryKpiData> _avgDeliveryFuture;
   late Future<int> _unpublishedFoodsFuture;
 
   @override
   void initState() {
     super.initState();
-    _avgDeliveryFuture = _loadAvgDeliveryKpi();
     _unpublishedFoodsFuture = _loadUnpublishedFoodsKpi();
   }
 
   Future<void> _onRefresh() async {
     setState(() {
-      _avgDeliveryFuture = _loadAvgDeliveryKpi();
       _unpublishedFoodsFuture = _loadUnpublishedFoodsKpi();
     });
     await Future<void>.delayed(const Duration(milliseconds: 300));
@@ -452,6 +535,31 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             onTap: () => push(const NotificationManagementPage()),
           ),
           _QuickActionItem(
+            icon: Icons.restore,
+            label: 'Order recovery',
+            onTap: () => push(const OrderRecoveryDashboard()),
+          ),
+          _QuickActionItem(
+            icon: Icons.analytics,
+            label: 'Reorder analytics',
+            onTap: () => push(const ReorderAnalyticsPage()),
+          ),
+          _QuickActionItem(
+            icon: Icons.record_voice_over,
+            label: 'Ash voice',
+            onTap: () => push(const AshVoiceDashboard()),
+          ),
+          _QuickActionItem(
+            icon: Icons.restaurant_menu,
+            label: 'Hunger reminder analytics',
+            onTap: () => push(const HungerReminderAnalytics()),
+          ),
+          _QuickActionItem(
+            icon: Icons.shopping_cart_outlined,
+            label: 'Cart recovery',
+            onTap: () => push(const CartRecoveryDashboard()),
+          ),
+          _QuickActionItem(
             icon: Icons.local_offer_outlined,
             label: 'Happy hour',
             onTap: () => push(const HappyHourSettingsPage()),
@@ -473,200 +581,6 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
           ),
         ];
 
-        final customersItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.people_alt,
-            label: 'Top 10 buyers (today)',
-            onTap: () => push(const TopBuyersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.person,
-            label: 'Active customers',
-            onTap: () => push(const ActiveCustomersPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.person_off,
-            label: 'Inactive customers',
-            onTap: () => push(const InactiveCustomersPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.lightbulb_outline,
-            label: 'Suggestions',
-            onTap: () => push(const CustomerSuggestionsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.feedback,
-            label: 'Feedback',
-            onTap: () => push(const CustomerFeedbackPage()),
-          ),
-        ];
-
-        final searchItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.search,
-            label: 'Search history',
-            onTap: () => push(const SearchHistoryPage()),
-          ),
-        ];
-
-        final ridersItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.local_shipping,
-            label: 'Rider orders (today)',
-            onTap: () => push(const RidersOrdersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.calendar_view_week,
-            label: 'Rider orders (week)',
-            onTap: () => push(const RidersOrdersWeeklyPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.bar_chart,
-            label: 'Rider performance',
-            onTap: () => push(const RiderPerformancePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.report_problem,
-            label: 'Driver reports',
-            onTap: () => push(const DriverReportsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.map,
-            label: 'Active riders (live map)',
-            onTap: () => push(DriversMapPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.event_note,
-            label: 'Attendance',
-            onTap: () => push(const AttendancePage()),
-          ),
-        ];
-
-        final ordersItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.today,
-            label: 'Orders today',
-            onTap: () => push(const OrdersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.calendar_view_week,
-            label: 'Orders this week',
-            onTap: () => push(const OrdersThisWeekPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.shopping_cart,
-            label: 'Total orders',
-            onTap: () => push(const TotalOrdersPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.timer,
-            label: 'Avg delivery time',
-            onTap: () => push(const AverageDeliveryTimePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.attach_money,
-            label: 'Restaurant earnings',
-            onTap: () => push(const RestaurantOrdersEarningPage()),
-          ),
-        ];
-
-        final restaurantsItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.fastfood,
-            label: 'Total foods',
-            onTap: () => push(const FoodsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.storefront,
-            label: 'Total restaurants',
-            onTap: () => push(const RestaurantsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.restaurant,
-            label: 'Top restaurants (today)',
-            onTap: () => push(const TopRestaurantsOrdersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.block,
-            label: 'Zero orders (today)',
-            onTap: () => push(const RestaurantsZeroOrdersTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.restaurant_menu,
-            label: 'Restaurant orders (week)',
-            onTap: () => push(const RestaurantOrdersWeeklyPage()),
-          ),
-        ];
-
-        final marketingItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.sms,
-            label: 'SMS tool',
-            onTap: () => push(AddDashboard()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.campaign,
-            label: 'Ads management',
-            onTap: () => push(const AdsManagementPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.local_offer,
-            label: 'Coupon management',
-            onTap: () => push(const CouponManagementPage()),
-          ),
-        ];
-
-        final financeItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.send,
-            label: 'Remittance',
-            onTap: () => push(const RemittancePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.check_circle,
-            label: 'Confirm remittance',
-            onTap: () => push(const ConfirmedTransactionsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.payment,
-            label: 'Payout request',
-            onTap: () => push(const PayoutPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.verified,
-            label: 'Confirm payout',
-            onTap: () => push(const ConfirmedPayoutsPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.account_balance_wallet,
-            label: 'Driver wallet',
-            onTap: () => push(const DriverWalletPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.swap_horiz,
-            label: 'Payout & remittance',
-            onTap: () => push(const PayoutRemittancePage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.money_off,
-            label: 'Collect from driver',
-            onTap: () => push(const DriverCollectionPage()),
-          ),
-        ];
-
-        final analyticsItems = <_DashboardNavItem>[
-          _DashboardNavItem(
-            icon: Icons.analytics,
-            label: 'Analytics today',
-            onTap: () => push(const AnalyticsTodayPage()),
-          ),
-          _DashboardNavItem(
-            icon: Icons.analytics_outlined,
-            label: 'Analytics (week)',
-            onTap: () => push(const AnalyticsWeeklyPage()),
-          ),
-        ];
-
         return RefreshIndicator(
           onRefresh: _onRefresh,
           child: SingleChildScrollView(
@@ -675,86 +589,352 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (isWideHeader) ...[
+                _HealthGaugeCard(onNavigate: push),
+                const SizedBox(height: 16),
+                if (isWideHeader)
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Expanded(child: _TodaysOrdersCard()),
-                      const SizedBox(width: 12),
                       Expanded(
-                        child: _QuickActionsCard(items: quickActions),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _MainForecastCard(onNavigate: push),
+                            const SizedBox(height: 12),
+                            const _TodaysOrdersCard(),
+                            const SizedBox(height: 12),
+                            _QuickActionsCard(items: quickActions),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _AlertsFeedSection(onNavigate: push),
+                            const SizedBox(height: 16),
+                            _PromoHighlightsSection(onNavigate: push),
+                          ],
+                        ),
                       ),
                     ],
+                  )
+                else
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _MainForecastCard(onNavigate: push),
+                      const SizedBox(height: 12),
+                      _AlertsFeedSection(onNavigate: push),
+                      const SizedBox(height: 12),
+                      _PromoHighlightsSection(onNavigate: push),
+                      const SizedBox(height: 12),
+                      const _TodaysOrdersCard(),
+                      const SizedBox(height: 12),
+                      _QuickActionsCard(items: quickActions),
+                    ],
                   ),
-                ] else ...[
-                  const _TodaysOrdersCard(),
-                  const SizedBox(height: 12),
-                  _QuickActionsCard(items: quickActions),
-                ],
+                const SizedBox(height: 16),
+                _AtRiskFocalSection(onNavigate: push),
                 const SizedBox(height: 12),
                 _AtAGlanceSection(
                   columns: columns,
-                  avgDeliveryFuture: _avgDeliveryFuture,
                   unpublishedFoodsFuture: _unpublishedFoodsFuture,
                   onNavigate: push,
                   onNavigateToOrders: widget.onNavigateToOrders,
                 ),
                 const SizedBox(height: 20),
-                _DashboardGroup(
-                  title: 'Operations',
-                  subtitle: 'Orders, riders, and restaurants',
-                  initiallyExpanded: true,
-                  child: Column(
-                    children: [
-                      _DashboardNavGrid(columns: columns, items: ordersItems),
-                      const SizedBox(height: 12),
-                      _DashboardNavGrid(columns: columns, items: ridersItems),
-                      const SizedBox(height: 12),
-                      _DashboardNavGrid(
-                        columns: columns,
-                        items: restaurantsItems,
-                      ),
-                    ],
+                _ManagementHubBar(onNavigate: push),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _HealthGaugeCard extends StatelessWidget {
+  const _HealthGaugeCard({required this.onNavigate});
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>?>(
+      stream: MainDashboardService.streamLatestHealth(),
+      builder: (context, snapshot) {
+        final data = snapshot.data?.data();
+        final score =
+            (data?['overallScore'] as num?)?.toInt() ?? 0;
+
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Overall Health Score',
+                      style:
+                          Theme.of(context).textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                    ),
+                    TextButton(
+                      onPressed: () =>
+                          onNavigate(const DemandHealthDashboard()),
+                      child: const Text('View details'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Center(
+                  child: HealthScoreGauge(
+                    score: score,
+                    size: 100,
+                    showLabel: true,
+                    onTap: () =>
+                        onNavigate(const DemandHealthDashboard()),
                   ),
                 ),
-                const SizedBox(height: 12),
-                _DashboardGroup(
-                  title: 'Customers',
-                  subtitle: 'Retention, activity, and feedback',
-                  initiallyExpanded: false,
-                  child: _DashboardNavGrid(columns: columns, items: customersItems),
+                const SizedBox(height: 16),
+                Text(
+                  'Last 7 days',
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
-                const SizedBox(height: 12),
-                _DashboardGroup(
-                  title: 'Finance & marketing',
-                  subtitle: 'Payouts, remittance, and promotions',
-                  initiallyExpanded: false,
-                  child: Column(
-                    children: [
-                      _DashboardNavGrid(columns: columns, items: financeItems),
-                      const SizedBox(height: 12),
-                      _DashboardNavGrid(columns: columns, items: marketingItems),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _DashboardGroup(
-                  title: 'Search & analytics',
-                  subtitle: 'Trends and internal tools',
-                  initiallyExpanded: false,
-                  child: Column(
-                    children: [
-                      _DashboardNavGrid(columns: columns, items: searchItems),
-                      const SizedBox(height: 12),
-                      _DashboardNavGrid(columns: columns, items: analyticsItems),
-                    ],
-                  ),
+                const SizedBox(height: 8),
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: MainDashboardService.getHealthHistory(7),
+                  builder: (context, snap) {
+                    if (!snap.hasData) {
+                      return const SizedBox(
+                        height: 48,
+                        child: Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+                    return HealthSparkline(
+                      history: snap.data!,
+                      height: 48,
+                      days: 7,
+                    );
+                  },
                 ),
               ],
             ),
           ),
         );
       },
+    );
+  }
+}
+
+class _MainForecastCard extends StatelessWidget {
+  const _MainForecastCard({required this.onNavigate});
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<TodayForecastData>(
+      future: MainDashboardService.getTodayForecast(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(20),
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+          );
+        }
+        final data = snapshot.data!;
+        return FutureBuilder<List<FlSpot>>(
+          future: MainDashboardService.getForecastTrendNext7Days(),
+          builder: (context, sparkSnap) {
+            final spots = sparkSnap.hasData && sparkSnap.data!.isNotEmpty
+                ? sparkSnap.data
+                : null;
+            return ForecastCard(
+              predicted: data.predicted,
+              actual: data.actual,
+              lowerBound: data.lowerBound,
+              upperBound: data.upperBound,
+              source: data.source,
+              sparklineSpots: spots != null && spots.isNotEmpty ? spots : null,
+              onTap: () => onNavigate(const ForecastDashboard()),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _AlertsFeedSection extends StatelessWidget {
+  const _AlertsFeedSection({required this.onNavigate});
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Active Alerts',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                TextButton(
+                  onPressed: () => onNavigate(const DemandAlertsPage()),
+                  child: const Text('View All'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<List<Map<String, dynamic>>>(
+              stream: MainDashboardService.streamActiveAlerts(limit: 5),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  );
+                }
+                final alerts = snapshot.data ?? [];
+                if (alerts.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No active alerts',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                  );
+                }
+                return Column(
+                  children: alerts
+                      .map((a) => AlertItem(
+                            alertId: a['id'] as String? ?? '',
+                            data: a,
+                            compact: true,
+                            showViewButton: true,
+                            onTap: () =>
+                                onNavigate(const DemandAlertsPage()),
+                          ))
+                      .toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PromoHighlightsSection extends StatelessWidget {
+  const _PromoHighlightsSection({required this.onNavigate});
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Top Promos',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                TextButton(
+                  onPressed: () => onNavigate(const PromoDashboard()),
+                  child: const Text('View All'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: MainDashboardService.getTopPromosByIncrementalOrders(
+                limit: 3,
+              ),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  );
+                }
+                final promos = snapshot.data ?? [];
+                if (promos.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No promo data yet',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                  );
+                }
+                return Column(
+                  children: promos
+                      .map((p) => PromoImpactCard(
+                            promoId: p['promoId'] as String? ?? p['id'] ?? '',
+                            data: p,
+                            compact: true,
+                            onTap: () =>
+                                onNavigate(const PromoDashboard()),
+                          ))
+                      .toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -944,17 +1124,329 @@ class _AvgDeliveryKpiData {
   });
 }
 
+class _AtRiskFocalSection extends StatelessWidget {
+  const _AtRiskFocalSection({
+    required this.onNavigate,
+  });
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final String todayDate =
+        DateTime.now().toIso8601String().split('T')[0];
+    final DateTime startOfDay =
+        DateTime.parse('$todayDate 00:00:00Z').toUtc();
+    final DateTime endOfDay =
+        DateTime.parse('$todayDate 23:59:59Z').toUtc();
+
+    final ordersStream = FirebaseFirestore.instance
+        .collection('restaurant_orders')
+        .where(
+          'createdAt',
+          isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+        )
+        .where(
+          'createdAt',
+          isLessThanOrEqualTo: Timestamp.fromDate(endOfDay),
+        )
+        .snapshots();
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: ordersStream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_outlined,
+                      color: Colors.orange, size: 32),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'At-risk orders',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_outlined,
+                      color: Colors.orange, size: 32),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'At-risk orders',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const Icon(Icons.error, color: Colors.red),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final orders = snapshot.data?.docs ?? [];
+        final ordersTyped =
+            orders.cast<QueryDocumentSnapshot<Map<String, dynamic>>>();
+        final atRiskItems = _computeAtRiskItemsFromOrders(ordersTyped);
+        final topAtRisk =
+            atRiskItems.length <= 10 ? atRiskItems : atRiskItems.sublist(0, 10);
+
+        return _AtRiskOrdersCard(
+          items: topAtRisk,
+          onNavigate: onNavigate,
+        );
+      },
+    );
+  }
+}
+
+class _AnalyticsDrawer extends StatelessWidget {
+  const _AnalyticsDrawer();
+
+  void _navigateAndClose(BuildContext context, Widget page) {
+    Navigator.pop(context);
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => page),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Drawer(
+      child: Column(
+        children: [
+          DrawerHeader(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primaryContainer,
+            ),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Trends & Analytics',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.timer),
+            title: const Text('30-Day Avg Delivery'),
+            onTap: () =>
+                _navigateAndClose(context, const AverageDeliveryTimePage()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.bar_chart),
+            title: const Text('Peak Hours Analysis'),
+            subtitle: const Text('Most active hours'),
+            onTap: () =>
+                _navigateAndClose(context, const AnalyticsTodayPage()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.pie_chart),
+            title: const Text('User Segments'),
+            onTap: () =>
+                _navigateAndClose(context, const UserSegmentsPage()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.calendar_view_week),
+            title: const Text('Weekly Comparison'),
+            onTap: () =>
+                _navigateAndClose(context, const AnalyticsWeeklyPage()),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.analytics),
+            title: const Text('Full Analytics Suite'),
+            trailing: const Icon(Icons.arrow_forward),
+            onTap: () =>
+                _navigateAndClose(context, const AnalyticsTodayPage()),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ManagementHubBar extends StatelessWidget {
+  const _ManagementHubBar({
+    required this.onNavigate,
+  });
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _HubButton(
+                icon: Icons.list_alt,
+                label: 'Orders',
+                onTap: () => onNavigate(const OrderDispatcherPage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.restaurant,
+                label: 'Restaurants',
+                onTap: () => onNavigate(const RestaurantsPage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.delivery_dining,
+                label: 'Riders',
+                onTap: () => onNavigate(DriverListPage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.payments,
+                label: 'Finance',
+                onTap: () => onNavigate(const RemittancePage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.settings,
+                label: 'Settings',
+                onTap: () => onNavigate(const SettingsPage()),
+              ),
+              const SizedBox(width: 8),
+              _HubButton(
+                icon: Icons.more_horiz,
+                label: 'More...',
+                onTap: () => onNavigate(const FullOperationsPage()),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HubButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _HubButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 20, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: theme.textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoneAKpiRow extends StatelessWidget {
+  const _ZoneAKpiRow({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 600;
+        if (isNarrow) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: children
+                  .map(
+                    (w) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: SizedBox(width: 120, child: w),
+                    ),
+                  )
+                  .toList(),
+            ),
+          );
+        }
+        return Row(
+          children: children
+              .map(
+                (w) => Expanded(child: Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: w,
+                )),
+              )
+              .toList(),
+        );
+      },
+    );
+  }
+}
+
 class _AtAGlanceSection extends StatelessWidget {
   const _AtAGlanceSection({
     required this.columns,
-    required this.avgDeliveryFuture,
     required this.unpublishedFoodsFuture,
     required this.onNavigate,
     this.onNavigateToOrders,
   });
 
   final int columns;
-  final Future<_AvgDeliveryKpiData> avgDeliveryFuture;
   final Future<int> unpublishedFoodsFuture;
   final void Function(Widget page) onNavigate;
   final VoidCallback? onNavigateToOrders;
@@ -1049,7 +1541,7 @@ class _AtAGlanceSection extends StatelessWidget {
                 int completedToday = 0;
                 int pendingToday = 0;
                 int unassignedNearReady = 0;
-                int stuckDriverPending = 0;
+                int stuckDriverAssigned = 0;
                 int waitingAccept = 0;
                 final deliveredRiders = <String>{};
                 final ordersByHour = <int, int>{};
@@ -1059,7 +1551,6 @@ class _AtAGlanceSection extends StatelessWidget {
 
                 final Set<String> vendorsWithOrders = {};
                 double earningsToday = 0.0;
-                final atRiskItems = <_AtRiskOrderItem>[];
 
                 String normalizeOrderStatus(dynamic raw) {
                   if (raw == null) return '—';
@@ -1085,13 +1576,14 @@ class _AtAGlanceSection extends StatelessWidget {
                     case 'confirm':
                     case 'order accepted':
                       return 'Order Accepted';
-                    case 'driver pending':
-                      return 'Driver Pending';
                     case 'driver assigned':
                       return 'Driver Assigned';
+                    case 'driver accepted':
+                      return 'Driver Accepted';
+                    case 'order shipped':
+                      return 'Order Shipped';
                     case 'released':
                     case 'in transit':
-                    case 'order shipped':
                       return 'In Transit';
                     case 'completed':
                     case 'order completed':
@@ -1160,33 +1652,17 @@ class _AtAGlanceSection extends StatelessWidget {
                             readyAt.difference(now).inMinutes;
                         if (minutesToReady <= 10) {
                           unassignedNearReady++;
-                          atRiskItems.add(
-                            _AtRiskOrderItem.unassignedNearReady(
-                              orderId: doc.id,
-                              vendorName: _vendorNameFromOrder(data),
-                              readyAt: readyAt,
-                              minutesToReady: minutesToReady,
-                            ),
-                          );
                         }
                       }
                     }
 
-                    if (normalizedStatus == 'Driver Pending') {
+                    if (normalizedStatus == 'Driver Assigned') {
                       final assignedAt = asDateTime(data['assignedAt']);
                       if (assignedAt != null) {
                         final minutesPending =
                             now.difference(assignedAt).inMinutes;
                         if (minutesPending >= 5) {
-                          stuckDriverPending++;
-                          atRiskItems.add(
-                            _AtRiskOrderItem.stuckDriverPending(
-                              orderId: doc.id,
-                              vendorName: _vendorNameFromOrder(data),
-                              assignedAt: assignedAt,
-                              minutesPending: minutesPending,
-                            ),
-                          );
+                          stuckDriverAssigned++;
                         }
                       }
                     }
@@ -1237,11 +1713,6 @@ class _AtAGlanceSection extends StatelessWidget {
                     : peakHours
                         .map((h) => '${h.toString().padLeft(2, '0')}:00')
                         .join(', ');
-
-                atRiskItems.sort((a, b) => b.riskScore.compareTo(a.riskScore));
-                final topAtRisk = atRiskItems.length <= 10
-                    ? atRiskItems
-                    : atRiskItems.sublist(0, 10);
 
                 final vendorsStream = FirebaseFirestore.instance
                     .collection('vendors')
@@ -1413,12 +1884,32 @@ class _AtAGlanceSection extends StatelessWidget {
                           builder: (context, foodsSnap) {
                             final unpublishedFoods = foodsSnap.data;
 
+                            Widget buildAnalyticsCard({
+                              required IconData icon,
+                              required String label,
+                              required String value,
+                              String? helper,
+                              VoidCallback? onTap,
+                              bool isLoading = false,
+                            }) {
+                              return isLoading
+                                  ? const _KpiCard.loading()
+                                  : _KpiCard(
+                                      icon: icon,
+                                      label: label,
+                                      value: value,
+                                      helper: helper,
+                                      onTap: onTap,
+                                      tone: _KpiTone.neutral,
+                                    );
+                            }
+
                             final kpiChildren = <Widget>[
                           _KpiCard(
                             icon: Icons.receipt_long,
                             label: 'Orders today',
                             value: ordersToday.toString(),
-                            helper: 'Peak: $peakHourDisplay',
+                            helper: 'Today',
                             tone: _KpiTone.brand,
                             onTap: () => onNavigate(const OrdersTodayPage()),
                           ),
@@ -1446,10 +1937,10 @@ class _AtAGlanceSection extends StatelessWidget {
                           ),
                           _KpiCard(
                             icon: Icons.hourglass_bottom,
-                            label: 'Stuck pending',
-                            value: stuckDriverPending.toString(),
-                            helper: 'Driver pending ≥5m',
-                            tone: stuckDriverPending > 0
+                            label: 'Stuck assigned',
+                            value: stuckDriverAssigned.toString(),
+                            helper: 'Driver assigned ≥5m',
+                            tone: stuckDriverAssigned > 0
                                 ? _KpiTone.warning
                                 : _KpiTone.neutral,
                             onTap: () => onNavigate(AssignmentsLogPage()),
@@ -1523,41 +2014,126 @@ class _AtAGlanceSection extends StatelessWidget {
                             onTap: () =>
                                 onNavigate(const RestaurantOrdersEarningPage()),
                           ),
+                          NewCustomersTodayKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          BuyersTodayKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          OrdersThisWeekKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          BuyersThisWeekKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          TotalFoodsKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          UnpublishedFoodsKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          FoodsAddedTodayKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          TotalRestaurantsKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          TotalRidersKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          InactiveCustomersKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          ActiveCustomersKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
+                          TotalCustomersKpi(
+                            onNavigate: onNavigate,
+                            buildCard: buildAnalyticsCard,
+                          ),
                           avgResponseKpi(),
                           rejectionRateKpi(),
-                          _AvgDeliveryKpi(
-                            future: avgDeliveryFuture,
-                            onNavigate: onNavigate,
+                        ];
+
+                        final atRiskCount =
+                            unassignedNearReady + stuckDriverAssigned;
+                        final zoneACards = <Widget>[
+                          _KpiCard(
+                            icon: Icons.receipt_long,
+                            label: 'Orders',
+                            value: ordersToday.toString(),
+                            helper: 'Today',
+                            tone: _KpiTone.brand,
+                            onTap: () => onNavigate(const OrdersTodayPage()),
+                          ),
+                          _KpiCard(
+                            icon: Icons.pending_actions,
+                            label: 'Pending',
+                            value: pendingToday.toString(),
+                            helper: 'Not done',
+                            tone: pendingToday > 0
+                                ? _KpiTone.warning
+                                : _KpiTone.neutral,
+                            onTap: () => onNavigate(const OrdersTodayPage()),
+                          ),
+                          _KpiCard(
+                            icon: Icons.warning_amber_outlined,
+                            label: 'At-Risk',
+                            value: atRiskCount.toString(),
+                            helper: 'Need action',
+                            tone: atRiskCount > 0
+                                ? _KpiTone.danger
+                                : _KpiTone.neutral,
+                            onTap: () => onNavigate(
+                              const OrderDispatcherPage(initialTabIndex: 1),
+                            ),
+                          ),
+                          _ActiveRidersKpi(onNavigate: onNavigate),
+                          _KpiCard(
+                            icon: Icons.payments,
+                            label: 'GMV',
+                            value: _formatCurrency(earningsToday),
+                            helper: 'Today',
+                            tone: earningsToday > 0
+                                ? _KpiTone.success
+                                : _KpiTone.neutral,
+                            onTap: () => onNavigate(
+                              const RestaurantOrdersEarningPage(),
+                            ),
                           ),
                         ];
 
                         return Column(
                           children: [
+                            _ZoneAKpiRow(children: zoneACards),
+                            const SizedBox(height: 12),
                             _DeliveryPipelineCard(
                               ordersToday: orders.cast<
-                                  QueryDocumentSnapshot<Map<String, dynamic>>>(),
+                                  QueryDocumentSnapshot<
+                                      Map<String, dynamic>>>(),
                               waitingAccept: waitingAccept,
                               unassignedNearReady: unassignedNearReady,
-                              stuckDriverPending: stuckDriverPending,
+                              stuckDriverAssigned: stuckDriverAssigned,
                               onNavigate: onNavigate,
                               onNavigateToOrders: onNavigateToOrders,
                               asDateTime: asDateTime,
-                            ),
-                            const SizedBox(height: 12),
-                            _KpiGrid(
-                              columns: _KpiGrid.columnsForDashboard(columns),
-                              children: kpiChildren,
                             ),
                             const SizedBox(height: 12),
                             _AlertsStrip(
                               rejectedToday: rejectedToday,
                               zeroOrderRestaurants: zeroRestaurants,
                               unpublishedFoods: unpublishedFoods,
-                              onNavigate: onNavigate,
-                            ),
-                            const SizedBox(height: 12),
-                            _AtRiskOrdersCard(
-                              items: topAtRisk,
                               onNavigate: onNavigate,
                             ),
                             const SizedBox(height: 12),
@@ -1571,19 +2147,30 @@ class _AtAGlanceSection extends StatelessWidget {
                                   onNavigate(const AnalyticsTodayPage()),
                             ),
                             const SizedBox(height: 12),
-                            _WeeklySnapshotCard(onNavigate: onNavigate),
+                            _KpiGrid(
+                              columns: _KpiGrid.columnsForDashboard(
+                                columns,
+                              ),
+                              children: kpiChildren,
+                            ),
                             const SizedBox(height: 12),
-                            _DailyFinanceShortcuts(onNavigate: onNavigate),
+                            _WeeklySnapshotCard(
+                              onNavigate: onNavigate,
+                            ),
+                            const SizedBox(height: 12),
+                            _DailyFinanceShortcuts(
+                              onNavigate: onNavigate,
+                            ),
                           ],
-                        );
-                          },
                         );
                       },
                     );
                   },
                 );
               },
-            ),
+            );
+          },
+        ),
           ],
         ),
       ),
@@ -1642,7 +2229,7 @@ int _itemCountFromOrderData(Map<String, dynamic> data) {
   return count;
 }
 
-enum _AtRiskOrderType { unassignedNearReady, stuckDriverPending }
+enum _AtRiskOrderType { unassignedNearReady, stuckDriverAssigned }
 
 class _AtRiskOrderItem {
   final _AtRiskOrderType type;
@@ -1682,14 +2269,14 @@ class _AtRiskOrderItem {
     );
   }
 
-  factory _AtRiskOrderItem.stuckDriverPending({
+  factory _AtRiskOrderItem.stuckDriverAssigned({
     required String orderId,
     required String vendorName,
     required DateTime assignedAt,
     required int minutesPending,
   }) {
     return _AtRiskOrderItem._(
-      type: _AtRiskOrderType.stuckDriverPending,
+      type: _AtRiskOrderType.stuckDriverAssigned,
       orderId: orderId,
       vendorName: vendorName,
       readyAt: null,
@@ -1707,7 +2294,7 @@ class _AtRiskOrderItem {
 
   String get statusText => switch (type) {
         _AtRiskOrderType.unassignedNearReady => 'Unassigned',
-        _AtRiskOrderType.stuckDriverPending => 'Driver Pending',
+        _AtRiskOrderType.stuckDriverAssigned => 'Driver Assigned',
       };
 
   String get timingText {
@@ -1716,7 +2303,7 @@ class _AtRiskOrderItem {
         final m = minutesToReady ?? 0;
         if (m < 0) return 'Overdue ${-m}m';
         return 'Ready in ${m}m';
-      case _AtRiskOrderType.stuckDriverPending:
+      case _AtRiskOrderType.stuckDriverAssigned:
         final m = minutesPending ?? 0;
         return 'Pending ${m}m';
     }
@@ -1728,7 +2315,7 @@ class _AtRiskOrderItem {
         final m = minutesToReady ?? 999;
         if (m <= 0) return 1000 + (-m).clamp(0, 120);
         return 900 + (10 - m).clamp(0, 10);
-      case _AtRiskOrderType.stuckDriverPending:
+      case _AtRiskOrderType.stuckDriverAssigned:
         final m = minutesPending ?? 0;
         return 700 + m.clamp(0, 120);
     }
@@ -1743,6 +2330,133 @@ String _vendorNameFromOrder(Map<String, dynamic> data) {
     if (s.isNotEmpty) return s;
   }
   return '';
+}
+
+List<_AtRiskOrderItem> _computeAtRiskItemsFromOrders(
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
+) {
+  DateTime? asDateTime(dynamic value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    return null;
+  }
+
+  String normalizeOrderStatus(dynamic raw) {
+    if (raw == null) return '—';
+    if (raw is num) {
+      switch (raw.toInt()) {
+        case 0:
+          return 'Order Placed';
+        case 1:
+          return 'Order Accepted';
+        case 2:
+          return 'In Transit';
+        case 3:
+          return 'Order Completed';
+        default:
+          return raw.toString();
+      }
+    }
+    final s = raw.toString().trim();
+    switch (s.toLowerCase()) {
+      case 'request':
+      case 'order placed':
+        return 'Order Placed';
+      case 'confirm':
+      case 'order accepted':
+        return 'Order Accepted';
+      case 'driver assigned':
+        return 'Driver Assigned';
+      case 'driver accepted':
+        return 'Driver Accepted';
+      case 'order shipped':
+        return 'Order Shipped';
+      case 'released':
+      case 'in transit':
+        return 'In Transit';
+      case 'completed':
+      case 'order completed':
+        return 'Order Completed';
+      case 'driver rejected':
+        return 'Driver Rejected';
+      case 'order rejected':
+        return 'Order Rejected';
+      default:
+        return s;
+    }
+  }
+
+  String extractDriverId(Map<String, dynamic> data) {
+    final raw = (data['driverID'] ?? data['driverId'] ?? data['driver_id'] ?? '')
+        as Object?;
+    return raw?.toString().trim() ?? '';
+  }
+
+  DateTime? computeReadyAt(Map<String, dynamic> data) {
+    final acceptedAt = asDateTime(data['acceptedAt']);
+    final createdAt = asDateTime(data['createdAt']);
+    final baseTime = acceptedAt ?? createdAt;
+    if (baseTime == null) return null;
+    final prepMin = OrderReadyTimeHelper.parsePreparationMinutes(
+      data['estimatedTimeToPrepare']?.toString(),
+    );
+    return OrderReadyTimeHelper.getReadyAt(baseTime, prepMin);
+  }
+
+  final atRiskItems = <_AtRiskOrderItem>[];
+  final now = DateTime.now();
+
+  for (final doc in orders) {
+    try {
+      final data = doc.data();
+      if (data == null || data is! Map<String, dynamic>) continue;
+
+      final status = (data['status'] ?? '').toString().toLowerCase();
+      if (status == 'order rejected' || status == 'driver rejected') continue;
+
+      final normalizedStatus = normalizeOrderStatus(data['status']);
+      final driverId = extractDriverId(data);
+
+      if (normalizedStatus == 'Order Accepted' && driverId.isEmpty) {
+        final readyAt = computeReadyAt(data);
+        if (readyAt != null) {
+          final minutesToReady = readyAt.difference(now).inMinutes;
+          if (minutesToReady <= 10) {
+            atRiskItems.add(
+              _AtRiskOrderItem.unassignedNearReady(
+                orderId: doc.id,
+                vendorName: _vendorNameFromOrder(data),
+                readyAt: readyAt,
+                minutesToReady: minutesToReady,
+              ),
+            );
+          }
+        }
+      }
+
+      if (normalizedStatus == 'Driver Assigned') {
+        final assignedAt = asDateTime(data['assignedAt']);
+        if (assignedAt != null) {
+          final minutesPending = now.difference(assignedAt).inMinutes;
+          if (minutesPending >= 5) {
+            atRiskItems.add(
+              _AtRiskOrderItem.stuckDriverAssigned(
+                orderId: doc.id,
+                vendorName: _vendorNameFromOrder(data),
+                assignedAt: assignedAt,
+                minutesPending: minutesPending,
+              ),
+            );
+          }
+        }
+      }
+    } catch (_) {
+      continue;
+    }
+  }
+
+  atRiskItems.sort((a, b) => b.riskScore.compareTo(a.riskScore));
+  return atRiskItems;
 }
 
 /// Stage averages (today) for delivery pipeline. -1 means no data.
@@ -1838,7 +2552,7 @@ class _DeliveryPipelineCard extends StatelessWidget {
     required this.ordersToday,
     required this.waitingAccept,
     required this.unassignedNearReady,
-    required this.stuckDriverPending,
+    required this.stuckDriverAssigned,
     required this.onNavigate,
     required this.asDateTime,
     this.onNavigateToOrders,
@@ -1847,7 +2561,7 @@ class _DeliveryPipelineCard extends StatelessWidget {
   final List<QueryDocumentSnapshot<Map<String, dynamic>>> ordersToday;
   final int waitingAccept;
   final int unassignedNearReady;
-  final int stuckDriverPending;
+  final int stuckDriverAssigned;
   final void Function(Widget page) onNavigate;
   final DateTime? Function(dynamic) asDateTime;
   final VoidCallback? onNavigateToOrders;
@@ -1958,7 +2672,7 @@ class _DeliveryPipelineCard extends StatelessWidget {
                   child: Text(
                     '$waitingAccept waiting accept · '
                     '$unassignedNearReady unassigned · '
-                    '$stuckDriverPending stuck',
+                    '$stuckDriverAssigned stuck',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
                     ),
@@ -2059,7 +2773,7 @@ class _AtRiskOrdersCard extends StatelessWidget {
                         case _AtRiskOrderType.unassignedNearReady:
                           onNavigate(const OrderDispatcherPage(initialTabIndex: 1));
                           return;
-                        case _AtRiskOrderType.stuckDriverPending:
+                        case _AtRiskOrderType.stuckDriverAssigned:
                           onNavigate(AssignmentsLogPage());
                           return;
                       }
@@ -2278,9 +2992,11 @@ class _ActiveRidersKpi extends StatelessWidget {
         for (final doc in docs) {
           try {
             final data = doc.data() as Map<String, dynamic>;
-            final checkedInToday = data['checkedInToday'] == true;
-            final checkedOutToday = data['checkedOutToday'] == true;
-            if (checkedInToday && !checkedOutToday) {
+            final isOnline = data['isOnline'] == true;
+            final availability =
+                (data['riderAvailability'] ?? 'offline').toString();
+            if (isOnline &&
+                availability != 'offline') {
               activeToday++;
             }
           } catch (_) {}
@@ -2290,7 +3006,7 @@ class _ActiveRidersKpi extends StatelessWidget {
           icon: Icons.drive_eta,
           label: 'Active riders',
           value: activeToday.toString(),
-          helper: 'Checked in today',
+          helper: 'Currently online',
           onTap: () => onNavigate(DriversMapPage()),
         );
       },
@@ -2395,7 +3111,7 @@ class _AlertsStrip extends StatelessWidget {
           icon: Icons.visibility_off,
           label: '${unpublishedFoods ?? 0} unpublished foods',
           tone: _KpiTone.warning,
-          onTap: () => onNavigate(const FoodsPage()),
+          onTap: () => onNavigate(const FoodsPage(filterUnpublished: true)),
         ),
       );
     }
@@ -2947,7 +3663,7 @@ class SettingsPage extends StatelessWidget {
       ),
       body: ListView.separated(
         padding: EdgeInsets.all(12),
-        itemCount: _docIds.length + 10,
+        itemCount: _docIds.length + 16,
         separatorBuilder: (_, __) => SizedBox(height: 8),
         itemBuilder: (context, index) {
           if (index == 0) {
@@ -2972,15 +3688,33 @@ class SettingsPage extends StatelessWidget {
             return _ReferralSettingsTile();
           }
           if (index == 7) {
-            return _UsersTile();
+            return _LoyaltySettingsTile();
           }
           if (index == 8) {
-            return _CustomerRepeatRateTile();
+            return const _GiftCardSettingsTile();
           }
           if (index == 9) {
+            return _UsersTile();
+          }
+          if (index == 10) {
+            return _CustomerRepeatRateTile();
+          }
+          if (index == 11) {
             return _AssignmentLogTile();
           }
-          final String docId = _docIds[index - 10];
+          if (index == 12) {
+            return _DeliveryZoneSettingsTile();
+          }
+          if (index == 13) {
+            return const _RiderTimeSettingsTile();
+          }
+          if (index == 14) {
+            return const _DispatchConfigTile();
+          }
+          if (index == 15) {
+            return const _PautosSettingsTile();
+          }
+          final String docId = _docIds[index - 16];
           return _SettingsDocTile(collection: 'settings', docId: docId);
         },
       ),
@@ -3297,6 +4031,52 @@ class _ReferralSettingsTile extends StatelessWidget {
   }
 }
 
+class _LoyaltySettingsTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.emoji_events, color: Colors.orange),
+        title: Text('Loyalty Program'),
+        subtitle: Text('Manage tiers, tokens, and rewards'),
+        trailing: Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const LoyaltySettingsPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _GiftCardSettingsTile extends StatelessWidget {
+  const _GiftCardSettingsTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.card_giftcard, color: Colors.orange),
+        title: Text('Gift Cards'),
+        subtitle: Text('Configure denominations, validity, and delivery'),
+        trailing: Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const GiftCardSettingsPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _UsersTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -3355,6 +4135,107 @@ class _AssignmentLogTile extends StatelessWidget {
             context,
             MaterialPageRoute(
               builder: (context) => AssignmentsLogPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DeliveryZoneSettingsTile extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.location_on, color: Colors.orange),
+        title: Text('Delivery Zone Settings'),
+        subtitle: Text('Service areas, barangays, and rider assignment'),
+        trailing: Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const DeliveryZoneSettingsPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _RiderTimeSettingsTile extends StatelessWidget {
+  const _RiderTimeSettingsTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.timer, color: Colors.teal),
+        title: const Text('Rider Time Settings'),
+        subtitle: const Text(
+          'Inactivity timeout, auto-logout, and rider session',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const RiderTimeSettingsPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DispatchConfigTile extends StatelessWidget {
+  const _DispatchConfigTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(
+            Icons.tune, color: Colors.deepPurple),
+        title: const Text('Dispatch Configuration'),
+        subtitle: const Text(
+            'Scoring weights, peak hours, batching'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  const DispatchConfigPage(),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PautosSettingsTile extends StatelessWidget {
+  const _PautosSettingsTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.shopping_bag, color: Colors.orange),
+        title: const Text('PAUTOS Settings'),
+        subtitle: const Text(
+          'Service fee, delivery fee, rider commission',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const PautosSettingsPage(),
             ),
           );
         },

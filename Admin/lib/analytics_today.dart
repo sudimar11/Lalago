@@ -987,8 +987,9 @@ class _AnalyticsTodayPageState extends State<AnalyticsTodayPage> {
                                 final data =
                                     riderDoc.data() as Map<String, dynamic>?;
                                 if (data == null) continue;
-                                final isActive =
-                                    data['checkedOutToday'] != true;
+                                final isActive = data['isOnline'] == true &&
+                                    (data['riderAvailability'] ?? 'offline') !=
+                                        'offline';
                                 if (isActive) activeRiders++;
                               }
                             }

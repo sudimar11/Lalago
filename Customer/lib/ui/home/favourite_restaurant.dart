@@ -237,8 +237,10 @@ class _FavouriteRestaurantScreenState extends State<FavouriteRestaurantScreen>
                   )),
                   errorWidget: (context, url, error) => ClipRRect(
                       borderRadius: BorderRadius.circular(20),
-                      child: Image.network(
-                        placeHolderImage,
+                      child: CachedNetworkImage(
+                        imageUrl: placeHolderImage,
+                        memCacheWidth: 200,
+                        memCacheHeight: 200,
                         fit: BoxFit.cover,
                       )),
                   fit: BoxFit.cover,
@@ -392,8 +394,10 @@ class _FavouriteRestaurantScreenState extends State<FavouriteRestaurantScreen>
                   )),
                   errorWidget: (context, url, error) => ClipRRect(
                       borderRadius: BorderRadius.circular(15),
-                      child: Image.network(
-                        placeHolderImage,
+                      child: CachedNetworkImage(
+                        imageUrl: placeHolderImage,
+                        memCacheWidth: 200,
+                        memCacheHeight: 200,
                         fit: BoxFit.cover,
                         width: MediaQuery.of(context).size.width,
                         height: MediaQuery.of(context).size.height,

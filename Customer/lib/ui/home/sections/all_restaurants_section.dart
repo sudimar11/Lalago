@@ -19,10 +19,13 @@ import 'package:foodie_customer/ui/home/sections/restaurant_filter_card.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/widget/lazy_loading_widget.dart';
+import 'package:foodie_customer/widgets/native_ad_restaurant_card.dart';
+import 'package:foodie_customer/widgets/performance_badge.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/main.dart';
 import 'package:foodie_customer/model/FavouriteModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 
 class AllRestaurantsSection extends StatefulWidget {
   final List<OfferModel> offerList;
@@ -351,18 +354,26 @@ class _AllRestaurantsSectionState extends State<AllRestaurantsSection> {
               scrollDirection: Axis.vertical,
               physics: const NeverScrollableScrollPhysics(),
               cacheExtent: 500.0,
-              itemCount: sortedRestaurants.length,
+              itemCount: sortedRestaurants.length +
+                  (sortedRestaurants.length / 5).floor(),
               itemBuilder: (context, index) {
-              VendorModel vendorModel = sortedRestaurants[index];
-              return _AllRestaurantCard(
-                vendorModel: vendorModel,
-                offerList: widget.offerList,
-                allProducts: widget.allProducts,
-                currencyModel: widget.currencyModel,
-                lstFav: widget.lstFav,
-                onFavoriteChanged: widget.onFavoriteChanged,
-              );
-            },
+                if ((index + 1) % 6 == 0) {
+                  return const NativeAdRestaurantCard();
+                }
+                final restaurantIndex = index - (index + 1) ~/ 6;
+                if (restaurantIndex >= sortedRestaurants.length) {
+                  return const SizedBox.shrink();
+                }
+                final vendorModel = sortedRestaurants[restaurantIndex];
+                return _AllRestaurantCard(
+                  vendorModel: vendorModel,
+                  offerList: widget.offerList,
+                  allProducts: widget.allProducts,
+                  currencyModel: widget.currencyModel,
+                  lstFav: widget.lstFav,
+                  onFavoriteChanged: widget.onFavoriteChanged,
+                );
+              },
             ),
           ),
           // Loading indicator at the bottom
@@ -607,10 +618,14 @@ class _AllRestaurantCardState extends State<_AllRestaurantCard> {
     bool hasOfferBadge = discountAmountTempList.isNotEmpty;
 
     return GestureDetector(
-      onTap: () => push(
-        context,
-        NewVendorProductsScreen(vendorModel: widget.vendorModel),
-      ),
+      onTap: () {
+        ClickTrackingService.logClick(
+          userId: MyAppState.currentUser?.userID ?? 'guest',
+          restaurantId: widget.vendorModel.id,
+          source: 'all_restaurants',
+        );
+        push(context, NewVendorProductsScreen(vendorModel: widget.vendorModel));
+      },
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         child: Stack(
@@ -627,6 +642,8 @@ class _AllRestaurantCardState extends State<_AllRestaurantCard> {
                               imageUrl: getImageVAlidUrl(bestImageUrl!),
                               width: cardWidth,
                               height: cardHeight,
+                              memCacheWidth: 280,
+                              memCacheHeight: 280,
                               fit: BoxFit.cover,
                               placeholder: (context, url) => neutralBackground,
                               errorWidget: (context, url, error) =>
@@ -777,17 +794,31 @@ class _AllRestaurantCardState extends State<_AllRestaurantCard> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        widget.vendorModel.title,
-                        maxLines: 1,
-                        style: TextStyle(
-                          fontFamily: "Poppinsm",
-                          letterSpacing: 0.5,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color:
-                              isDarkMode(context) ? Colors.white : Colors.black,
-                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              widget.vendorModel.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontFamily: "Poppinsm",
+                                letterSpacing: 0.5,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color:
+                                    isDarkMode(context)
+                                        ? Colors.white
+                                        : Colors.black,
+                              ),
+                            ),
+                          ),
+                          PerformanceBadge(
+                            vendorModel: widget.vendorModel,
+                            compact: true,
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 8),
                       Row(

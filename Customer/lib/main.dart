@@ -9,23 +9,30 @@ import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_ai/firebase_ai.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/firebase_options.dart';
 import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/mail_setting.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/cart_state_notifier.dart';
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
 import 'package:foodie_customer/utils/DarkThemeProvider.dart';
+import 'package:foodie_customer/utils/session_manager.dart';
 import 'package:foodie_customer/utils/Styles.dart';
 import 'package:foodie_customer/utils/notification_service.dart';
 import 'package:provider/provider.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:foodie_customer/utils/connection_tester.dart';
+import 'package:foodie_customer/services/ad_service.dart';
+import 'package:foodie_customer/services/network_safe_api.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
@@ -143,6 +150,32 @@ Future<void> _appendCursorDebugLog({
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Limit image cache to reduce memory (OutOfMemoryError mitigation)
+  PaintingBinding.instance.imageCache.maximumSize = 100;
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 50 << 20; // 50 MB
+
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    debugPrint('💥 [CRASH] ErrorWidget caught: ${details.exception}');
+    debugPrint('💥 [STACK] ${details.stack}');
+    return Material(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            kDebugMode
+                ? 'Error: ${details.exception}\n\n${details.stack}'
+                : 'Something went wrong. Please restart the app.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: kDebugMode ? Colors.red : Colors.black87,
+              fontSize: kDebugMode ? 12 : 16,
+            ),
+          ),
+        ),
+      ),
+    );
+  };
   // #region agent log
   unawaited(_appendDebugLog(
     hypothesisId: 'H0',
@@ -217,6 +250,8 @@ void main() async {
 
   await UserPreference.init();
 
+  await SessionManager.initialize();
+
   if (FireStoreUtils.isMessagingEnabled) {
     // Initialize notification service before app can receive FCM (ensures pop-up works)
     final notificationService = NotificationService.instance;
@@ -262,12 +297,20 @@ void main() async {
     }());
   }
 
+  await AdService.instance.initialize();
+
   runApp(
     MultiProvider(
       providers: [
         Provider<CartDatabase>(
           create: (_) => CartDatabase(),
-        )
+        ),
+        ChangeNotifierProxyProvider<CartDatabase, CartStateNotifier>(
+          create: (context) =>
+              CartStateNotifier(context.read<CartDatabase>()),
+          update: (context, cartDb, previous) =>
+              previous ?? CartStateNotifier(cartDb),
+        ),
       ],
       child: MyApp(),
     ),
@@ -281,7 +324,7 @@ class MyApp extends StatefulWidget {
 
 class MyAppState extends State<MyApp> with WidgetsBindingObserver {
   static User? currentUser;
-  static AddressModel selectedPosotion = AddressModel();
+  static AddressModel selectedPosition = AddressModel();
   static const _debugLogPath =
       '/Users/sudimard/Desktop/customer/.cursor/debug.log';
 
@@ -310,7 +353,60 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   // Connectivity state
   StreamSubscription<ConnectivityResult>? _connectivitySubscription;
+  Timer? _connectivityVerifyTimer;
   bool _isOffline = false;
+  bool _isCheckingConnectivity = false;
+
+  void _connectivityLog(String message) {
+    debugPrint('[CONNECTIVITY] $message');
+  }
+
+  void _onConnectivityChanged(bool offline) {
+    if (!mounted) return;
+    final oldOffline = _isOffline;
+    if (offline != oldOffline) {
+      _connectivityLog('State: _isOffline $oldOffline -> $offline');
+      setState(() {
+        _isOffline = offline;
+      });
+    }
+  }
+
+  Future<void> _verifyConnectivity() async {
+    try {
+      final connected = await isConnected();
+      _connectivityLog(
+        'Periodic check: connected=$connected, wasOffline=$_isOffline',
+      );
+      if (connected && _isOffline && mounted) {
+        _onConnectivityChanged(false);
+      }
+    } catch (e) {
+      _connectivityLog('Periodic check error: $e');
+    }
+  }
+
+  Future<void> _onRetryConnectivity() async {
+    if (!mounted) return;
+    setState(() {
+      _isCheckingConnectivity = true;
+    });
+    try {
+      final connected = await isConnected();
+      _connectivityLog('Manual retry: connected=$connected');
+      if (mounted) {
+        _onConnectivityChanged(!connected);
+      }
+    } catch (e) {
+      _connectivityLog('Manual retry error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingConnectivity = false;
+        });
+      }
+    }
+  }
 
   /// Resolves the default address from a list of shipping addresses.
   /// Returns the address with isDefault == true, or falls back to the first address if no default is found.
@@ -327,13 +423,13 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
     }
   }
 
-  /// Updates MyAppState.selectedPosotion with the resolved default address from currentUser's shippingAddress.
+  /// Updates MyAppState.selectedPosition with the resolved default address from currentUser's shippingAddress.
   /// This should be called after any address update operation.
   static void updateSelectedPositionFromDefault() {
     if (currentUser != null && currentUser!.shippingAddress != null) {
       final defaultAddr = resolveDefaultAddress(currentUser!.shippingAddress);
       if (defaultAddr != null) {
-        selectedPosotion = defaultAddr;
+        selectedPosition = defaultAddr;
       }
     }
   }
@@ -455,24 +551,46 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
                         bottom: false,
                         child: Container(
                           color: Colors.white,
-                          padding:
-                              EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Image.asset(
-                                'assets/lost.png',
-                                width: 100,
-                                height: 100,
-                              ),
-                              SizedBox(width: 8),
+                              if (_isCheckingConnectivity)
+                                const SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              else
+                                Image.asset(
+                                  'assets/lost.png',
+                                  width: 40,
+                                  height: 40,
+                                ),
+                              const SizedBox(width: 8),
                               Text(
-                                'Connection Lost',
+                                _isCheckingConnectivity
+                                    ? 'Reconnecting...'
+                                    : 'Connection Lost',
                                 style: TextStyle(
-                                  color: Colors.red,
+                                  color: _isCheckingConnectivity
+                                      ? Colors.orange
+                                      : Colors.red,
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold,
                                 ),
+                              ),
+                              const SizedBox(width: 16),
+                              TextButton(
+                                onPressed: _isCheckingConnectivity
+                                    ? null
+                                    : _onRetryConnectivity,
+                                child: const Text('Retry'),
                               ),
                             ],
                           ),
@@ -492,24 +610,26 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void initState() {
     initializeFlutterFire();
     WidgetsBinding.instance.addObserver(this);
+    NetworkSafeAPI.init(onRecheck: _verifyConnectivity);
     // Listen for connectivity changes and toggle offline banner
     _connectivitySubscription = Connectivity()
         .onConnectivityChanged
         .listen((ConnectivityResult result) {
       final bool offline = result == ConnectivityResult.none;
-      if (mounted && offline != _isOffline) {
-        setState(() {
-          _isOffline = offline;
-        });
+      _connectivityLog('Stream: result=$result, offline=$offline');
+      if (mounted) {
+        _onConnectivityChanged(offline);
       }
     });
-    // Set initial connectivity state
-    Connectivity().checkConnectivity().then((result) {
-      final bool offline = result == ConnectivityResult.none;
-      if (mounted && offline != _isOffline) {
-        setState(() {
-          _isOffline = offline;
-        });
+    // Periodic verification (connectivity_plus stream may not fire on restore)
+    _connectivityVerifyTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _verifyConnectivity(),
+    );
+    // Set initial connectivity state using layered check
+    isConnected().then((connected) {
+      if (mounted) {
+        _onConnectivityChanged(!connected);
       }
     });
     super.initState();
@@ -519,9 +639,15 @@ class MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _connectivitySubscription?.cancel();
+    _connectivityVerifyTimer?.cancel();
     super.dispose();
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {}
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _connectivityLog('App resumed, running verification');
+      _verifyConnectivity();
+    }
+  }
 }

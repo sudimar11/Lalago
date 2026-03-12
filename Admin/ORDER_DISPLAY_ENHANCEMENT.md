@@ -12,7 +12,7 @@ Enhanced the Recent Orders card display to show comprehensive order information,
   - 🔵 Blue: Order Placed
   - 🟠 Orange: Order Accepted
   - 🟣 Purple: Driver Assigned/Accepted
-  - 🟦 Indigo: Order Shipped/Driver Pending
+  - 🟦 Indigo: Order Shipped/Driver Accepted
   - 🟢 Green: Completed
   - 🔴 Red: Rejected
 

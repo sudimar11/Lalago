@@ -3,8 +3,13 @@ import 'package:carousel_slider/carousel_slider.dart';
 import 'package:foodie_customer/model/BannerModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/model/offer_model.dart';
+import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
 class BannerSection extends StatelessWidget {
+  final bool isBannerLoading;
+  final String? bannerErrorMessage;
+  final VoidCallback? onBannerRetry;
   final bool areBannerImagesCached;
   final List<BannerModel> cachedFilteredBanners;
   final List<Widget>? cachedCarouselItems;
@@ -18,6 +23,9 @@ class BannerSection extends StatelessWidget {
 
   const BannerSection({
     Key? key,
+    this.isBannerLoading = false,
+    this.bannerErrorMessage,
+    this.onBannerRetry,
     required this.areBannerImagesCached,
     required this.cachedFilteredBanners,
     required this.cachedCarouselItems,
@@ -32,6 +40,15 @@ class BannerSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (bannerErrorMessage != null && onBannerRetry != null) {
+      return HomeSectionUtils.sectionError(
+        message: bannerErrorMessage!,
+        onRetry: onBannerRetry!,
+      );
+    }
+    if (isBannerLoading) {
+      return ShimmerWidgets.bannerSkeleton();
+    }
     if (offerVendorList.isEmpty) {
       return Padding(
         padding: const EdgeInsets.only(

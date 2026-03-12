@@ -6,6 +6,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:foodie_driver/widgets/replacement_search_dialog.dart';
 import 'package:foodie_driver/ui/chat_screen/admin_driver_chat_screen.dart';
+import 'package:foodie_driver/ui/communication/unified_communication_hub_screen.dart';
 
 class OrderDetailsPage extends StatefulWidget {
   final Map<String, dynamic> order; // Pass the selected order data
@@ -210,6 +211,27 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
         );
       }
     }
+  }
+
+  /// Builds a list of entries for the order items list: bundle header or item map.
+  List<Map<String, dynamic>> _orderItemsWithBundleHeaders(
+      List<dynamic> items) {
+    final List<Map<String, dynamic>> result = [];
+    for (int i = 0; i < items.length; i++) {
+      final item = items[i];
+      if (item is! Map<String, dynamic>) continue;
+      final bid = item['bundleId']?.toString();
+      final bname = item['bundleName']?.toString();
+      if (bid != null &&
+          bid.isNotEmpty &&
+          (i == 0 ||
+              (items[i - 1] is Map &&
+                  (items[i - 1] as Map)['bundleId']?.toString() != bid))) {
+        result.add({'isHeader': true, 'bundleName': bname ?? 'Bundle'});
+      }
+      result.add({'isHeader': false, 'item': item});
+    }
+    return result;
   }
 
   String _readFoodName(Map<String, dynamic> data) {
@@ -600,6 +622,28 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
         title: const Text('Order Details'),
         actions: [
           IconButton(
+            tooltip: 'Restaurant Chat',
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: () {
+              final orderId = _getOrderId();
+              if (orderId.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Order ID missing')),
+                );
+                return;
+              }
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => UnifiedCommunicationHubScreen(
+                    initialTab: UnifiedCommunicationTab.restaurants,
+                    initialOrderId: orderId,
+                    autoOpenConversation: true,
+                  ),
+                ),
+              );
+            },
+          ),
+          IconButton(
             tooltip: 'Admin Messages',
             icon: const Icon(Icons.support_agent),
             onPressed: () {
@@ -696,10 +740,24 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
               child: ListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                itemCount: orderedItems.length,
+                itemCount: _orderItemsWithBundleHeaders(orderedItems).length,
                 itemBuilder: (context, index) {
-                final item = orderedItems[index];
-                if (item is! Map) return const SizedBox.shrink();
+                final entries = _orderItemsWithBundleHeaders(orderedItems);
+                final entry = entries[index];
+                if (entry['isHeader'] == true) {
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 6),
+                    child: Text(
+                      '— Bundle: ${entry['bundleName'] ?? 'Value Meal'} —',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  );
+                }
+                final item = entry['item'] as Map<String, dynamic>;
                 final productId = item['id']?.toString() ?? '';
                 final name = item['name']?.toString() ?? 'Unknown Item';
                 final qty = item['quantity']?.toString() ?? '0';
@@ -711,6 +769,8 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
                 final isUnavailable = status == 'unavailable';
 
                 final canRemove = orderedItems.length > 1;
+                final isAddon = item['addonPromoId'] != null &&
+                    item['addonPromoId'].toString().isNotEmpty;
                 return Container(
                   margin: const EdgeInsets.only(bottom: 10),
                   padding: const EdgeInsets.all(12),
@@ -721,12 +781,37 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '$qty × $name',
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '$qty × $name',
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          if (isAddon)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade100,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Add-on',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.green.shade800,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                       if (isUnavailable)
                         Padding(

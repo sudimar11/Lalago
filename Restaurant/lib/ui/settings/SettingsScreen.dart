@@ -1,4 +1,4 @@
-import 'package:easy_localization/easy_localization.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/constants.dart';
@@ -24,6 +24,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   User? user;
   VendorModel vendor = VendorModel();
   bool pushNewMessages = false, orderUpdates = false, newArrivals = false, promotions = false, photos = false, reststatus = false;
+  bool prepRemindersEnabled = true;
+  int reminderMinutes = 5;
+
+  bool soundAlertsEnabled = true;
+  int timerSeconds = 180;
+  bool autoPauseEnabled = true;
+  int consecutiveMisses = 0;
 
   VendorModel? vendors;
 
@@ -48,10 +55,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
         photos = vendors!.hidePhotos;
       });
     });
+    FirebaseFirestore.instance
+        .collection('vendors')
+        .doc(MyAppState.currentUser!.vendorID)
+        .get()
+        .then((snap) {
+      if (snap.exists && snap.data() != null) {
+        final d = snap.data()!;
+        final acceptance = d['acceptanceSettings'] as Map<String, dynamic>? ?? {};
+        final metrics = d['acceptanceMetrics'] as Map<String, dynamic>? ?? {};
+        setState(() {
+          prepRemindersEnabled = d['prepRemindersEnabled'] as bool? ?? true;
+          reminderMinutes = d['reminderMinutes'] as int? ?? 5;
+          soundAlertsEnabled =
+              acceptance['soundAlertsEnabled'] as bool? ?? true;
+          timerSeconds = acceptance['timerSeconds'] as int? ?? 180;
+          autoPauseEnabled =
+              acceptance['autoPauseEnabled'] as bool? ?? true;
+          consecutiveMisses =
+              (metrics['consecutiveUnaccepted'] as int?) ?? 0;
+        });
+      }
+    });
     //reststatus = user!.settings.reststatus;
     //print(widget.user.settings.promotions.toString()+"====U");
     print(MyAppState.currentUser!.settings.promotions.toString() + "====UR");
     super.initState();
+  }
+
+  Future<void> _savePrepReminderPrefs() async {
+    final vid = MyAppState.currentUser?.vendorID;
+    if (vid == null || vid.isEmpty) return;
+    try {
+      await FirebaseFirestore.instance.collection('vendors').doc(vid).update({
+        'prepRemindersEnabled': prepRemindersEnabled,
+        'reminderMinutes': reminderMinutes,
+      });
+    } catch (e) {
+      debugPrint('Error saving prep reminder prefs: $e');
+    }
+  }
+
+  Future<void> _saveAcceptancePrefs() async {
+    final vid = MyAppState.currentUser?.vendorID;
+    if (vid == null || vid.isEmpty) return;
+    try {
+      await FirebaseFirestore.instance.collection('vendors').doc(vid).update({
+        'acceptanceSettings': {
+          'soundAlertsEnabled': soundAlertsEnabled,
+          'timerSeconds': timerSeconds,
+          'autoPauseEnabled': autoPauseEnabled,
+        },
+      });
+    } catch (e) {
+      debugPrint('Error saving acceptance prefs: $e');
+    }
   }
 
   @override
@@ -60,7 +118,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       backgroundColor: isDarkMode(context) ? Color(DARK_VIEWBG_COLOR) : Colors.white,
       appBar: AppBar(
         title: Text(
-          'Settings'.tr(),
+          'Settings',
           style: TextStyle(
             color: isDarkMode(context) ? Color(0xFFFFFFFF) : Color(0Xff333333),
           ),
@@ -74,9 +132,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Padding(
                 padding: const EdgeInsets.only(right: 16.0, left: 16, top: 16, bottom: 8),
                 child: Text(
-                  'Push Notifications'.tr(),
+                  'Push Notifications',
                   style: TextStyle(color: isDarkMode(context) ? Colors.white54 : Colors.black54, fontSize: 18),
-                ).tr(),
+                ),
               ),
               Material(
                 elevation: 2,
@@ -88,12 +146,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                         activeColor: Color(COLOR_ACCENT),
                         title: Text(
-                          'Allow Push Notifications'.tr(),
+                          'Allow Push Notifications',
                           style: TextStyle(
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: pushNewMessages,
                         onChanged: (bool newValue) {
                           pushNewMessages = newValue;
@@ -102,12 +160,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                         activeColor: Color(COLOR_ACCENT),
                         title: Text(
-                          'Order Updates'.tr(),
+                          'Order Updates',
                           style: TextStyle(
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: orderUpdates,
                         onChanged: (bool newValue) {
                           orderUpdates = newValue;
@@ -123,7 +181,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ? Colors.white
                                 : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: newArrivals,
                         onChanged: (bool newValue) {
                           newArrivals = newValue;
@@ -138,7 +196,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ? Colors.white
                                 : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: newArrivals,
                         onChanged: (bool newValue) {
                           newArrivals = newValue;
@@ -147,12 +205,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                         activeColor: Color(COLOR_ACCENT),
                         title: Text(
-                          'Promotions'.tr(),
+                          'Promotions',
                           style: TextStyle(
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: promotions,
                         onChanged: (bool newValue) {
                           promotions = newValue;
@@ -161,12 +219,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SwitchListTile.adaptive(
                         activeColor: Color(COLOR_ACCENT),
                         title: Text(
-                          'Hide Photos'.tr(),
+                          'Hide Photos',
                           style: TextStyle(
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: photos,
                         onChanged: (bool newValue) {
                           photos = newValue;
@@ -175,7 +233,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Container(
                         padding: EdgeInsets.only(left: 20, right: 20, bottom: 20),
                         child: Text(
-                          "NOTE : Hides your photos from the photo section, without disturbing photos on the menu item listing.".tr(),
+                          "NOTE : Hides your photos from the photo section, without disturbing photos on the menu item listing.",
                           style: TextStyle(fontSize: 15),
                         )),
                     SwitchListTile.adaptive(
@@ -186,12 +244,160 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             fontSize: 17,
                             color: isDarkMode(context) ? Colors.white : Colors.black,
                           ),
-                        ).tr(),
+                        ),
                         value: reststatus,
                         onChanged: (bool newValue) {
                           reststatus = newValue;
                           setState(() {});
                         }),
+                    SwitchListTile.adaptive(
+                        activeColor: Color(COLOR_ACCENT),
+                        title: Text(
+                          'Preparation Time Reminders',
+                          style: TextStyle(
+                            fontSize: 17,
+                            color: isDarkMode(context) ? Colors.white : Colors.black,
+                          ),
+                        ),
+                        subtitle: Text(
+                          'Get notified when orders are almost ready',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: isDarkMode(context) ? Colors.white54 : Colors.black54,
+                          ),
+                        ),
+                        value: prepRemindersEnabled,
+                        onChanged: (bool newValue) {
+                          prepRemindersEnabled = newValue;
+                          setState(() {});
+                          _savePrepReminderPrefs();
+                        }),
+                    ListTile(
+                      title: Text(
+                        'Remind me before',
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      subtitle: Text('$reminderMinutes minutes'),
+                      trailing: DropdownButton<int>(
+                        value: reminderMinutes,
+                        items: [3, 5, 10].map((m) {
+                          return DropdownMenuItem(
+                            value: m,
+                            child: Text('$m min'),
+                          );
+                        }).toList(),
+                        onChanged: (int? value) {
+                          if (value != null) {
+                            reminderMinutes = value;
+                            setState(() {});
+                            _savePrepReminderPrefs();
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 16, left: 16, top: 24, bottom: 8),
+                child: Text(
+                  'Acceptance Settings',
+                  style: TextStyle(color: isDarkMode(context) ? Colors.white54 : Colors.black54, fontSize: 18),
+                ),
+              ),
+              Material(
+                elevation: 2,
+                color: isDarkMode(context) ? Color(DARK_CARD_BG_COLOR) : Colors.white,
+                child: Column(
+                  children: [
+                    SwitchListTile.adaptive(
+                      activeColor: Color(COLOR_ACCENT),
+                      title: Text(
+                        'Sound Alerts',
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Play sound for new orders',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: isDarkMode(context) ? Colors.white54 : Colors.black54,
+                        ),
+                      ),
+                      value: soundAlertsEnabled,
+                      onChanged: (v) {
+                        setState(() => soundAlertsEnabled = v);
+                        _saveAcceptancePrefs();
+                      },
+                    ),
+                    ListTile(
+                      title: Text(
+                        'Acceptance Timer',
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      subtitle: Text('${timerSeconds ~/ 60} minutes'),
+                      trailing: DropdownButton<int>(
+                        value: timerSeconds,
+                        items: [60, 120, 180, 240, 300].map((s) {
+                          return DropdownMenuItem(
+                            value: s,
+                            child: Text('${s ~/ 60} min'),
+                          );
+                        }).toList(),
+                        onChanged: (v) {
+                          if (v != null) {
+                            setState(() => timerSeconds = v);
+                            _saveAcceptancePrefs();
+                          }
+                        },
+                      ),
+                    ),
+                    SwitchListTile.adaptive(
+                      activeColor: Color(COLOR_ACCENT),
+                      title: Text(
+                        'Auto-Pause on Misses',
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      subtitle: Text(
+                        'Pause store after consecutive unaccepted orders',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: isDarkMode(context) ? Colors.white54 : Colors.black54,
+                        ),
+                      ),
+                      value: autoPauseEnabled,
+                      onChanged: (v) {
+                        setState(() => autoPauseEnabled = v);
+                        _saveAcceptancePrefs();
+                      },
+                    ),
+                    ListTile(
+                      title: Text(
+                        'Consecutive Misses',
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: isDarkMode(context) ? Colors.white : Colors.black,
+                        ),
+                      ),
+                      trailing: Text(
+                        '$consecutiveMisses',
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -205,7 +411,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: CupertinoButton(
                       padding: const EdgeInsets.all(12.0),
                       onPressed: () async {
-                        showProgress(context, 'Saving changes...'.tr(), true);
+                        showProgress(context, 'Saving changes...', true);
                         user!.settings.pushNewMessages = pushNewMessages;
                         user!.settings.orderUpdates = orderUpdates;
                         user!.settings.newArrivals = newArrivals;
@@ -216,6 +422,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         if (MyAppState.currentUser!.vendorID.isNotEmpty) {
                           await FireStoreUtils.updatestatus(vendor, reststatus);
                           await FireStoreUtils.updatePhoto(vendor, photos);
+                          await _savePrepReminderPrefs();
+                          await _saveAcceptancePrefs();
                         }
 
                         User? updateUser = await FireStoreUtils.updateCurrentUser(user!);
@@ -228,13 +436,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               content: Text(
                                 'Settings saved successfully',
                                 style: TextStyle(fontSize: 17),
-                              ).tr()));
+                              )));
                         }
                       },
                       child: Text(
                         'Save',
                         style: TextStyle(fontSize: 18, color: Color(COLOR_PRIMARY)),
-                      ).tr(),
+                      ),
                       color: isDarkMode(context) ? Colors.black12 : Colors.white,
                     ),
                   ),

@@ -137,8 +137,8 @@
 //         double distanceInMeters = Geolocator.distanceBetween(
 //             vendorModel.latitude,
 //             vendorModel.longitude,
-//             MyAppState.selectedPosotion.location!.latitude,
-//             MyAppState.selectedPosotion.location!.longitude);
+//             MyAppState.selectedPosition.location!.latitude,
+//             MyAppState.selectedPosition.location!.longitude);
 
 //         double kilometer = distanceInMeters / 1000;
 

@@ -293,9 +293,11 @@ class _MapViewScreenState extends State<MapViewScreen> {
                                                           borderRadius:
                                                               BorderRadius
                                                                   .circular(15),
-                                                          child: Image.network(
-                                                            AppGlobal
+                                                          child: CachedNetworkImage(
+                                                            imageUrl: AppGlobal
                                                                 .placeHolderImage!,
+                                                            memCacheWidth: 200,
+                                                            memCacheHeight: 200,
                                                             fit: BoxFit.cover,
                                                             width:
                                                                 MediaQuery.of(
@@ -421,11 +423,11 @@ class _MapViewScreenState extends State<MapViewScreen> {
   }
 
   Future<void> getTempLocation() async {
-    debugPrint('location map: ${MyAppState.selectedPosotion}');
+    debugPrint('location map: ${MyAppState.selectedPosition}');
     if (MyAppState.currentUser == null &&
-        MyAppState.selectedPosotion.location!.longitude != 0 &&
-        MyAppState.selectedPosotion.location!.latitude != 0) {
-      locationData = MyAppState.selectedPosotion.location;
+        MyAppState.selectedPosition.location!.longitude != 0 &&
+        MyAppState.selectedPosition.location!.latitude != 0) {
+      locationData = MyAppState.selectedPosition.location;
       setState(() {});
     }
   }

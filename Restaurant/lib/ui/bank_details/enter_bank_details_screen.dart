@@ -1,4 +1,3 @@
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/constants.dart';
 import 'package:foodie_restaurant/main.dart';
@@ -17,7 +16,7 @@ class EnterBankDetailScreen extends StatefulWidget {
 
 class _EnterBankDetailScreenState extends State<EnterBankDetailScreen> {
   User? user;
-  String title = "Add Bank".tr();
+  String title = "Add Bank";
   GlobalKey<FormState> _bankDetailFormKey = GlobalKey();
   TextEditingController bankNameController = TextEditingController();
   TextEditingController branchNameController = TextEditingController();
@@ -34,7 +33,7 @@ class _EnterBankDetailScreenState extends State<EnterBankDetailScreen> {
         user = value!;
         MyAppState.currentUser = value;
         if (user!.userBankDetails.accountNumber.isNotEmpty) {
-          title = "Edit Bank".tr();
+          title = "Edit Bank";
           bankNameController = TextEditingController(text: user!.userBankDetails.bankName);
           branchNameController = TextEditingController(text: user!.userBankDetails.branchName);
           holderNameController = TextEditingController(text: user!.userBankDetails.holderName);
@@ -77,15 +76,15 @@ class _EnterBankDetailScreenState extends State<EnterBankDetailScreen> {
                   SizedBox(
                     height: 30,
                   ),
-                  buildTextFiled(validator: validateName, title: "Bank Name".tr(), controller: bankNameController),
-                  buildTextFiled(validator: validateOthers, title: "Branch Name".tr(), controller: branchNameController),
-                  buildTextFiled(validator: validateOthers, title: "Holder Name".tr(), controller: holderNameController),
-                  buildTextFiled(validator: validateOthers, title: "Account Number".tr(), controller: accountNoController),
+                  buildTextFiled(validator: validateName, title: "Bank Name", controller: bankNameController),
+                  buildTextFiled(validator: validateOthers, title: "Branch Name", controller: branchNameController),
+                  buildTextFiled(validator: validateOthers, title: "Holder Name", controller: holderNameController),
+                  buildTextFiled(validator: validateOthers, title: "Account Number", controller: accountNoController),
                   buildTextFiled(
                       validator: (String? value) {
                         return null;
                       },
-                      title: "Other Information".tr(),
+                      title: "Other Information",
                       controller: otherInfoController),
                   Padding(
                     padding: const EdgeInsets.only(top: 45.0, bottom: 25),
@@ -105,16 +104,16 @@ class _EnterBankDetailScreenState extends State<EnterBankDetailScreen> {
                           MyAppState.currentUser = updatedUser;
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                               content: Text(
-                            'Bank Details saved successfully'.tr(),
+                            'Bank Details saved successfully',
                             style: TextStyle(fontSize: 17),
-                          ).tr()));
+                          )));
                           Navigator.pop(context, true);
                         } else {
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                               content: Text(
-                            "notSaveDetailsTryAgain".tr(),
+                            "notSaveDetailsTryAgain",
                             style: TextStyle(fontSize: 17),
-                          ).tr()));
+                          )));
                           Navigator.pop(context, false);
                         }
                       }

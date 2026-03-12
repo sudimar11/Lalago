@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:brgy/constants.dart';
@@ -174,13 +176,26 @@ class _DriverReportsPageState extends State<DriverReportsPage> {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {
+                  developer.log(
+                    'Driver reports stream error: ${snapshot.error}',
+                    name: 'DriverReportsPage',
+                    error: snapshot.error,
+                    stackTrace: snapshot.stackTrace,
+                  );
                   return Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const Icon(Icons.error, size: 64, color: Colors.red),
                         const SizedBox(height: 16),
-                        Text('Error: ${snapshot.error}'),
+                        Text(
+                          'Unable to load reports. Check the console log for details.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.grey[700],
+                          ),
+                        ),
                       ],
                     ),
                   );

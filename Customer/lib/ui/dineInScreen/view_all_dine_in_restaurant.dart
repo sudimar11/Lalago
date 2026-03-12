@@ -35,8 +35,8 @@ class _ViewAllDineInRestaurantState extends State<ViewAllDineInRestaurant> {
         .where("enabledDiveInFuture", isEqualTo: true);
 
     GeoFirePoint center = GeoFlutterFire().point(
-        latitude: MyAppState.selectedPosotion.location!.latitude,
-        longitude: MyAppState.selectedPosotion.location!.longitude);
+        latitude: MyAppState.selectedPosition.location!.latitude,
+        longitude: MyAppState.selectedPosition.location!.longitude);
     String field = 'g';
 
     Stream<List<DocumentSnapshot>> stream = GeoFlutterFire()
@@ -156,11 +156,11 @@ class _ViewAllDineInRestaurantState extends State<ViewAllDineInRestaurant> {
                       )),
                       errorWidget: (context, url, error) => ClipRRect(
                           borderRadius: BorderRadius.circular(10),
-                          child: Image.network(
-                            AppGlobal.placeHolderImage!,
+                          child: CachedNetworkImage(
+                            imageUrl: AppGlobal.placeHolderImage!,
+                            memCacheWidth: 200,
+                            memCacheHeight: 200,
                             fit: BoxFit.cover,
-                            cacheHeight: 100,
-                            cacheWidth: 100,
                           )),
                       fit: BoxFit.cover,
                     ),

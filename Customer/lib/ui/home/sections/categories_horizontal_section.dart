@@ -2,15 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/VendorCategoryModel.dart';
 import 'package:foodie_customer/services/helper.dart';
+import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/widget/category_card.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
 class CategoriesHorizontalSection extends StatelessWidget {
   final Future<List<VendorCategoryModel>> categoriesFuture;
+  final VoidCallback? onRetry;
 
   const CategoriesHorizontalSection({
     Key? key,
     required this.categoriesFuture,
+    this.onRetry,
   }) : super(key: key);
 
   @override
@@ -23,13 +26,19 @@ class CategoriesHorizontalSection extends StatelessWidget {
         future: categoriesFuture,
         initialData: const [],
         builder: (context, snapshot) {
+          if (snapshot.hasError && onRetry != null) {
+            return HomeSectionUtils.sectionError(
+              message: 'Failed to load categories',
+              onRetry: onRetry!,
+            );
+          }
           if (snapshot.connectionState == ConnectionState.waiting) {
             return Container(
               padding: const EdgeInsets.only(
                 left: 10,
                 bottom: 0,
               ),
-              height: 100,
+              height: 110,
               child: ShimmerWidgets.categoryListShimmer(),
             );
           }
@@ -41,7 +50,7 @@ class CategoriesHorizontalSection extends StatelessWidget {
                 left: 10,
                 bottom: 0,
               ),
-              height: 100,
+              height: 110,
               child: ListView.builder(
                 scrollDirection: Axis.horizontal,
                 itemCount:

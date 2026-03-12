@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:flutter/cupertino.dart';
@@ -8,6 +10,9 @@ import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/helper.dart';
+import 'package:foodie_driver/services/order_service.dart';
+import 'package:foodie_driver/services/rider_preset_location_service.dart';
+import 'package:foodie_driver/services/user_listener_service.dart';
 import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/ui/privacy_policy/privacy_policy.dart';
 import 'package:foodie_driver/ui/termsAndCondition/terms_and_codition.dart';
@@ -17,12 +22,14 @@ class MoreOptionsBottomSheet extends StatelessWidget {
   final VoidCallback onDriverRankingTap;
   final VoidCallback onInboxTap;
   final VoidCallback onLocationUpdate;
+  final VoidCallback? onSelectWorkArea;
 
   const MoreOptionsBottomSheet({
     Key? key,
     required this.onDriverRankingTap,
     required this.onInboxTap,
     required this.onLocationUpdate,
+    this.onSelectWorkArea,
   }) : super(key: key);
 
   @override
@@ -68,12 +75,12 @@ class MoreOptionsBottomSheet extends StatelessWidget {
             ),
             SwitchListTile(
               title: Text(
-                "Online",
+                "Go Online",
                 style: TextStyle(
                   color: isDarkMode(context) ? Colors.white : Colors.black,
                 ),
               ),
-              value: user.isActive,
+              value: user.isOnline ?? false,
               onChanged: (value) async {
                 final latestUser =
                     await AttendanceService.fetchLatestUser(user.userID);
@@ -89,19 +96,68 @@ class MoreOptionsBottomSheet extends StatelessWidget {
                   return;
                 }
 
+                if (value == true &&
+                    !RiderPresetLocationService.hasValidWorkArea(
+                        latestUser ?? user)) {
+                  await showDialog<void>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Select Work Area'),
+                        content: const Text(
+                          'Please select a work area before going online.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('Cancel'),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              Navigator.pop(context);
+                              onSelectWorkArea?.call();
+                            },
+                            child: const Text('Select Work Area'),
+                          ),
+                        ],
+                      ),
+                    );
+                  return;
+                }
+
                 await AttendanceService.touchLastActiveDate(current);
 
-                user.isActive = value;
+                user.isOnline = value;
                 user.inProgressOrderID =
                     MyAppState.currentUser!.inProgressOrderID;
                 user.orderRequestData =
                     MyAppState.currentUser!.orderRequestData;
-                if (user.isActive == true) {
+                if (value == true) {
                   onLocationUpdate();
                 }
-                FireStoreUtils.updateCurrentUser(user);
+                UserListenerService.instance.markLocalMutation();
+                await FireStoreUtils.updateCurrentUser(user);
+                await OrderService.updateRiderStatus();
               },
             ),
+            if ((user.isOnline ?? false) == true)
+              ListTile(
+                leading: const Icon(Icons.coffee),
+                title: Text(
+                  user.riderAvailability == 'on_break'
+                      ? 'End Break'
+                      : 'Take Break',
+                ),
+                onTap: () async {
+                  if (user.riderAvailability == 'on_break') {
+                    await OrderService.updateRiderStatus();
+                  } else {
+                    await OrderService.updateRiderStatus(
+                      overrideAvailability: 'on_break',
+                    );
+                  }
+                },
+              ),
             SwitchListTile(
               title: Text(
                 "Multiple Orders",
@@ -159,6 +215,9 @@ class MoreOptionsBottomSheet extends StatelessWidget {
                 Navigator.pop(context);
                 user.lastOnlineTimestamp = Timestamp.now();
                 await FireStoreUtils.updateCurrentUser(user);
+                if (user.fcmToken.isNotEmpty) {
+                  unawaited(FireStoreUtils.removeFcmToken(user.userID, user.fcmToken));
+                }
                 await auth.FirebaseAuth.instance.signOut();
                 MyAppState.currentUser = null;
                 pushAndRemoveUntil(context, AuthScreen(), false);
@@ -175,6 +234,7 @@ class MoreOptionsBottomSheet extends StatelessWidget {
     required VoidCallback onDriverRankingTap,
     required VoidCallback onInboxTap,
     required VoidCallback onLocationUpdate,
+    VoidCallback? onSelectWorkArea,
   }) {
     showModalBottomSheet(
       context: context,
@@ -187,6 +247,7 @@ class MoreOptionsBottomSheet extends StatelessWidget {
         onDriverRankingTap: onDriverRankingTap,
         onInboxTap: onInboxTap,
         onLocationUpdate: onLocationUpdate,
+        onSelectWorkArea: onSelectWorkArea,
       ),
     );
   }

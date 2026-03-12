@@ -61,6 +61,78 @@ class VendorModel {
   bool specialDiscountEnable;
   List<WorkingHoursModel> workingHours;
 
+  /// Client-only: distance in km from user (not from Firestore).
+  double? distanceInKM;
+
+  /// Performance metrics for customer display (badge, acceptance rate, etc.).
+  Map<String, dynamic>? publicMetrics;
+
+  /// Effective badge (overrideBadge if set, else computed badge).
+  String? get performanceBadge {
+    final pm = publicMetrics;
+    if (pm == null) return null;
+    final override = pm['overrideBadge'];
+    if (override != null && override.toString() != '') {
+      final s = override.toString().toLowerCase();
+      if (s == 'hidden') return null;
+      return s;
+    }
+    final badge = pm['badge'];
+    return badge?.toString();
+  }
+
+  /// Acceptance rate 0-100 (last 30 days).
+  double? get acceptanceRate {
+    final v = publicMetrics?['acceptanceRate'];
+    if (v == null) return null;
+    return (v is num) ? v.toDouble() : double.tryParse(v.toString());
+  }
+
+  /// Avg acceptance time in seconds.
+  double? get avgAcceptanceTimeSeconds {
+    final v = publicMetrics?['avgAcceptanceTimeSeconds'];
+    if (v == null) return null;
+    return (v is num) ? v.toDouble() : double.tryParse(v.toString());
+  }
+
+  /// Order count in last 30 days.
+  int? get orderCountLast30Days {
+    final v = publicMetrics?['orderCountLast30Days'];
+    if (v == null) return null;
+    return (v is num) ? v.toInt() : int.tryParse(v.toString());
+  }
+
+  /// Avg confirmation speed rating 1-5 from customer feedback.
+  double? get avgConfirmationSpeedRating {
+    final v = publicMetrics?['avgConfirmationSpeedRating'];
+    if (v == null) return null;
+    return (v is num) ? v.toDouble() : double.tryParse(v.toString());
+  }
+
+  /// Service reliability score 0-5 (from acceptance rate, time, feedback).
+  double? get serviceRating {
+    final rate = acceptanceRate;
+    final avgTime = avgAcceptanceTimeSeconds ?? 120;
+    final feedback = avgConfirmationSpeedRating ?? 3;
+    if (rate == null) return null;
+    final a = rate / 100;
+    final t = 1 - (avgTime / 120).clamp(0.0, 1.0);
+    final f = feedback / 5;
+    return 5 * (0.6 * a + 0.2 * t + 0.2 * f);
+  }
+
+  /// Food rating (reviews).
+  double get foodRating =>
+      reviewsCount != 0 ? (reviewsSum / reviewsCount).toDouble() : 0;
+
+  /// Composite rating (0-5): 70% food + 30% service.
+  double? get compositeRating {
+    final sr = serviceRating;
+    if (sr == null) return null;
+    final fr = foodRating;
+    return 0.7 * fr + 0.3 * sr;
+  }
+
   // ,this.filters = filters ?? Filters(cuisine: '');
 
   VendorModel(
@@ -84,6 +156,7 @@ class VendorModel {
       this.restaurantMenuPhotos = const [],
       this.specialDiscount = const [],
       this.workingHours = const [],
+      this.distanceInKM,
       this.specialDiscountEnable = false,
       this.location = '',
       this.reviewsCount = 0,
@@ -95,6 +168,7 @@ class VendorModel {
       this.openDineTime = '',
       this.title = '',
       this.reststatus = false,
+      this.publicMetrics,
       geoFireData,
       deliveryCharge})
       : this.deliveryCharge = deliveryCharge ?? null,
@@ -161,7 +235,8 @@ class VendorModel {
         specialDiscountEnable: parsedJson['specialDiscountEnable'] is bool ? parsedJson['specialDiscountEnable'] : false,
         specialDiscount: specialDiscount,
         workingHours: workingHours,
-        reststatus: parsedJson['reststatus'] is bool ? parsedJson['reststatus'] : false);
+        reststatus: parsedJson['reststatus'] is bool ? parsedJson['reststatus'] : false,
+        publicMetrics: parsedJson['publicMetrics'] as Map<String, dynamic>?);
   }
 
   Map<String, dynamic> toJson() {
@@ -199,6 +274,9 @@ class VendorModel {
       'specialDiscountEnable': this.specialDiscountEnable,
       'workingHours': this.workingHours.map((e) => e.toJson()).toList(),
     };
+    if (publicMetrics != null) {
+      json['publicMetrics'] = publicMetrics!;
+    }
     if (deliveryCharge != null) {
       json.addAll({'DeliveryCharge': this.deliveryCharge!.toJson()});
     }

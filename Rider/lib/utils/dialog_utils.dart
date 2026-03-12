@@ -174,4 +174,94 @@ class DialogUtils {
     );
     return result ?? false;
   }
+
+  /// Result of far-pickup confirmation: confirmed and dontShowAgain checkbox.
+  static Future<({bool confirmed, bool dontShowAgain})?>
+      showConfirmPickupWhenFarDialog(
+    BuildContext context, {
+    required int distanceMeters,
+  }) async {
+    bool dontShowAgain = false;
+    final result = await showDialog<(bool, bool)>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return PopScope(
+              canPop: false,
+              child: AlertDialog(
+                backgroundColor: isDarkMode(context)
+                    ? Color(DARK_VIEWBG_COLOR)
+                    : Colors.white,
+                title: const Text('Confirm Pickup'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      distanceMeters <= 0
+                          ? 'Distance could not be determined. Are you sure '
+                              'you want to mark this order as picked up?'
+                          : 'You are still $distanceMeters meters away from the '
+                              'restaurant. Are you sure you want to mark this '
+                              'order as picked up?',
+                      style: TextStyle(
+                        color: isDarkMode(context)
+                            ? Colors.grey.shade300
+                            : Colors.grey.shade700,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    CheckboxListTile(
+                      value: dontShowAgain,
+                      onChanged: (v) =>
+                          setState(() => dontShowAgain = v ?? false),
+                      title: Text(
+                        "Don't show this warning again",
+                        style: TextStyle(
+                          color: isDarkMode(context)
+                              ? Colors.grey.shade300
+                              : Colors.grey.shade700,
+                          fontSize: 14,
+                        ),
+                      ),
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () =>
+                        Navigator.of(context).pop((false, false)),
+                    child: Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: isDarkMode(context)
+                            ? Colors.grey.shade400
+                            : Colors.grey.shade700,
+                      ),
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: () =>
+                        Navigator.of(context).pop((true, dontShowAgain)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Confirm Pickup'),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+    if (result == null) return null;
+    return (confirmed: result.$1, dontShowAgain: result.$2);
+  }
 }

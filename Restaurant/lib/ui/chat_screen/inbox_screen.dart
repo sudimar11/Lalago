@@ -1,6 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutterflow_paginate_firestore/paginate_firestore.dart';
 import 'package:foodie_restaurant/constants.dart';
@@ -31,7 +31,7 @@ class _InboxScreenState extends State<InboxScreen> {
           InboxModel inboxModel = InboxModel.fromJson(data!);
           return InkWell(
             onTap: () async {
-              //await showProgress(context, "Please wait".tr(), false);
+              //await showProgress(context, "Please wait", false);
 
               User? customer = await FireStoreUtils.getCurrentUser(
                   inboxModel.customerId.toString());

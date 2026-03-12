@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -14,17 +15,101 @@ import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorCategoryModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
+import 'package:foodie_customer/services/click_tracking_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/home/view_all_category_product_screen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
+
+/// Precomputed data for a category restaurant card (avoids heavy work in build).
+class _CategoryCardCache {
+  final VendorModel vendor;
+  final double distanceKm;
+  final int etaHour;
+  final double etaMinute;
+  final bool isOpen;
+  final String productImageUrl;
+
+  const _CategoryCardCache({
+    required this.vendor,
+    required this.distanceKm,
+    required this.etaHour,
+    required this.etaMinute,
+    required this.isOpen,
+    required this.productImageUrl,
+  });
+}
+
+List<_CategoryCardCache> _computeCardCache(
+  List<VendorModel> vendors,
+  List<ProductModel> allProducts,
+) {
+  final loc = MyAppState.selectedPosition.location;
+  if (loc == null) return [];
+  return vendors.map((v) {
+    final distM = Geolocator.distanceBetween(
+      v.latitude, v.longitude, loc.latitude, loc.longitude,
+    );
+    final km = distM / 1000;
+    const minutes = 1.2;
+    final value = minutes * km;
+    final hour = value ~/ 60;
+    final minute = value % 60;
+    return _CategoryCardCache(
+      vendor: v,
+      distanceKm: km,
+      etaHour: hour.toInt(),
+      etaMinute: minute,
+      isOpen: _computeIsRestaurantOpen(v),
+      productImageUrl: _getStableRandomProductImage(v, allProducts),
+    );
+  }).toList();
+}
+
+bool _computeIsRestaurantOpen(VendorModel v) {
+  final now = DateTime.now();
+  final day = DateFormat('EEEE', 'en_US').format(now);
+  final date = DateFormat('dd-MM-yyyy').format(now);
+  for (var wh in v.workingHours) {
+    if (day != wh.day.toString()) continue;
+    if (wh.timeslot == null || wh.timeslot!.isEmpty) continue;
+    for (var slot in wh.timeslot!) {
+      final start = DateFormat("dd-MM-yyyy HH:mm")
+          .parse(date + " " + slot.from.toString());
+      final end = DateFormat("dd-MM-yyyy HH:mm")
+          .parse(date + " " + slot.to.toString());
+      if (now.isAfter(start) && now.isBefore(end)) {
+        return v.reststatus;
+      }
+    }
+  }
+  return false;
+}
+
+String _getStableRandomProductImage(VendorModel vendor, List<ProductModel> all) {
+  final vendorProducts = all.where((p) => p.vendorID == vendor.id).toList();
+  final valid = vendorProducts.where((p) {
+    final photo = p.photo.trim();
+    if (photo.isEmpty) return false;
+    if (AppGlobal.placeHolderImage != null && photo == AppGlobal.placeHolderImage) {
+      return false;
+    }
+    return true;
+  }).toList();
+  if (valid.isEmpty) return vendor.photo;
+  final r = Random(vendor.id.hashCode);
+  return valid[r.nextInt(valid.length)].photo;
+}
 
 class CategoryRestaurantsSection extends StatelessWidget {
   final List<VendorCategoryModel> categoryWiseProductList;
   final List<ProductModel> allProducts;
   final CurrencyModel? currencyModel;
+  final bool isLoadingCategories;
+  final VoidCallback? onRetry;
   final FireStoreUtils fireStoreUtils = FireStoreUtils();
 
   CategoryRestaurantsSection({
@@ -32,10 +117,27 @@ class CategoryRestaurantsSection extends StatelessWidget {
     required this.categoryWiseProductList,
     required this.allProducts,
     this.currencyModel,
+    this.isLoadingCategories = false,
+    this.onRetry,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (categoryWiseProductList.isEmpty && isLoadingCategories) {
+      return Column(
+        children: [
+          SizedBox(
+            height: 100,
+            child: ShimmerWidgets.categoryListShimmer(),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 200,
+            child: ShimmerWidgets.restaurantListShimmer(),
+          ),
+        ],
+      );
+    }
     debugPrint('🎯 CategoryRestaurantsSection.build(): Creating ListView with itemCount=${categoryWiseProductList.length}');
     return ListView.builder(
       itemCount: categoryWiseProductList.length,
@@ -43,110 +145,178 @@ class CategoryRestaurantsSection extends StatelessWidget {
       physics: const BouncingScrollPhysics(),
       padding: EdgeInsets.zero,
       itemBuilder: (context, index) {
-        final categoryId = categoryWiseProductList[index].id.toString();
-        final categoryTitle = categoryWiseProductList[index].title.toString();
-        debugPrint('🏪 CategoryRestaurantsSection[$index]: Building section for categoryId="$categoryId" title="$categoryTitle"');
-        return StreamBuilder<List<VendorModel>>(
-          stream: fireStoreUtils.getCategoryRestaurants(categoryId),
-          builder: (context, snapshot) {
-            debugPrint('🏪 CategoryRestaurantsSection[$index] "$categoryTitle": StreamBuilder - connectionState=${snapshot.connectionState}, hasData=${snapshot.hasData}, dataLength=${snapshot.data?.length ?? -1}');
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return Container();
-            }
-
-            if (snapshot.hasData || (snapshot.data?.isNotEmpty ?? false)) {
-              if (snapshot.data!.isEmpty) {
-                debugPrint('❌ CategoryRestaurantsSection[$index] "$categoryTitle": RETURNING EMPTY CONTAINER (no restaurants found within radius)');
-                return Container();
-              }
-              debugPrint('✅ CategoryRestaurantsSection[$index] "$categoryTitle": RENDERING SECTION with ${snapshot.data!.length} restaurants');
-              return Column(
-                      children: [
-                        HomeSectionUtils.buildTitleRow(
-                          titleValue:
-                              categoryWiseProductList[index].title.toString(),
-                          onClick: () {
-                            push(
-                              context,
-                              ViewAllCategoryProductScreen(
-                                vendorCategoryModel:
-                                    categoryWiseProductList[index],
-                              ),
-                            );
-                          },
-                          isViewAll: false,
-                        ),
-                        SizedBox(
-                          width: MediaQuery.of(context).size.width,
-                          height: MediaQuery.of(context).size.height * 0.28,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            child: RepaintBoundary(
-                              child: ListView.builder(
-                                shrinkWrap: true,
-                                scrollDirection: Axis.horizontal,
-                                physics: const BouncingScrollPhysics(),
-                                padding: EdgeInsets.zero,
-                                cacheExtent: 400.0,
-                                itemCount: snapshot.data!.length,
-                                itemBuilder: (context, index) {
-                                VendorModel vendorModel = snapshot.data![index];
-                                return _CategoryRestaurantCard(
-                                  vendorModel: vendorModel,
-                                  allProducts: allProducts,
-                                  currencyModel: currencyModel,
-                                );
-                              },
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-            } else {
-              return Container();
-            }
-          },
+        final category = categoryWiseProductList[index];
+        return _CategoryRestaurantRow(
+          category: category,
+          allProducts: allProducts,
+          currencyModel: currencyModel,
+          fireStoreUtils: fireStoreUtils,
+          onRetry: onRetry,
         );
       },
     );
   }
 }
 
+class _CategoryRestaurantRow extends StatefulWidget {
+  final VendorCategoryModel category;
+  final List<ProductModel> allProducts;
+  final CurrencyModel? currencyModel;
+  final FireStoreUtils fireStoreUtils;
+  final VoidCallback? onRetry;
+
+  const _CategoryRestaurantRow({
+    required this.category,
+    required this.allProducts,
+    this.currencyModel,
+    required this.fireStoreUtils,
+    this.onRetry,
+  });
+
+  @override
+  State<_CategoryRestaurantRow> createState() => _CategoryRestaurantRowState();
+}
+
+class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
+  final ScrollController _scrollController = ScrollController();
+  List<VendorModel> _vendors = [];
+  List<_CategoryCardCache> _cachedCards = [];
+  static const int _initialDisplayCount = 10;
+  static const int _loadMoreCount = 10;
+  int _displayedCount = _initialDisplayCount;
+  StreamSubscription<List<VendorModel>>? _streamSubscription;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _streamSubscription = widget.fireStoreUtils
+        .getCategoryRestaurants(widget.category.id.toString())
+        .listen(
+          (List<VendorModel> data) {
+            if (mounted) {
+              setState(() {
+                _vendors = data;
+                _cachedCards = _computeCardCache(data, widget.allProducts);
+                _hasError = false;
+              });
+            }
+          },
+          onError: (_) {
+            if (mounted) {
+              setState(() => _hasError = true);
+            }
+          },
+        );
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients || _displayedCount >= _vendors.length) {
+      return;
+    }
+    final pos = _scrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent - 200) {
+      setState(() {
+        _displayedCount =
+            (_displayedCount + _loadMoreCount).clamp(0, _vendors.length);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _streamSubscription?.cancel();
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasError && widget.onRetry != null) {
+      return HomeSectionUtils.sectionError(
+        message: 'Failed to load restaurants for ${widget.category.title}',
+        onRetry: widget.onRetry!,
+      );
+    }
+    if (_vendors.isEmpty) {
+      return Container();
+    }
+    final count = _displayedCount.clamp(0, _vendors.length);
+    return Column(
+      children: [
+        HomeSectionUtils.buildTitleRow(
+          titleValue: widget.category.title.toString(),
+          onClick: () {
+            push(
+              context,
+              ViewAllCategoryProductScreen(
+                vendorCategoryModel: widget.category,
+              ),
+            );
+          },
+          isViewAll: false,
+        ),
+        SizedBox(
+          width: MediaQuery.of(context).size.width,
+          height: MediaQuery.of(context).size.height * 0.29,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: RepaintBoundary(
+              child: ListView.builder(
+                controller: _scrollController,
+                shrinkWrap: true,
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                padding: EdgeInsets.zero,
+                cacheExtent: 400.0,
+                itemCount: count,
+                itemBuilder: (context, index) {
+                  final cache = _cachedCards[index];
+                  return _CategoryRestaurantCard(
+                    cache: cache,
+                    allProducts: widget.allProducts,
+                    currencyModel: widget.currencyModel,
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _CategoryRestaurantCard extends StatelessWidget {
-  final VendorModel vendorModel;
+  final _CategoryCardCache cache;
   final List<ProductModel> allProducts;
   final CurrencyModel? currencyModel;
 
   const _CategoryRestaurantCard({
-    required this.vendorModel,
+    required this.cache,
     required this.allProducts,
     this.currencyModel,
   });
 
   @override
   Widget build(BuildContext context) {
-    double distanceInMeters = Geolocator.distanceBetween(
-      vendorModel.latitude,
-      vendorModel.longitude,
-      MyAppState.selectedPosotion.location!.latitude,
-      MyAppState.selectedPosotion.location!.longitude,
-    );
-
-    double kilometer = distanceInMeters / 1000;
-    double minutes = 1.2;
-    double value = minutes * kilometer;
-    final int hour = value ~/ 60;
-    final double minute = value % 60;
+    final vendorModel = cache.vendor;
+    final kilometer = cache.distanceKm;
+    final hour = cache.etaHour;
+    final minute = cache.etaMinute;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: GestureDetector(
-        onTap: () async {
-          push(
-            context,
-            NewVendorProductsScreen(vendorModel: vendorModel),
+        onTap: () {
+          ClickTrackingService.logClick(
+            userId: MyAppState.currentUser?.userID ?? 'guest',
+            restaurantId: vendorModel.id,
+            source: 'category_food',
           );
+          push(context, NewVendorProductsScreen(vendorModel: vendorModel));
         },
         child: SizedBox(
           width: MediaQuery.of(context).size.width * 0.7,
@@ -159,7 +329,9 @@ class _CategoryRestaurantCard extends StatelessWidget {
                     child: Stack(
                       children: [
                         CachedNetworkImage(
-                          imageUrl: _getStableRandomProductImage(vendorModel),
+                          imageUrl: getImageVAlidUrl(cache.productImageUrl),
+                          memCacheWidth: 300,
+                          memCacheHeight: 300,
                           imageBuilder: (context, imageProvider) => Container(
                             decoration: BoxDecoration(
                               borderRadius: const BorderRadius.only(
@@ -235,6 +407,8 @@ class _CategoryRestaurantCard extends StatelessWidget {
                               borderRadius: BorderRadius.circular(20),
                               child: CachedNetworkImage(
                                 imageUrl: getImageVAlidUrl(vendorModel.photo),
+                                memCacheWidth: 80,
+                                memCacheHeight: 80,
                                 fit: BoxFit.cover,
                                 placeholder: (context, url) => const Center(
                                   child: Icon(
@@ -309,7 +483,7 @@ class _CategoryRestaurantCard extends StatelessWidget {
                           ),
                         ),
                         // Overlay for closed restaurants - only on image
-                        if (!_isRestaurantOpen(vendorModel))
+                        if (!cache.isOpen)
                           Positioned.fill(
                             child: Container(
                               decoration: BoxDecoration(
@@ -357,115 +531,126 @@ class _CategoryRestaurantCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          vendorModel.title,
-                          maxLines: 1,
-                          style: TextStyle(
-                            fontFamily: "Poppinsb",
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.2,
-                            color: isDarkMode(context)
-                                ? Colors.white
-                                : Colors.black87,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Color(COLOR_PRIMARY).withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Icon(
-                                Icons.location_on_rounded,
-                                color: Color(COLOR_PRIMARY),
-                                size: 16,
-                              ),
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            vendorModel.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: "Poppinsb",
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.2,
+                              color: isDarkMode(context)
+                                  ? Colors.white
+                                  : Colors.black87,
                             ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                vendorModel.location,
-                                maxLines: 1,
-                                style: TextStyle(
-                                  fontFamily: "Poppinsr",
-                                  fontSize: 13,
-                                  color: isDarkMode(context)
-                                      ? Colors.white70
-                                      : Colors.grey.shade600,
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Color(COLOR_PRIMARY).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Icon(
+                                  Icons.location_on_rounded,
+                                  color: Color(COLOR_PRIMARY),
+                                  size: 16,
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                        RestaurantEtaFeeRow(
-                          vendorModel: vendorModel,
-                          currencyModel: currencyModel,
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Color(COLOR_PRIMARY).withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(6),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  vendorModel.location,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontFamily: "Poppinsr",
+                                    fontSize: 13,
+                                    color: isDarkMode(context)
+                                        ? Colors.white70
+                                        : Colors.grey.shade600,
+                                  ),
+                                ),
                               ),
-                              child: Icon(
-                                Icons.access_time_rounded,
-                                color: Color(COLOR_PRIMARY),
-                                size: 16,
+                            ],
+                          ),
+                          RestaurantEtaFeeRow(
+                            vendorModel: vendorModel,
+                            currencyModel: currencyModel,
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Color(COLOR_PRIMARY).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Icon(
+                                  Icons.access_time_rounded,
+                                  color: Color(COLOR_PRIMARY),
+                                  size: 16,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${hour.toString().padLeft(2, "0")}h ${minute.toStringAsFixed(0).padLeft(2, "0")}m',
-                              style: TextStyle(
-                                fontFamily: "Poppinssb",
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: isDarkMode(context)
-                                    ? Colors.white70
-                                    : Colors.grey.shade700,
+                              const SizedBox(width: 8),
+                              Text(
+                                '${hour.toString().padLeft(2, "0")}h ${minute.toStringAsFixed(0).padLeft(2, "0")}m',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontFamily: "Poppinssb",
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: isDarkMode(context)
+                                      ? Colors.white70
+                                      : Colors.grey.shade700,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Color(COLOR_PRIMARY).withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(6),
+                              const SizedBox(width: 12),
+                              Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Color(COLOR_PRIMARY).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Icon(
+                                  Icons.directions_car_rounded,
+                                  color: Color(COLOR_PRIMARY),
+                                  size: 16,
+                                ),
                               ),
-                              child: Icon(
-                                Icons.directions_car_rounded,
-                                color: Color(COLOR_PRIMARY),
-                                size: 16,
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  "${kilometer.toDouble().toStringAsFixed(currencyModel?.decimal ?? 1)} km",
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontFamily: "Poppinssb",
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: isDarkMode(context)
+                                        ? Colors.white70
+                                        : Colors.grey.shade700,
+                                  ),
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              "${kilometer.toDouble().toStringAsFixed(currencyModel?.decimal ?? 1)} km",
-                              style: TextStyle(
-                                fontFamily: "Poppinssb",
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: isDarkMode(context)
-                                    ? Colors.white70
-                                    : Colors.grey.shade700,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                      ],
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -475,71 +660,5 @@ class _CategoryRestaurantCard extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  // Helper function to get stable random product image for vendor
-  String _getStableRandomProductImage(VendorModel vendor) {
-    // Filter products by vendor ID
-    List<ProductModel> vendorProducts =
-        allProducts.where((p) => p.vendorID == vendor.id).toList();
-
-    // Filter out products with empty or placeholder images
-    List<ProductModel> validVendorProducts = vendorProducts.where((p) {
-      final String photo = p.photo.trim();
-      if (photo.isEmpty) return false;
-      if (AppGlobal.placeHolderImage != null &&
-          photo == AppGlobal.placeHolderImage) return false;
-      return true;
-    }).toList();
-
-    // If no valid products, return vendor photo
-    if (validVendorProducts.isEmpty) {
-      return vendor.photo;
-    }
-
-    // Use vendor ID as seed for consistent random selection
-    final seededRandom = Random(vendor.id.hashCode);
-    final ProductModel randomProduct =
-        validVendorProducts[seededRandom.nextInt(validVendorProducts.length)];
-
-    return randomProduct.photo;
-  }
-
-  // Helper function to check if restaurant is open
-  bool _isRestaurantOpen(VendorModel vendorModel) {
-    final now = DateTime.now();
-    var day = DateFormat('EEEE', 'en_US').format(now);
-    var date = DateFormat('dd-MM-yyyy').format(now);
-
-    bool isOpen = false;
-
-    for (var workingHour in vendorModel.workingHours) {
-      if (day == workingHour.day.toString()) {
-        if (workingHour.timeslot != null && workingHour.timeslot!.isNotEmpty) {
-          for (var timeSlot in workingHour.timeslot!) {
-            var start = DateFormat("dd-MM-yyyy HH:mm")
-                .parse(date + " " + timeSlot.from.toString());
-            var end = DateFormat("dd-MM-yyyy HH:mm")
-                .parse(date + " " + timeSlot.to.toString());
-
-            if (_isCurrentDateInRange(start, end)) {
-              isOpen = true;
-              break;
-            }
-          }
-        }
-        if (isOpen) break;
-      }
-    }
-
-    return isOpen && vendorModel.reststatus;
-  }
-
-  bool _isCurrentDateInRange(DateTime startDate, DateTime endDate) {
-    final currentDate = DateTime.now();
-    if (currentDate.isAfter(startDate) && currentDate.isBefore(endDate)) {
-      return true;
-    }
-    return false;
   }
 }

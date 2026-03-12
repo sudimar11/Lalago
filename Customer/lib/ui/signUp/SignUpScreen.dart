@@ -13,11 +13,11 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/main.dart';
+import 'package:foodie_customer/model/AddressModel.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
-import 'package:foodie_customer/ui/location_permission_screen.dart';
 import 'package:foodie_customer/ui/phoneAuth/PhoneNumberInputScreen.dart';
 import 'package:foodie_customer/utils/extensions/context_extension.dart';
 import 'package:image_picker/image_picker.dart';
@@ -818,22 +818,54 @@ class _SignUpState extends State<SignUpScreen> {
               backgroundColor: Colors.white,
               borderColor: Colors.grey.shade300,
             ),
-            _buildSignUpOption(
-              onTap: _signUpWithApple,
-              icon: Icon(
-                Icons.apple,
-                size: 28.0,
-                color: isDarkMode(context)
-                    ? Colors.white
-                    : Colors.black,
+            Expanded(
+              child: FutureBuilder<bool>(
+                future: SignInWithApple.isAvailable(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const SizedBox(
+                      height: 56.0,
+                      child: Center(
+                        child: SizedBox(
+                          width: 24.0,
+                          height: 24.0,
+                          child: CircularProgressIndicator(strokeWidth: 2.0),
+                        ),
+                      ),
+                    );
+                  }
+                  if (!snapshot.hasData || snapshot.data != true) {
+                    return const SizedBox.shrink();
+                  }
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        height: 50.0,
+                        child: SignInWithAppleButton(
+                          onPressed: _signUpWithApple,
+                          borderRadius: BorderRadius.circular(24.0),
+                          style: isDarkMode(context)
+                              ? SignInWithAppleButtonStyle.white
+                              : SignInWithAppleButtonStyle.black,
+                          text: 'Continue with Apple',
+                        ),
+                      ),
+                      const SizedBox(height: 8.0),
+                      Text(
+                        "Apple",
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        style: TextStyle(
+                          fontSize: 11.0,
+                          color: Colors.grey.shade700,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
-              label: "Apple",
-              backgroundColor: isDarkMode(context)
-                  ? Colors.black
-                  : Colors.white,
-              borderColor: isDarkMode(context)
-                  ? Colors.grey.shade700
-                  : Colors.grey.shade300,
             ),
             _buildSignUpOption(
               onTap: () =>
@@ -1366,17 +1398,18 @@ class _SignUpState extends State<SignUpScreen> {
         if (MyAppState.currentUser!.shippingAddress!
             .where((element) => element.isDefault == true)
             .isNotEmpty) {
-          MyAppState.selectedPosotion = MyAppState.currentUser!.shippingAddress!
+          MyAppState.selectedPosition = MyAppState.currentUser!.shippingAddress!
               .where((element) => element.isDefault == true)
               .single;
         } else {
-          MyAppState.selectedPosotion =
+          MyAppState.selectedPosition =
               MyAppState.currentUser!.shippingAddress!.first;
         }
 
         pushAndRemoveUntil(context, ContainerScreen(user: result), false);
       } else {
-        pushAndRemoveUntil(context, LocationPermissionScreen(), false);
+        MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
+        pushAndRemoveUntil(context, ContainerScreen(user: result), false);
       }
     } else if (result != null && result is String) {
       log('[REGISTER_ERROR] $result');
@@ -1419,18 +1452,19 @@ class _SignUpState extends State<SignUpScreen> {
           if (MyAppState.currentUser!.shippingAddress!
               .where((element) => element.isDefault == true)
               .isNotEmpty) {
-            MyAppState.selectedPosotion = MyAppState
+            MyAppState.selectedPosition = MyAppState
                 .currentUser!.shippingAddress!
                 .where((element) => element.isDefault == true)
                 .single;
           } else {
-            MyAppState.selectedPosotion =
+            MyAppState.selectedPosition =
                 MyAppState.currentUser!.shippingAddress!.first;
           }
 
           pushAndRemoveUntil(context, ContainerScreen(user: result), false);
         } else {
-          pushAndRemoveUntil(context, LocationPermissionScreen(), false);
+          MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
+          pushAndRemoveUntil(context, ContainerScreen(user: result), false);
         }
       } else {
         showAlertDialog(
@@ -1479,18 +1513,19 @@ class _SignUpState extends State<SignUpScreen> {
           if (MyAppState.currentUser!.shippingAddress!
               .where((element) => element.isDefault == true)
               .isNotEmpty) {
-            MyAppState.selectedPosotion = MyAppState
+            MyAppState.selectedPosition = MyAppState
                 .currentUser!.shippingAddress!
                 .where((element) => element.isDefault == true)
                 .single;
           } else {
-            MyAppState.selectedPosotion =
+            MyAppState.selectedPosition =
                 MyAppState.currentUser!.shippingAddress!.first;
           }
 
           pushAndRemoveUntil(context, ContainerScreen(user: result), false);
         } else {
-          pushAndRemoveUntil(context, LocationPermissionScreen(), false);
+          MyAppState.selectedPosition = AddressModel.defaultJoloLocation();
+          pushAndRemoveUntil(context, ContainerScreen(user: result), false);
         }
       } else {
         showAlertDialog(

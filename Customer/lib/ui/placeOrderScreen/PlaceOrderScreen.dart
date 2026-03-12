@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -11,7 +10,6 @@ import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/ui/container/ContainerScreen.dart';
 import 'package:foodie_customer/ui/orderDetailsScreen/OrderDetailsScreen.dart';
 import 'package:foodie_customer/ui/ordersScreen/OrdersScreen.dart';
-import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
 class PlaceOrderScreen extends StatefulWidget {
@@ -182,49 +180,9 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   }
 
   Future<void> animateOut() async {
-    const String accessToken =
-        "5d501215c9d0fae5e5c10289ec1cd2241319c833"; // Your access token
-    final Uri url = Uri.parse(
-      'https://fcm.googleapis.com/v1/projects/lalago-730/messages:send',
-    );
-
-    final headers = {
-      'Authorization': 'Bearer $accessToken',
-      'Content-Type': 'application/json',
-    };
-
-    final message = {
-      "message": {
-        "token": widget.orderModel.vendor.fcmToken,
-        "notification": {
-          "title": widget.orderModel.scheduleTime != null
-              ? "Scheduled Order Placed"
-              : "Order Placed",
-          "body": "Your order has been successfully placed.",
-        },
-      },
-    };
-
-    final bool hasFcmToken = widget.orderModel.vendor.fcmToken.isNotEmpty;
-    if (!hasFcmToken) {
-      print("FCM token missing; skipping push notification.");
-    }
-
-    if (hasFcmToken) {
-      try {
-        final response = await http
-            .post(url, headers: headers, body: json.encode(message))
-            .timeout(const Duration(seconds: 10));
-
-        if (response.statusCode == 200) {
-          print('FCM message sent successfully: ${response.body}');
-        } else {
-          print('Failed to send FCM message: ${response.body}');
-        }
-      } catch (e) {
-        print("Error sending FCM: $e");
-      }
-    }
+    // Rider-first dispatch:
+    // Restaurant notifications are sent by Cloud Functions *after* the rider
+    // accepts (not immediately at checkout).
 
     if (!mounted) return;
 

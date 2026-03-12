@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easy_localization/easy_localization.dart';
+import 'package:intl/intl.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_restaurant/constants.dart';
@@ -16,37 +16,36 @@ String? validateName(String? value) {
   String pattern = r'(^[a-zA-Z ]*$)';
   RegExp regExp = new RegExp(pattern);
   if (value?.length == 0) {
-    return 'Name is required'.tr();
+    return 'Name is required';
   } else if (!regExp.hasMatch(value ?? '')) {
-    return 'Name must be valid'.tr();
+    return 'Name must be valid';
   }
   return null;
 }
 
 String? validateOthers(String? value) {
   if (value?.length == 0) {
-    return '*required'.tr();
+    return '*required';
   }
   return null;
 }
 
 String? validateMobile(String? value) {
+  final trimmed = (value ?? '').trim();
   String pattern = r'(^\+?[0-9]*$)';
   RegExp regExp = RegExp(pattern);
-  if (value?.length == 0) {
-    return 'Mobile is required'.tr();
-  } else if (!regExp.hasMatch(value ?? '')) {
-    return 'Mobile Number must be digits'.tr();
+  if (trimmed.isEmpty) {
+    return 'Mobile is required';
   }
-  /*else if(value!.length<10 || value.length>10 ){
-  return 'please enter valid number'.tr();
-  }*/
+  if (!regExp.hasMatch(trimmed)) {
+    return 'Mobile Number must be digits';
+  }
   return null;
 }
 
 String? validatePassword(String? value) {
   if ((value?.length ?? 0) < 6)
-    return 'Password length must be more than 6 chars.'.tr();
+    return 'Password length must be more than 6 chars.';
   else
     return null;
 }
@@ -56,16 +55,16 @@ String? validateEmail(String? value) {
       r'^(([^<>()[\]\\.,;:\s@\"]+(\.[^<>()[\]\\.,;:\s@\"]+)*)|(\".+\"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$';
   RegExp regex = new RegExp(pattern);
   if (!regex.hasMatch(value ?? ''))
-    return 'Please use a valid mail'.tr();
+    return 'Please use a valid mail';
   else
     return null;
 }
 
 String? validateConfirmPassword(String? password, String? confirmPassword) {
   if (password != confirmPassword) {
-    return 'Password must match'.tr();
+    return 'Password must match';
   } else if (confirmPassword?.length == 0) {
-    return 'Confirm password is required'.tr();
+    return 'Confirm password is required';
   } else {
     return null;
   }
@@ -85,7 +84,7 @@ Future<Position> getCurrentLocation() async {
     // Location services are not enabled don't continue
     // accessing the position and request users of the
     // App to enable the location services.
-    return Future.error('Location services are disabled.'.tr());
+    return Future.error('Location services are disabled.');
   }
 
   permission = await Geolocator.checkPermission();
@@ -97,15 +96,14 @@ Future<Position> getCurrentLocation() async {
       // Android's shouldShowRequestPermissionRationale
       // returned true. According to Android guidelines
       // your App should show an explanatory UI now.
-      return Future.error('Location permissions are denied'.tr());
+      return Future.error('Location permissions are denied');
     }
   }
 
   if (permission == LocationPermission.deniedForever) {
     // Permissions are denied forever, handle appropriately.
     return Future.error(
-        'Location permissions are permanently denied, we cannot request permissions.'
-            .tr());
+        'Location permissions are permanently denied, we cannot request permissions.');
   }
 
   // When we reach here, permissions are granted and we can
@@ -114,7 +112,21 @@ Future<Position> getCurrentLocation() async {
 }
 
 String? validateEmptyField(String? text) =>
-    text == null || text.isEmpty ? "notBeEmpty".tr() : null;
+    text == null || text.isEmpty ? 'Cannot be empty' : null;
+
+String? validatePositiveInt(String? value) {
+  if (value == null || value.isEmpty) return 'Cannot be empty';
+  final n = int.tryParse(value);
+  if (n == null || n < 1) return 'Enter a positive number';
+  return null;
+}
+
+String? validateQuantityForInventory(String? value) {
+  if (value == null || value.isEmpty) return 'Cannot be empty';
+  final n = int.tryParse(value);
+  if (n == null || n < -1) return 'Enter -1 for unlimited or 0+';
+  return null;
+}
 
 //helper method to show progress
 late ProgressDialog progressDialog;
@@ -155,7 +167,7 @@ showAlertDialog(
   Widget? okButton;
   if (addOkButton) {
     okButton = TextButton(
-      child: Text('OK').tr(),
+      child: Text('OK'),
       onPressed: () {
         if (login == true) {
           pushAndRemoveUntil(context, AuthScreen(), false);
@@ -221,7 +233,7 @@ String setLastSeen(int seconds) {
   if (diff < 24 * HOUR_MILLIS) {
     return format.format(date);
   } else if (diff < 48 * HOUR_MILLIS) {
-    return 'Yesterday At {}'.tr(args: ['${format.format(date)}']);
+    return 'Yesterday At ${format.format(date)}';
   } else {
     format = DateFormat('MMM d');
     return '${format.format(date)}';
@@ -581,7 +593,7 @@ showWithdrawalModelSheet(
                   child: Padding(
                     padding: const EdgeInsets.only(top: 10.0),
                     child: Text(
-                      'Withdrawal Details'.tr(),
+                      'Withdrawal Details',
                       style: TextStyle(
                         fontSize: 18,
                         fontFamily: "Poppinsm",
@@ -613,7 +625,7 @@ showWithdrawalModelSheet(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    "Transaction ID".tr(),
+                                    'Transaction ID',
                                     style: TextStyle(
                                       fontWeight: FontWeight.w500,
                                       fontSize: 17,
@@ -751,7 +763,7 @@ showWithdrawalModelSheet(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "Date".tr(),
+                          'Date',
                           style: TextStyle(
                             fontWeight: FontWeight.w500,
                             fontSize: 17,
@@ -792,7 +804,7 @@ showWithdrawalModelSheet(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                "Note".tr(),
+                                'Note',
                                 style: TextStyle(
                                   fontWeight: FontWeight.w500,
                                   fontSize: 17,
@@ -835,7 +847,7 @@ showWithdrawalModelSheet(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  "Admin Note".tr(),
+                                  'Admin Note',
                                   style: TextStyle(
                                     fontWeight: FontWeight.w500,
                                     fontSize: 17,

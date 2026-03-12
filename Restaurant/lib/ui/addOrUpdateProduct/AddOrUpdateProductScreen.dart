@@ -2,12 +2,13 @@ import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dropdown_search/dropdown_search.dart';
-import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:numberpicker/numberpicker.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../constants.dart';
@@ -52,6 +53,9 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
   TextEditingController rprice = new TextEditingController(text: "0");
   TextEditingController disprice = TextEditingController(text: "0");
   TextEditingController quantityController = TextEditingController(text: "-1");
+  TextEditingController lowStockThresholdController = TextEditingController(text: "5");
+  bool trackInventory = false;
+  int lowStockThreshold = 5;
 
   var lstAddOnsTitle = [], lstAddOnPrice = [], listAddPrice = [];
   Set<String> listAddTitle = {};
@@ -96,6 +100,9 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
       nonVeg = widget.product!.nonveg;
       takeaway = widget.product!.takeaway;
       specification = widget.product!.specification;
+      trackInventory = widget.product!.trackInventory;
+      lowStockThreshold = widget.product!.lowStockThreshold;
+      lowStockThresholdController.text = widget.product!.lowStockThreshold.toString();
 
       listAddPrice.clear();
       listAddTitle.clear();
@@ -150,13 +157,19 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
     });
   }
 
+  String _formatLastStockUpdated(dynamic ts) {
+    if (ts == null) return '';
+    final dt = ts is DateTime ? ts : (ts as Timestamp).toDate();
+    return DateFormat('MMM d, yyyy h:mm a').format(dt);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: isDarkMode(context) ? Colors.grey.shade900 : Colors.grey.shade50,
       appBar: AppBar(
         title: Text(
-          widget.product == null ? 'Add Product'.tr() : 'Edit Product'.tr(),
+          widget.product == null ? 'Add Product' : 'Edit Product',
           style: TextStyle(
             color: isDarkMode(context) ? Color(0xFFFFFFFF) : Color(0Xff333333),
           ),
@@ -183,7 +196,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Text(
-                              'Admin Commission:'.tr(),
+                              'Admin Commission:',
                               style: TextStyle(
                                 color: isDarkMode(context) ? Colors.white : Colors.black, 
                                 fontWeight: FontWeight.bold, fontSize: 22
@@ -204,7 +217,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 5),
                         child: Text(
-                          'Title'.tr(),
+                          'Title',
                           style: TextStyle(
                             color: isDarkMode(context) ? Colors.white : Colors.black, 
                             fontWeight: FontWeight.bold, 
@@ -224,7 +237,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                         validator: validateEmptyField,
                         decoration: InputDecoration(
                           contentPadding: new EdgeInsets.only(left: 8, right: 8),
-                          hintText: 'Name of the product'.tr(),
+                          hintText: 'Name of the product',
                           border: InputBorder.none,
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(7.0), 
@@ -251,7 +264,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 5),
                         child: Text(
-                          'Description'.tr(),
+                          'Description',
                           style: TextStyle(
                             color: isDarkMode(context) ? Colors.white : Colors.black, 
                             fontWeight: FontWeight.bold, 
@@ -271,7 +284,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                         validator: validateEmptyField,
                         decoration: InputDecoration(
                           contentPadding: new EdgeInsets.only(left: 8, right: 8),
-                          hintText: 'Short description of the product'.tr(),
+                          hintText: 'Short description of the product',
                           focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(7.0), borderSide: BorderSide(color: Color(COLOR_PRIMARY), width: 2.0)),
                           errorBorder: OutlineInputBorder(
                             borderSide: BorderSide(color: Theme.of(context).colorScheme.error),
@@ -291,7 +304,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 5),
                         child: Text(
-                          'Select Attribute'.tr(),
+                          'Select Attribute',
                           style: TextStyle(
                             color: isDarkMode(context) ? Colors.white : Colors.black, 
                             fontWeight: FontWeight.bold, 
@@ -333,7 +346,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                               fillColor: Theme.of(context).inputDecorationTheme.fillColor,
                               focusColor: Color(COLOR_PRIMARY),
                               iconColor: Color(COLOR_PRIMARY),
-                              hintText: 'Select Attributes'.tr()),
+                              hintText: 'Select Attributes'),
                         ),
                         compareFn: (i1, i2) => i1.title == i2.title,
                         popupProps: PopupPropsMultiSelection.modalBottomSheet(
@@ -383,7 +396,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                               height: 20,
                             ),
                             Text(
-                              "Attribute value".tr(),
+                              "Attribute value",
                               style: TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w700),
                             ),
                             SizedBox(
@@ -487,25 +500,25 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                 children: [
                                   Expanded(
                                     child: Text(
-                                      "Variant".tr(),
+                                      "Variant",
                                       style: TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w700),
                                     ),
                                   ),
                                   Expanded(
                                     child: Text(
-                                      "Variant Price".tr(),
+                                      "Variant Price",
                                       style: TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w700),
                                     ),
                                   ),
                                   Expanded(
                                     child: Text(
-                                      "Variant Quantity".tr() + " ",
+                                      "Variant Quantity" + " ",
                                       style: TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w700),
                                     ),
                                   ),
                                   Expanded(
                                     child: Text(
-                                      "Variant Image".tr(),
+                                      "Variant Image",
                                       style: TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w700),
                                     ),
                                   ),
@@ -653,7 +666,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                           Padding(
                             padding: const EdgeInsets.all(8.0),
                             child: Text(
-                              'Price'.tr(),
+                              'Price',
                               style: TextStyle(
                                 color: isDarkMode(context) ? Colors.white : Colors.black, 
                                 fontWeight: FontWeight.bold, 
@@ -670,7 +683,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start, 
                                   children: [
                                     Text(
-                                      'Regular Price'.tr(),
+                                      'Regular Price',
                                       style: TextStyle(
                                         color: isDarkMode(context) ? Colors.white : Colors.black, 
                                         fontSize: 17
@@ -723,7 +736,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start, 
                                   children: [
                                     Text(
-                                      'Discounted Price'.tr(),
+                                      'Discounted Price',
                                       style: TextStyle(
                                         color: isDarkMode(context) ? Colors.white : Colors.black, 
                                         fontSize: 17
@@ -746,7 +759,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                               isDiscountedPriceOk = true;
                                               final snackBar = SnackBar(
                                                 content: Text(
-                                                  'Please enter valid discount price'.tr(),
+                                                  'Please enter valid discount price',
                                                   style: TextStyle(color: !isDarkMode(context) ? Colors.white : Colors.black),
                                                 ),
                                               );
@@ -825,69 +838,215 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                           Padding(
                             padding: const EdgeInsets.only(left: 8, bottom: 8),
                             child: Text(
-                              'Your item Price will be display like this.'.tr(),
+                              'Your item Price will be display like this.',
                               style: TextStyle(
-                                color: isDarkMode(context) ? Colors.white : Colors.grey, 
+                                color: isDarkMode(context) ? Colors.white : Colors.grey,
                                 fontSize: 15
                               ),
                             ),
                           ),
+                          Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Text(
+                              'Inventory Management',
+                              style: TextStyle(
+                                color: isDarkMode(context) ? Colors.white : Colors.black,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                          SwitchListTile(
+                            value: trackInventory,
+                            onChanged: (v) => setState(() => trackInventory = v),
+                            title: Text(
+                              'Track Inventory',
+                              style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black),
+                            ),
+                            activeColor: Color(COLOR_PRIMARY),
+                          ),
+                          if (trackInventory) ...[
                             Padding(
                               padding: const EdgeInsets.symmetric(vertical: 5),
-                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Text(
-                                  'Quantity'.tr(),
-                                  style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontSize: 17),
-                                ),
-                                SizedBox(
-                                  height: 10,
-                                ),
-                                SizedBox(
-                                  width: MediaQuery.of(context).size.width / 2.3,
-                                  child: TextFormField(
-                                    maxLength: 5,
-                                    textInputAction: TextInputAction.done,
-                                    controller: quantityController,
-                                    keyboardType: TextInputType.numberWithOptions(signed: true, decimal: true),
-                                    style: TextStyle(fontSize: 18.0),
-                                    cursorColor: Color(COLOR_PRIMARY),
-                                    validator: validateEmptyField,
-                                    decoration: InputDecoration(
-                                      hintText: "0",
-                                      contentPadding: new EdgeInsets.only(left: 8, right: 8),
-                                      counterText: '',
-                                      errorStyle: TextStyle(),
-                                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(7.0), borderSide: BorderSide(color: Color(COLOR_PRIMARY), width: 2.0)),
-                                      errorBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(color: Theme.of(context).colorScheme.error),
-                                        borderRadius: BorderRadius.circular(7.0),
-                                      ),
-                                      focusedErrorBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(color: Theme.of(context).colorScheme.error),
-                                        borderRadius: BorderRadius.circular(7.0),
-                                      ),
-                                      enabledBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(color: Colors.grey.shade400),
-                                        borderRadius: BorderRadius.circular(7.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Current Stock Quantity',
+                                    style: TextStyle(
+                                      color: isDarkMode(context) ? Colors.white : Colors.black,
+                                      fontSize: 17,
+                                    ),
+                                  ),
+                                  SizedBox(height: 10),
+                                  SizedBox(
+                                    width: MediaQuery.of(context).size.width / 2.3,
+                                    child: TextFormField(
+                                      maxLength: 5,
+                                      textInputAction: TextInputAction.done,
+                                      controller: quantityController,
+                                      keyboardType: TextInputType.numberWithOptions(signed: true),
+                                      style: TextStyle(fontSize: 18.0),
+                                      cursorColor: Color(COLOR_PRIMARY),
+                                      validator: trackInventory ? validateQuantityForInventory : null,
+                                      decoration: InputDecoration(
+                                        hintText: "0",
+                                        contentPadding: EdgeInsets.only(left: 8, right: 8),
+                                        counterText: '',
+                                        errorStyle: TextStyle(),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(7.0),
+                                          borderSide: BorderSide(color: Color(COLOR_PRIMARY), width: 2.0),
+                                        ),
+                                        errorBorder: OutlineInputBorder(
+                                          borderSide: BorderSide(color: Theme.of(context).colorScheme.error),
+                                          borderRadius: BorderRadius.circular(7.0),
+                                        ),
+                                        focusedErrorBorder: OutlineInputBorder(
+                                          borderSide: BorderSide(color: Theme.of(context).colorScheme.error),
+                                          borderRadius: BorderRadius.circular(7.0),
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderSide: BorderSide(color: Colors.grey.shade400),
+                                          borderRadius: BorderRadius.circular(7.0),
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                Padding(
-                                    padding: const EdgeInsets.only(left: 8, bottom: 8, top: 10),
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 8, bottom: 8, top: 4),
                                     child: Text(
-                                      '-1 to your product quantity is unlimited'.tr(),
-                                      style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.grey, fontSize: 14),
-                                    )),
-                              ]),
-                            ),
-                            SizedBox(
-                              height: 10,
+                                      '-1 for unlimited',
+                                      style: TextStyle(
+                                        color: isDarkMode(context) ? Colors.white : Colors.grey,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                             Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 5),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Low Stock Threshold',
+                                    style: TextStyle(
+                                      color: isDarkMode(context) ? Colors.white : Colors.black,
+                                      fontSize: 17,
+                                    ),
+                                  ),
+                                  SizedBox(height: 10),
+                                  SizedBox(
+                                    width: MediaQuery.of(context).size.width / 2.3,
+                                    child: TextFormField(
+                                      maxLength: 5,
+                                      textInputAction: TextInputAction.done,
+                                      controller: lowStockThresholdController,
+                                      keyboardType: TextInputType.numberWithOptions(signed: false),
+                                      style: TextStyle(fontSize: 18.0),
+                                      cursorColor: Color(COLOR_PRIMARY),
+                                      validator: trackInventory ? validatePositiveInt : null,
+                                      decoration: InputDecoration(
+                                        hintText: "5",
+                                        contentPadding: EdgeInsets.only(left: 8, right: 8),
+                                        counterText: '',
+                                        errorStyle: TextStyle(),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(7.0),
+                                          borderSide: BorderSide(color: Color(COLOR_PRIMARY), width: 2.0),
+                                        ),
+                                        errorBorder: OutlineInputBorder(
+                                          borderSide: BorderSide(color: Theme.of(context).colorScheme.error),
+                                          borderRadius: BorderRadius.circular(7.0),
+                                        ),
+                                        focusedErrorBorder: OutlineInputBorder(
+                                          borderSide: BorderSide(color: Theme.of(context).colorScheme.error),
+                                          borderRadius: BorderRadius.circular(7.0),
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderSide: BorderSide(color: Colors.grey.shade400),
+                                          borderRadius: BorderRadius.circular(7.0),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (widget.product?.lastStockUpdated != null)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 8, bottom: 8),
+                                child: Text(
+                                  'Last updated: ${_formatLastStockUpdated(widget.product!.lastStockUpdated!)}',
+                                  style: TextStyle(
+                                    color: isDarkMode(context) ? Colors.white70 : Colors.grey,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                          ] else
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 5),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Quantity',
+                                    style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontSize: 17),
+                                  ),
+                                  SizedBox(height: 10),
+                                  SizedBox(
+                                    width: MediaQuery.of(context).size.width / 2.3,
+                                    child: TextFormField(
+                                      maxLength: 5,
+                                      textInputAction: TextInputAction.done,
+                                      controller: quantityController,
+                                      keyboardType: TextInputType.numberWithOptions(signed: true),
+                                      style: TextStyle(fontSize: 18.0),
+                                      cursorColor: Color(COLOR_PRIMARY),
+                                      validator: validateEmptyField,
+                                      decoration: InputDecoration(
+                                        hintText: "0",
+                                        contentPadding: EdgeInsets.only(left: 8, right: 8),
+                                        counterText: '',
+                                        errorStyle: TextStyle(),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(7.0),
+                                          borderSide: BorderSide(color: Color(COLOR_PRIMARY), width: 2.0),
+                                        ),
+                                        errorBorder: OutlineInputBorder(
+                                          borderSide: BorderSide(color: Theme.of(context).colorScheme.error),
+                                          borderRadius: BorderRadius.circular(7.0),
+                                        ),
+                                        focusedErrorBorder: OutlineInputBorder(
+                                          borderSide: BorderSide(color: Theme.of(context).colorScheme.error),
+                                          borderRadius: BorderRadius.circular(7.0),
+                                        ),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderSide: BorderSide(color: Colors.grey.shade400),
+                                          borderRadius: BorderRadius.circular(7.0),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 8, bottom: 8, top: 10),
+                                    child: Text(
+                                      '-1 to your product quantity is unlimited',
+                                      style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.grey, fontSize: 14),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          SizedBox(height: 10),
+                          Padding(
                                 padding: EdgeInsets.all(8),
                                 child: Text(
-                                  'Product Details'.tr(),
+                                  'Product Details',
                                   style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
                                 )),
                             Row(
@@ -896,7 +1055,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                 Padding(
                                     padding: EdgeInsets.all(8),
                                     child: Text(
-                                      'Calories'.tr(),
+                                      'Calories',
                                       style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontSize: 18),
                                     )),
                                 Container(
@@ -909,7 +1068,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                 Padding(
                                     padding: EdgeInsets.all(8),
                                     child: Text(
-                                      'Grams'.tr(),
+                                      'Grams',
                                       style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontSize: 18),
                                     )),
                                 Container(
@@ -930,7 +1089,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                 Padding(
                                     padding: EdgeInsets.all(8),
                                     child: Text(
-                                      'Proteins'.tr(),
+                                      'Proteins',
                                       style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontSize: 18),
                                     )),
                                 Container(
@@ -943,7 +1102,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                 Padding(
                                     padding: EdgeInsets.all(8),
                                     child: Text(
-                                      'Fats'.tr(),
+                                      'Fats',
                                       style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontSize: 18),
                                     )),
                                 Container(
@@ -959,7 +1118,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                             Padding(
                               padding: const EdgeInsets.all(8.0),
                               child: Text(
-                                'Product Type'.tr(),
+                                'Product Type',
                                 style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
                               ),
                             ),
@@ -973,7 +1132,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                   children: [
                                     SwitchListTile.adaptive(
                                         activeColor: Color(COLOR_ACCENT),
-                                        title: Text('Veg'.tr(), style: TextStyle(fontSize: 16, color: isDarkMode(context) ? Colors.white : Colors.black, fontFamily: "Poppinsl")),
+                                        title: Text('Veg', style: TextStyle(fontSize: 16, color: isDarkMode(context) ? Colors.white : Colors.black, fontFamily: "Poppinsl")),
                                         value: veg,
                                         onChanged: (bool newValue) async {
                                           veg = newValue;
@@ -995,7 +1154,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                   children: [
                                     SwitchListTile.adaptive(
                                         activeColor: Color(COLOR_ACCENT),
-                                        title: Text('Non-veg'.tr(), style: TextStyle(fontSize: 16, color: isDarkMode(context) ? Colors.white : Colors.black, fontFamily: "Poppins")),
+                                        title: Text('Non-veg', style: TextStyle(fontSize: 16, color: isDarkMode(context) ? Colors.white : Colors.black, fontFamily: "Poppins")),
                                         value: nonVeg,
                                         onChanged: (bool newValue) async {
                                           nonVeg = newValue;
@@ -1012,13 +1171,13 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                             Padding(
                               padding: const EdgeInsets.all(8.0),
                               child: Text(
-                                'Enable Takeaway Option'.tr(),
+                                'Enable Takeaway Option',
                                 style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
                               ),
                             ),
                             SwitchListTile.adaptive(
                                 activeColor: Color(COLOR_ACCENT),
-                                title: Text('Takeaway Option'.tr(), style: TextStyle(fontSize: 16, color: isDarkMode(context) ? Colors.white : Colors.black, fontFamily: "Poppinsl")),
+                                title: Text('Takeaway Option', style: TextStyle(fontSize: 16, color: isDarkMode(context) ? Colors.white : Colors.black, fontFamily: "Poppinsl")),
                                 value: takeaway,
                                 onChanged: (bool newValue) async {
                                   setState(() {
@@ -1029,7 +1188,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                             Padding(
                               padding: const EdgeInsets.all(8.0),
                               child: Text(
-                                'Add Photos'.tr(),
+                                'Add Photos',
                                 style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
                               ),
                             ),
@@ -1048,7 +1207,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                             Padding(
                               padding: const EdgeInsets.all(8.0),
                               child: Text(
-                                'Restaurant Category'.tr(),
+                                'Restaurant Category',
                                 style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
                               ),
                             ),
@@ -1056,7 +1215,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                             Container(
                               height: 60,
                               child: DropdownButtonFormField<VendorCategoryModel>(
-                                  validator: (date) => (date == null || selectedCategory!.title == 'Select Product Category') ? 'Please select a category.'.tr() : null,
+                                  validator: (date) => (date == null || selectedCategory!.title == 'Select Product Category') ? 'Please select a category.' : null,
                                   decoration: InputDecoration(
                                     contentPadding: new EdgeInsets.only(left: 8, right: 8),
                                     focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(7.0), borderSide: BorderSide(color: Color(COLOR_PRIMARY), width: 2.0)),
@@ -1072,7 +1231,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                       selectedCategory = value;
                                     });
                                   },
-                                  hint: Text('Select Product Category'.tr()),
+                                  hint: Text('Select Product Category'),
                                   items: categoryLst.map((VendorCategoryModel item) {
                                     return DropdownMenuItem<VendorCategoryModel>(
                                       child: Text(item.title.toString()),
@@ -1086,7 +1245,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                 Padding(
                                   padding: const EdgeInsets.all(8.0),
                                   child: Text(
-                                    'Specification'.tr(),
+                                    'Specification',
                                     style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
                                   ),
                                 ),
@@ -1141,7 +1300,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                           //validator: validateEmptyField,
                                           decoration: InputDecoration(
                                               counterText: '',
-                                              hintText: 'Title'.tr(),
+                                              hintText: 'Title',
                                               errorStyle: TextStyle(),
                                               focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(COLOR_PRIMARY))),
                                               errorBorder: UnderlineInputBorder(
@@ -1169,7 +1328,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                           //validator: validateEmptyField,
                                           decoration: InputDecoration(
                                               counterText: '',
-                                              hintText: 'Value'.tr(),
+                                              hintText: 'Value',
                                               errorStyle: TextStyle(),
                                               focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(COLOR_PRIMARY))),
                                               errorBorder: UnderlineInputBorder(
@@ -1192,7 +1351,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                 Padding(
                                   padding: const EdgeInsets.all(8.0),
                                   child: Text(
-                                    'Addons'.tr(),
+                                    'Addons',
                                     style: TextStyle(color: isDarkMode(context) ? Colors.white : Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
                                   ),
                                 ),
@@ -1265,7 +1424,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                                       // contentPadding:
                                                       //     new EdgeInsets.only(left: 8, right: 8),
                                                       counterText: '',
-                                                      hintText: 'Add title'.tr(),
+                                                      hintText: 'Add title',
                                                       errorStyle: TextStyle(),
                                                       focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(COLOR_PRIMARY))),
                                                       errorBorder: UnderlineInputBorder(
@@ -1362,12 +1521,12 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                     child: SwitchListTile.adaptive(
                                         activeColor: Color(COLOR_ACCENT),
                                         title: Text(
-                                          'Publish'.tr(),
+                                          'Publish',
                                           style: TextStyle(
                                             fontSize: 17,
                                             color: isDarkMode(context) ? Colors.white : Colors.black,
                                           ),
-                                        ).tr(),
+                                        ),
                                         value: publish,
                                         onChanged: (bool newValue) {
                                           publish = newValue;
@@ -1383,12 +1542,12 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                           children: [
                                             Text(
-                                              "Delete Product".tr(),
+                                              "Delete Product",
                                               style: TextStyle(
                                                 fontSize: 17,
                                                 color: isDarkMode(context) ? Colors.white : Colors.black,
                                               ),
-                                            ).tr(),
+                                            ),
                                             Image(
                                               image: AssetImage("assets/images/delete.png"),
                                               width: 30,
@@ -1415,7 +1574,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                         ),
                         onPressed: () => submit(),
                         child: Text(
-                          widget.product == null ? 'Add Product'.tr() : 'Edit Product'.tr(),
+                          widget.product == null ? 'Add Product' : 'Edit Product',
                           style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
@@ -1484,7 +1643,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
             _mediaFiles.add(null);
             setState(() {});
           },
-          child: Text('Remove picture').tr(),
+          child: Text('Remove picture'),
           isDestructiveAction: true,
         ),
         CupertinoActionSheetAction(
@@ -1493,11 +1652,11 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
             push(context, image is File ? FullScreenImageViewer(imageFile: image) : FullScreenImageViewer(imageUrl: image));
           },
           isDefaultAction: true,
-          child: Text('View picture').tr(),
+          child: Text('View picture'),
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel').tr(),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -1511,10 +1670,10 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
       message: Text(
         'Add Picture',
         style: TextStyle(fontSize: 15.0),
-      ).tr(),
+      ),
       actions: <Widget>[
         CupertinoActionSheetAction(
-          child: Text('Choose image from gallery').tr(),
+          child: Text('Choose image from gallery'),
           isDefaultAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -1528,7 +1687,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
           },
         ),
         CupertinoActionSheetAction(
-          child: Text('Take a picture').tr(),
+          child: Text('Take a picture'),
           isDestructiveAction: false,
           onPressed: () async {
             Navigator.pop(context);
@@ -1543,7 +1702,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel').tr(),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -1554,11 +1713,11 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
 
   submit() async {
     if (veg == false && nonVeg == false) {
-      showimgAlertDialog(context, 'Product type is Required!'.tr(), 'Please Select Veg or Non-Veg'.tr(), true);
+      showimgAlertDialog(context, 'Product type is Required!', 'Please Select Veg or Non-Veg', true);
     } else if (selectedCategory == null) {
-      showimgAlertDialog(context, 'Category selection is Required!'.tr(), 'Please Select category'.tr(), true);
+      showimgAlertDialog(context, 'Category selection is Required!', 'Please Select category', true);
     } else if (isDiscountedPriceOk == true) {
-      showimgAlertDialog(context, 'Valid amount is Required!'.tr(), 'Please enter valid discount price'.tr(), true);
+      showimgAlertDialog(context, 'Valid amount is Required!', 'Please enter valid discount price', true);
     } else {
       if (_key.currentState?.validate() ?? false) {
         _key.currentState!.save();
@@ -1575,25 +1734,21 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
         }
 
         ProductModel productModel = widget.product ?? ProductModel();
-        await showProgress(context, widget.product == null ? 'Adding product...'.tr() : 'Applying edits...'.tr(), false);
+        await showProgress(context, widget.product == null ? 'Adding product...' : 'Applying edits...', false);
         List<String> mediaFilesURLs = _mediaFiles.where((element) => element is String).toList().cast<String>();
         List<File> imagesToUpload = _mediaFiles.where((element) => element is File).toList().cast<File>();
         if (imagesToUpload.isNotEmpty) {
           updateProgress(
-            'Uploading Product Images {} of {}'.tr(args: ['1', '${imagesToUpload.length}']),
+            'Uploading Product Images 1 of ${imagesToUpload.length}',
           );
           for (int i = 0; i < imagesToUpload.length; i++) {
             if (i != 0)
               updateProgress(
-                'Uploading Product Images {} of {}'.tr(
-                  args: ['${i + 1}', '${imagesToUpload.length}'],
-                ),
+                'Uploading Product Images ${i + 1} of ${imagesToUpload.length}',
               );
             String url = await fireStoreUtils.uploadProductImage(
               imagesToUpload[i],
-              'Uploading Product Images {} of {}'.tr(
-                args: ['${i + 1}', '${imagesToUpload.length}'],
-              ),
+              'Uploading Product Images ${i + 1} of ${imagesToUpload.length}',
             );
             mediaFilesURLs.add(url);
           }
@@ -1603,6 +1758,10 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
         productModel.price = rprice.text.toString();
         productModel.disPrice = disprice.text.toString().isEmpty ? "0" : disprice.text.toString();
         productModel.quantity = int.parse(quantityController.text);
+        productModel.trackInventory = trackInventory;
+        productModel.lowStockThreshold = trackInventory
+            ? int.parse(lowStockThresholdController.text)
+            : 5;
         productModel.description = desc!;
         productModel.calories = _cal;
         productModel.grams = _grm;
@@ -1644,16 +1803,16 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
   showProductOptionsSheet(ProductModel? productModel) {
     final action = CupertinoActionSheet(
       message: Text(
-        'Are you sure you want to delete this product?'.tr(),
+        'Are you sure you want to delete this product?',
         style: TextStyle(fontSize: 15.0),
-      ).tr(),
+      ),
       title: Text(
         '${productModel!.name}',
         style: TextStyle(fontSize: 17.0),
       ),
       actions: <Widget>[
         CupertinoActionSheetAction(
-          child: Text('YesSureToDelete').tr(),
+          child: Text('YesSureToDelete'),
           isDestructiveAction: true,
           onPressed: () async {
             Navigator.pop(context);
@@ -1663,7 +1822,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
         ),
       ],
       cancelButton: CupertinoActionSheetAction(
-        child: Text('Cancel').tr(),
+        child: Text('Cancel'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -1676,7 +1835,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
     Widget? okButton;
     if (addOkButton) {
       okButton = TextButton(
-        child: Text('OK'.tr()),
+        child: Text('OK'),
         onPressed: () {
           Navigator.pop(context);
         },
@@ -1718,7 +1877,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
         context: context,
         builder: (context) {
           return AlertDialog(
-            title: Text('$title Attributes value').tr(),
+            title: Text('$title Attributes value'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1729,7 +1888,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                   ],
                   maxLength: 15,
                   controller: _attributesValueController,
-                  decoration: InputDecoration(hintText: "Add Attributes".tr()),
+                  decoration: InputDecoration(hintText: "Add Attributes"),
                 ),
                 SizedBox(
                   height: 10,
@@ -1743,7 +1902,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                           Navigator.pop(context);
                         },
                         child: Text(
-                          "Cancel".tr(),
+                          "Cancel",
                           style: TextStyle(color: Colors.red),
                         )),
                     SizedBox(
@@ -1752,7 +1911,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                     InkWell(
                         onTap: () {
                           if (_attributesValueController.text.isEmpty) {
-                            showAlertDialog(context, 'Error'.tr(), "Please enter attribute value", true);
+                            showAlertDialog(context, 'Error', "Please enter attribute value", true);
                           } else {
                             Navigator.pop(context);
 
@@ -1797,7 +1956,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
                           }
                         },
                         child: Text(
-                          "Add".tr(),
+                          "Add",
                           style: TextStyle(color: Colors.green),
                         )),
                   ],
@@ -1813,7 +1972,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
       message: const Text(
         'Upload image',
         style: TextStyle(fontSize: 15.0),
-      ).tr(),
+      ),
       actions: <Widget>[
         CupertinoActionSheetAction(
           isDefaultAction: false,
@@ -1821,7 +1980,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
             Navigator.pop(context);
             XFile? singleImage = await ImagePicker().pickImage(source: ImageSource.gallery);
             if (singleImage != null) {
-              await showProgress(context, 'Image Upload...'.tr(), false);
+              await showProgress(context, 'Image Upload...', false);
 
               String image = await FireStoreUtils.uploadUserImageToFireStorage(File(singleImage.path), itemAttributes!.variants![index].variantId.toString());
               hideProgress();
@@ -1829,7 +1988,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
               setState(() {});
             }
           },
-          child: const Text('Choose image from gallery').tr(),
+          child: const Text('Choose image from gallery'),
         ),
         CupertinoActionSheetAction(
           isDestructiveAction: false,
@@ -1837,7 +1996,7 @@ class _AddOrUpdateProductScreenState extends State<AddOrUpdateProductScreen> {
             Navigator.pop(context);
             final XFile? singleImage = await ImagePicker().pickImage(source: ImageSource.camera);
             if (singleImage != null) {
-              await showProgress(context, 'Image Upload...'.tr(), false);
+              await showProgress(context, 'Image Upload...', false);
 
               String image = await FireStoreUtils.uploadUserImageToFireStorage(File(singleImage.path), itemAttributes!.variants![index].variantId.toString());
               hideProgress();
