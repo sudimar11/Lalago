@@ -11,6 +11,7 @@ import 'package:foodie_driver/services/FirebaseHelper.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/services/order_service.dart';
+import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/services/user_listener_service.dart';
 import 'package:foodie_driver/ui/auth/AuthScreen.dart';
 import 'package:foodie_driver/ui/privacy_policy/privacy_policy.dart';
@@ -21,12 +22,14 @@ class MoreOptionsBottomSheet extends StatelessWidget {
   final VoidCallback onDriverRankingTap;
   final VoidCallback onInboxTap;
   final VoidCallback onLocationUpdate;
+  final VoidCallback? onSelectWorkArea;
 
   const MoreOptionsBottomSheet({
     Key? key,
     required this.onDriverRankingTap,
     required this.onInboxTap,
     required this.onLocationUpdate,
+    this.onSelectWorkArea,
   }) : super(key: key);
 
   @override
@@ -90,6 +93,35 @@ class MoreOptionsBottomSheet extends StatelessWidget {
                     (current.attendanceStatus?.toLowerCase() == 'suspended');
                 if (isSuspended) {
                   _showSuspendedDialog(context);
+                  return;
+                }
+
+                if (value == true &&
+                    !RiderPresetLocationService.hasValidWorkArea(
+                        latestUser ?? user)) {
+                  await showDialog<void>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Select Work Area'),
+                        content: const Text(
+                          'Please select a work area before going online.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('Cancel'),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              Navigator.pop(context);
+                              onSelectWorkArea?.call();
+                            },
+                            child: const Text('Select Work Area'),
+                          ),
+                        ],
+                      ),
+                    );
                   return;
                 }
 
@@ -202,6 +234,7 @@ class MoreOptionsBottomSheet extends StatelessWidget {
     required VoidCallback onDriverRankingTap,
     required VoidCallback onInboxTap,
     required VoidCallback onLocationUpdate,
+    VoidCallback? onSelectWorkArea,
   }) {
     showModalBottomSheet(
       context: context,
@@ -214,6 +247,7 @@ class MoreOptionsBottomSheet extends StatelessWidget {
         onDriverRankingTap: onDriverRankingTap,
         onInboxTap: onInboxTap,
         onLocationUpdate: onLocationUpdate,
+        onSelectWorkArea: onSelectWorkArea,
       ),
     );
   }

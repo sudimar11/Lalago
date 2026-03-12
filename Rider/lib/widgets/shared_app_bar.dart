@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:foodie_driver/constants.dart';
 import 'package:foodie_driver/services/helper.dart';
+import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/widgets/hours_online_widget.dart';
 import 'package:foodie_driver/widgets/outside_service_area_timer_widget.dart';
@@ -19,6 +20,7 @@ class SharedAppBar extends StatelessWidget implements PreferredSizeWidget {
   final DateTime? firstOutsideAt;
   final int outsidePenaltyThresholdMinutes;
   final VoidCallback? onToggleAttendance;
+  final VoidCallback? onWorkAreaTap;
 
   const SharedAppBar({
     Key? key,
@@ -31,6 +33,7 @@ class SharedAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.firstOutsideAt,
     this.outsidePenaltyThresholdMinutes = 30,
     this.onToggleAttendance,
+    this.onWorkAreaTap,
   }) : super(key: key);
 
   @override
@@ -54,6 +57,7 @@ class SharedAppBar extends StatelessWidget implements PreferredSizeWidget {
       ),
       actions: showActions
           ? [
+              _buildWorkAreaIndicator(context),
               _buildAttendanceChip(context),
               // Outside service area timer (when outside) or hours online
               if (isOutsideServiceArea && firstOutsideAt != null)
@@ -150,6 +154,33 @@ class SharedAppBar extends StatelessWidget implements PreferredSizeWidget {
               ),
             ]
           : null,
+    );
+  }
+
+  Widget _buildWorkAreaIndicator(BuildContext context) {
+    final hasValid = RiderPresetLocationService.hasValidWorkArea(user);
+    final color = hasValid ? Colors.green : Colors.red;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+      child: InkWell(
+        onTap: onWorkAreaTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Tooltip(
+          message: hasValid ? 'Work area selected' : 'No work area selected',
+          child: Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: isDarkMode(context) ? Colors.white24 : Colors.black26,
+                width: 1,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 

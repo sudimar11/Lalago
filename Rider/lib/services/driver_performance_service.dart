@@ -25,6 +25,9 @@ class DriverPerformanceService {
   // Grace period for new drivers (days after first check-in)
   static const int GRACE_PERIOD_DAYS = 3;
 
+  // Skip absence detection for accounts younger than this (days)
+  static const int ACCOUNT_AGE_GRACE_DAYS = 7;
+
   // Default detection range (days)
   static const int DEFAULT_DETECTION_RANGE_DAYS = 90;
 
@@ -739,6 +742,24 @@ class DriverPerformanceService {
         }
       }
 
+      final createdAt = userData['createdAt'] as Timestamp?;
+      if (createdAt != null) {
+        final now = DateTime.now();
+        final accountAgeDays = now.difference(createdAt.toDate()).inDays;
+
+        if (accountAgeDays < ACCOUNT_AGE_GRACE_DAYS) {
+          print(
+              'ℹ️ Account created within last $ACCOUNT_AGE_GRACE_DAYS days, '
+              'skipping absence detection');
+
+          await _firestore.collection('users').doc(driverId).update({
+            'lastAbsenceDetection': FieldValue.serverTimestamp(),
+          });
+
+          return 0;
+        }
+      }
+
       final excusedDays = List<String>.from(userData['excusedDays'] ?? []);
 
       // Get all attendance records
@@ -766,6 +787,19 @@ class DriverPerformanceService {
       // Get first check-in date for grace period check
       final firstCheckInDate = await getFirstCheckInDate(driverId);
 
+      // First, check if the rider has any check-in history at all
+      if (firstCheckInDate == null) {
+        print(
+            'ℹ️ Driver has no check-in history, skipping absence detection '
+            'completely');
+
+        await _firestore.collection('users').doc(driverId).update({
+          'lastAbsenceDetection': FieldValue.serverTimestamp(),
+        });
+
+        return 0;
+      }
+
       // Check each day in the range
       int absentDaysMarked = 0;
       var currentDate = startDate;
@@ -792,16 +826,18 @@ class DriverPerformanceService {
           continue;
         }
 
-        // Skip if within grace period (only if driver has check-in history)
-        if (firstCheckInDate != null) {
-          final daysSinceFirstCheckIn =
-              currentDate.difference(firstCheckInDate).inDays;
-          if (daysSinceFirstCheckIn < GRACE_PERIOD_DAYS) {
-            print(
-                'ℹ️ Skipping $dateString - within grace period after first check-in');
-            currentDate = currentDate.add(Duration(days: 1));
-            continue;
-          }
+        if (firstCheckInDate == null) {
+          currentDate = currentDate.add(Duration(days: 1));
+          continue;
+        }
+        final daysSinceFirstCheckIn =
+            currentDate.difference(firstCheckInDate!).inDays;
+        if (daysSinceFirstCheckIn < GRACE_PERIOD_DAYS) {
+          print(
+              'ℹ️ Skipping $dateString - within grace period after first '
+              'check-in');
+          currentDate = currentDate.add(Duration(days: 1));
+          continue;
         }
 
         // Mark as absent

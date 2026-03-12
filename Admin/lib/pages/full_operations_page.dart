@@ -51,6 +51,10 @@ import 'package:brgy/pages/rider_overview_page.dart';
 import 'package:brgy/pages/ash_notification_tester.dart';
 import 'package:brgy/pages/user_role_management.dart';
 import 'package:brgy/pages/communication_analytics_page.dart';
+import 'package:brgy/pages/forecast_dashboard.dart';
+import 'package:brgy/pages/demand_alerts_page.dart';
+import 'package:brgy/pages/promo_dashboard.dart';
+import 'package:brgy/pages/demand_health_dashboard.dart';
 import 'package:brgy/utils/admin_permission_helpers.dart';
 import 'package:brgy/main.dart';
 
@@ -191,6 +195,16 @@ class FullOperationsPage extends StatelessWidget {
                 Icons.notifications_active,
                 () => _push(context, const AshNotificationTesterPage()),
               ),
+            ],
+          ),
+          _buildSection(
+            context,
+            'Intelligent Dashboard',
+            [
+              _NavItem('Forecast dashboard', Icons.insights, () => _push(context, const ForecastDashboard())),
+              _NavItem('Demand alerts', Icons.warning_amber, () => _push(context, const DemandAlertsPage())),
+              _NavItem('Promo impact', Icons.local_offer, () => _push(context, const PromoDashboard())),
+              _NavItem('Demand health', Icons.health_and_safety, () => _push(context, const DemandHealthDashboard())),
             ],
           ),
           _buildSection(

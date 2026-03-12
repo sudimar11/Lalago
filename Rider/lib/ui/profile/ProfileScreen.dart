@@ -1031,6 +1031,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       appBar: SharedAppBar(
         title: 'My Profile',
         user: widget.user,
+        onWorkAreaTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const ZoneBrowserScreen(),
+            ),
+          );
+        },
       ),
       body: _buildBody(),
       bottomNavigationBar: BottomNavigationBar(
@@ -1087,6 +1095,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 },
                 onLocationUpdate: () {
                   // Handle location update if needed
+                },
+                onSelectWorkArea: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ZoneBrowserScreen(),
+                    ),
+                  );
                 },
               );
               break;

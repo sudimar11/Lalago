@@ -11,10 +11,7 @@ import 'package:foodie_driver/services/driver_performance_service.dart';
 import 'package:foodie_driver/services/performance_tier_helper.dart';
 import 'package:foodie_driver/userPrefrence.dart';
 import 'package:intl/intl.dart';
-import 'package:foodie_driver/ui/communication/unified_communication_hub_screen.dart';
 import 'package:foodie_driver/ui/wallet/wallet_detail_page.dart';
-import 'package:foodie_driver/services/group_chat_service.dart';
-import 'package:foodie_driver/services/unified_inbox_service.dart';
 import 'package:foodie_driver/model/User.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
 import 'package:foodie_driver/services/rider_preset_location_service.dart';
@@ -25,13 +22,11 @@ import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:location/location.dart';
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'package:http/http.dart' as http;
 import 'package:foodie_driver/services/audio_service.dart';
 import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/services/array_validation_service.dart';
 import 'package:foodie_driver/ui/pautos/my_pautos_orders_screen.dart';
+import 'package:foodie_driver/ui/profile/zone_browser_screen.dart';
 
 class OrdersBlankScreen extends StatefulWidget {
   const OrdersBlankScreen({Key? key}) : super(key: key);
@@ -71,33 +66,6 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
   @override
   void initState() {
     super.initState();
-    // #region agent log
-    final user = MyAppState.currentUser;
-    final userMap = user != null
-        ? {
-            'isOnline': user.isOnline,
-            'suspended': user.suspended,
-            'checkedInToday': (user as dynamic).checkedInToday,
-            'userId': user.userID
-          }
-        : null;
-    debugPrint('[DEBUG LOG] initState - screen initialized: $userMap');
-    http
-        .post(
-            Uri.parse(
-                'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'location': 'OrdersBlankScreen.dart:36',
-              'message': 'initState - screen initialized',
-              'data': {'user': userMap},
-              'timestamp': DateTime.now().millisecondsSinceEpoch,
-              'sessionId': 'debug-session',
-              'runId': 'run1',
-              'hypothesisId': 'C,E'
-            }))
-        .catchError((e) => http.Response('', 500));
-    // #endregion
     _initializeLocalNotifications();
     _listenForOrderStatusChanges();
     _checkOfflineStatus();
@@ -153,38 +121,6 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
   void _checkOfflineStatus() {
     // Use postFrameCallback to show dialog after build completes
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // #region agent log
-      final user = MyAppState.currentUser;
-      final userMap = user != null
-          ? {
-              'isOnline': user.isOnline,
-              'suspended': user.suspended,
-              'checkedInToday': (user as dynamic).checkedInToday,
-              'userId': user.userID
-            }
-          : null;
-      debugPrint(
-          '[DEBUG LOG] _checkOfflineStatus called: $userMap, mounted=$mounted, hasShownDialog=$_hasShownOfflineDialog');
-      http
-          .post(
-              Uri.parse(
-                  'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'location': 'OrdersBlankScreen.dart:88',
-                'message': '_checkOfflineStatus called',
-                'data': {
-                  'user': userMap,
-                  'mounted': mounted,
-                  'hasShownDialog': _hasShownOfflineDialog
-                },
-                'timestamp': DateTime.now().millisecondsSinceEpoch,
-                'sessionId': 'debug-session',
-                'runId': 'run1',
-                'hypothesisId': 'A,C,D'
-              }))
-          .catchError((e) => http.Response('', 500));
-      // #endregion
       // Only show offline dialog if user cannot receive orders.
       final canReceiveOrders =
           MyAppState.currentUser!.isOnline == true &&
@@ -456,6 +392,54 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       _ordersStream = _createOrdersStream(uid);
       _ordersStreamUserId = uid;
     }
+  }
+
+  bool _shouldShowWorkAreaBanner() {
+    final user = MyAppState.currentUser;
+    if (user == null) return false;
+    final canReceive = user.isOnline == true &&
+        (user.riderAvailability == 'available' ||
+            user.riderAvailability == 'on_delivery');
+    return canReceive &&
+        !RiderPresetLocationService.hasValidWorkArea(user);
+  }
+
+  Widget _buildWorkAreaBanner() {
+    final bgColor = isDarkMode(context)
+        ? Colors.orange.shade900.withValues(alpha: 0.3)
+        : Colors.orange.shade100;
+    final fgColor = isDarkMode(context)
+        ? Colors.orange.shade200
+        : Colors.orange.shade900;
+    return Material(
+      color: bgColor,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: fgColor),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                "You don't have a work area set. Select one to receive orders.",
+                style: TextStyle(fontSize: 14, color: fgColor),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ZoneBrowserScreen(),
+                  ),
+                );
+              },
+              child: const Text('Select Work Area'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _initializeLocalNotifications() async {
@@ -1012,19 +996,10 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
     }
 
     final FirebaseFirestore firestore = FirebaseFirestore.instance;
-    // #region agent log
     if (_ordersStream == null || _ordersStreamUserId != currentUserId) {
       _ordersStream = _createOrdersStream(currentUserId);
       _ordersStreamUserId = currentUserId;
-      try {
-        final f = File(
-            '/Users/sudimard/Downloads/Lalago/.cursor/debug.log');
-        f.writeAsStringSync(
-            '${jsonEncode(<String, dynamic>{"location": "OrdersBlankScreen.dart:build", "message": "orders stream created", "data": {"userId": currentUserId, "streamWasNull": _ordersStream == null}, "timestamp": DateTime.now().millisecondsSinceEpoch, "sessionId": "debug-session", "hypothesisId": "H1"})}\n',
-            mode: FileMode.append);
-      } catch (_) {}
     }
-    // #endregion
 
     return Scaffold(
       appBar: AppBar(
@@ -1242,209 +1217,26 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
               );
             },
           ),
-          StreamBuilder<int>(
-            stream: UnifiedInboxService.getTotalUnreadCountStream(
-              currentUserId,
-            ),
-            builder: (context, snapshot) {
-              final totalUnread = snapshot.data ?? 0;
-              return Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    IconButton(
-                      tooltip: 'Messages',
-                      icon: const Icon(Icons.chat_bubble_outline),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                const UnifiedCommunicationHubScreen(),
-                          ),
-                        );
-                      },
-                    ),
-                    if (totalUnread > 0)
-                      Positioned(
-                        right: 4,
-                        top: 4,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                          constraints: const BoxConstraints(
-                            minWidth: 16,
-                            minHeight: 16,
-                          ),
-                          child: Text(
-                            totalUnread > 99 ? '99+' : '$totalUnread',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            },
-          ),
-          StreamBuilder<QuerySnapshot>(
-            stream: firestore
-                .collection('chat_admin_driver')
-                .where('driverId', isEqualTo: currentUserId)
-                .snapshots(),
-            builder: (context, snapshot) {
-              int totalUnread = 0;
-              for (final doc in snapshot.data?.docs ?? const []) {
-                final data = doc.data() as Map<String, dynamic>? ?? const {};
-                final raw = data['unreadForDriver'];
-                final count = raw is num
-                    ? raw.toInt()
-                    : int.tryParse(raw?.toString() ?? '') ?? 0;
-                totalUnread += count;
-              }
-
-              return Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    IconButton(
-                      tooltip: 'Admin Messages',
-                      icon: const Icon(Icons.support_agent),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const UnifiedCommunicationHubScreen(
-                              initialTab: UnifiedCommunicationTab.support,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    if (totalUnread > 0)
-                      Positioned(
-                        right: 4,
-                        top: 4,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                          constraints: const BoxConstraints(
-                            minWidth: 16,
-                            minHeight: 16,
-                          ),
-                          child: Text(
-                            totalUnread > 99 ? '99+' : '$totalUnread',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            },
-          ),
         ],
         centerTitle: true,
       ),
       backgroundColor:
           isDarkMode(context) ? Color(DARK_VIEWBG_COLOR) : Colors.white,
-      body: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
               children: [
+                if (_shouldShowWorkAreaBanner()) _buildWorkAreaBanner(),
                 // Orders list
                 Expanded(
                   child: StreamBuilder<QuerySnapshot>(
                     stream: _ordersStream!,
                     builder: (context, snapshot) {
-                      // #region agent log
-                      final rawOnline = MyAppState.currentUser?.isOnline;
                       final canReceiveOrders =
                           MyAppState.currentUser?.riderAvailability ==
                               'available' ||
                           MyAppState.currentUser?.riderAvailability ==
                               'on_delivery';
-                      final branch = remittanceService.isBlockedByRemittance
-                          ? 'remittance'
-                          : (MyAppState.currentUser?.suspended == true)
-                              ? 'suspended'
-                              : (!canReceiveOrders)
-                                  ? 'offline'
-                                  : (snapshot.connectionState ==
-                                          ConnectionState.waiting)
-                                      ? 'waiting'
-                                      : (snapshot.hasError)
-                                          ? 'error'
-                                          : ((snapshot.data?.docs ?? []).isEmpty)
-                                              ? 'empty'
-                                              : 'list';
-                      // Log so we see in release logcat why order screen shows loading/list/error.
-                      print(
-                          '📋 Orders screen: branch=$branch '
-                          'conn=${snapshot.connectionState} '
-                          'hasData=${snapshot.hasData} hasError=${snapshot.hasError} '
-                          'docs=${snapshot.data?.docs.length ?? 0}');
-                      // #region agent log
-                      try {
-                        final f = File(
-                            '/Users/sudimard/Downloads/Lalago/.cursor/debug.log');
-                        f.writeAsStringSync(
-                            '${jsonEncode(<String, dynamic>{"location": "OrdersBlankScreen.dart:StreamBuilder", "message": "branch", "data": {"connectionState": snapshot.connectionState.toString(), "hasData": snapshot.hasData, "hasError": snapshot.hasError, "branch": branch, "docsLength": snapshot.data?.docs.length ?? 0}, "timestamp": DateTime.now().millisecondsSinceEpoch, "sessionId": "debug-session", "hypothesisId": "H2,H3,H4"})}\n',
-                            mode: FileMode.append);
-                      } catch (_) {}
-                      // #endregion
-                      http
-                          .post(
-                            Uri.parse(
-                                'http://127.0.0.1:7244/ingest/c9ab929b-94d3-40bd-8785-7deb40c047f7'),
-                            headers: {'Content-Type': 'application/json'},
-                            body: jsonEncode({
-                              'location': 'OrdersBlankScreen.dart:builder',
-                              'message': 'StreamBuilder branch',
-                              'data': {
-                                'connectionState':
-                                    snapshot.connectionState.toString(),
-                                'hasData': snapshot.hasData,
-                                'hasError': snapshot.hasError,
-                                'remittanceBlocked':
-                                    remittanceService.isBlockedByRemittance,
-                                'suspended':
-                                    MyAppState.currentUser?.suspended,
-                                'canReceiveOrders': canReceiveOrders,
-                                'availability':
-                                    MyAppState.currentUser?.riderAvailability,
-                                'isOnline': MyAppState.currentUser?.isOnline,
-                                'branch': branch,
-                                'docsLength':
-                                    snapshot.data?.docs.length ?? 0,
-                              },
-                              'timestamp':
-                                  DateTime.now().millisecondsSinceEpoch,
-                                'sessionId': 'debug-session',
-                              'runId': 'run1',
-                              'hypothesisId': 'A,B,C,D,E',
-                            }),
-                          )
-                          .catchError((_) => http.Response('', 500));
-                      // #endregion
                       if (remittanceService.isBlockedByRemittance) {
                         return _buildRemittanceRequiredCard();
                       }
@@ -1452,66 +1244,7 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                         return _buildSuspensionWarningCard();
                       }
 
-                      // Check if user is offline
-                      // #region agent log
-                      final user = MyAppState.currentUser;
-                      if (user != null) {
-                        debugPrint(
-                            '[DEBUG LOG] Build - checking offline status: isOnline=${user.isOnline}, checkedInToday=${(user as dynamic).checkedInToday}, suspended=${user.suspended}');
-                        http
-                            .post(
-                                Uri.parse(
-                                    'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-                                headers: {'Content-Type': 'application/json'},
-                                body: jsonEncode({
-                                  'location': 'OrdersBlankScreen.dart:767',
-                                  'message': 'Build - checking offline status',
-                                  'data': {
-                                    'isOnline': user.isOnline,
-                                    'riderAvailability':
-                                        user.riderAvailability,
-                                    'suspended': user.suspended
-                                  },
-                                  'timestamp':
-                                      DateTime.now().millisecondsSinceEpoch,
-                                  'sessionId': 'debug-session',
-                                  'runId': 'run1',
-                                  'hypothesisId': 'A,B,C'
-                                }))
-                            .catchError((e) => http.Response('', 500));
-                      }
-                      // #endregion
-                      // Only show offline card if user cannot receive orders
-                      // (isCheckedInToday, isCheckedOutToday, canReceiveOrders already computed above for logging)
-
                       if (!canReceiveOrders) {
-                        // #region agent log
-                        debugPrint(
-                            '[DEBUG LOG] Build - displaying offline card: isOnline=${MyAppState.currentUser!.isOnline}, riderAvailability=${MyAppState.currentUser!.riderAvailability}');
-                        http
-                            .post(
-                                Uri.parse(
-                                    'http://127.0.0.1:7242/ingest/65d50706-9e3e-423b-80b8-1c248fbe9093'),
-                                headers: {'Content-Type': 'application/json'},
-                                body: jsonEncode({
-                                  'location': 'OrdersBlankScreen.dart:773',
-                                  'message': 'Build - displaying offline card',
-                                  'data': {
-                                    'isOnline':
-                                        MyAppState.currentUser!.isOnline,
-                                    'riderAvailability':
-                                        MyAppState.currentUser!
-                                            .riderAvailability,
-                                    'canReceiveOrders': canReceiveOrders
-                                  },
-                                  'timestamp':
-                                      DateTime.now().millisecondsSinceEpoch,
-                                  'sessionId': 'debug-session',
-                                  'runId': 'run1',
-                                  'hypothesisId': 'B,D'
-                                }))
-                            .catchError((e) => http.Response('', 500));
-                        // #endregion
                         return _buildSlideToGoOnlineCard();
                       }
 
@@ -1584,7 +1317,14 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
                           return RefreshableOrderList(
                             docs: docs,
                             onRefresh: () {
-                              setState(() => _recreateOrdersStream());
+                              final user = MyAppState.currentUser;
+                              if (user != null) {
+                                FireStoreUtils.touchLastActivity(
+                                    user.userID);
+                              }
+                              if (mounted) {
+                                setState(() => _recreateOrdersStream());
+                              }
                             },
                             newOrderIds: _newOrderIds,
                             highlightedOrderIds: highlightedIds,
@@ -1601,64 +1341,6 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
               ],
             ),
           ),
-          // Floating chat button with unread badge
-          Positioned(
-            bottom: 16,
-            right: 16,
-            child: StreamBuilder<int>(
-              stream: GroupChatService.getUnreadCountStream(),
-              builder: (context, snapshot) {
-                final unreadCount = snapshot.data ?? 0;
-                return Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    FloatingActionButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) =>
-                                const UnifiedCommunicationHubScreen(
-                              initialTab: UnifiedCommunicationTab.community,
-                            ),
-                          ),
-                        );
-                      },
-                      backgroundColor: Color(COLOR_PRIMARY),
-                      child: const Icon(Icons.chat, color: Colors.white),
-                    ),
-                    if (unreadCount > 0)
-                      Positioned(
-                        right: -4,
-                        top: -4,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                          constraints: const BoxConstraints(
-                            minWidth: 20,
-                            minHeight: 20,
-                          ),
-                          child: Text(
-                            unreadCount > 99 ? '99+' : '$unreadCount',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

@@ -32,7 +32,7 @@ class RiderTimeConfigService {
         : <String, dynamic>{};
 
     _cachedConfig = {
-      'inactivityTimeoutMinutes': data['inactivityTimeoutMinutes'] ?? 15,
+      'inactivityTimeoutMinutes': data['inactivityTimeoutMinutes'] ?? 30,
       'excludeWithActiveOrders': data['excludeWithActiveOrders'] ?? true,
     };
     _cachedAt = now;
@@ -45,6 +45,6 @@ class RiderTimeConfigService {
     final v = config['inactivityTimeoutMinutes'];
     if (v is int) return v;
     if (v is num) return v.toInt();
-    return 15;
+    return 30;
   }
 }

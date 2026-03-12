@@ -748,6 +748,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
               phoneNumber: phoneNumber,
               isActive: true,
               lastOnlineTimestamp: Timestamp.now(),
+              lastActivityTimestamp: Timestamp.now(),
               settings: UserSettings(),
               email: '',
               active: true,

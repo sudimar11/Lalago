@@ -5,6 +5,11 @@ import 'package:intl/intl.dart';
 
 import 'package:brgy/constants.dart';
 
+/// Safe access for optional Firestore fields. [DocumentSnapshot.get] throws when
+/// a field does not exist; data() returns null for missing keys.
+Object? _field(QueryDocumentSnapshot d, String key) =>
+    (d.data() as Map<String, dynamic>?)?[key];
+
 class SearchAnalyticsDashboard extends StatefulWidget {
   const SearchAnalyticsDashboard({super.key});
 
@@ -99,16 +104,17 @@ class _SearchAnalyticsDashboardState extends State<SearchAnalyticsDashboard> {
         final docs = snapshot.data!.docs;
         final totalSearches = docs.length;
         final searchesWithClicks =
-            docs.where((d) => d.get('clickedRestaurantId') != null).length;
+            docs.where((d) => _field(d, 'clickedRestaurantId') != null).length;
         final clickRate = totalSearches > 0
             ? (searchesWithClicks / totalSearches * 100).toStringAsFixed(1)
             : '0';
         int totalResults = 0;
         int zeroResults = 0;
         for (final d in docs) {
-          final count = d.get('resultCount') ?? 0;
-          totalResults += count is int ? count : 0;
-          if (count == 0) zeroResults++;
+          final count = _field(d, 'resultCount');
+          final countVal = count is int ? count : 0;
+          totalResults += countVal;
+          if (countVal == 0) zeroResults++;
         }
         final avgResults =
             totalSearches > 0 ? (totalResults / totalSearches).round() : 0;
@@ -194,10 +200,10 @@ class _SearchAnalyticsDashboardState extends State<SearchAnalyticsDashboard> {
         final Map<String, int> queryCounts = {};
         final Map<String, int> queryClicks = {};
         for (final d in docs) {
-          final q = (d.get('searchQuery') ?? '').toString().trim();
+          final q = (_field(d, 'searchQuery') ?? '').toString().trim();
           if (q.isEmpty) continue;
           queryCounts[q] = (queryCounts[q] ?? 0) + 1;
-          if (d.get('clickedRestaurantId') != null) {
+          if (_field(d, 'clickedRestaurantId') != null) {
             queryClicks[q] = (queryClicks[q] ?? 0) + 1;
           }
         }
@@ -273,7 +279,7 @@ class _SearchAnalyticsDashboardState extends State<SearchAnalyticsDashboard> {
         final docs = snapshot.data!.docs;
         final totalSearches = docs.length;
         final clicks =
-            docs.where((d) => d.get('clickedRestaurantId') != null).length;
+            docs.where((d) => _field(d, 'clickedRestaurantId') != null).length;
 
         final values = [
           totalSearches.toDouble(),
@@ -391,12 +397,14 @@ class _SearchAnalyticsDashboardState extends State<SearchAnalyticsDashboard> {
         }
 
         final docs = snapshot.data!.docs;
-        final zeroResult =
-            docs.where((d) => (d.get('resultCount') ?? 0) == 0).toList();
+        final zeroResult = docs.where((d) {
+          final c = _field(d, 'resultCount');
+          return (c is int ? c : 0) == 0;
+        }).toList();
 
         final Map<String, int> zeroCounts = {};
         for (final d in zeroResult) {
-          final q = (d.get('searchQuery') ?? '').toString().trim();
+          final q = (_field(d, 'searchQuery') ?? '').toString().trim();
           if (q.isEmpty) continue;
           zeroCounts[q] = (zeroCounts[q] ?? 0) + 1;
         }

@@ -64,6 +64,7 @@ dependencies:
   cached_network_image: ^3.4.1
   flutter_image_compress: ^2.3.0
   uuid: ^4.5.1
+  audioplayers: ^5.2.1
 
 dev_dependencies:
   flutter_test:
@@ -88,6 +89,7 @@ flutter:
 
   assets:
     - android/app/google-services.json
+    - assets/audio/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

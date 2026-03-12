@@ -10,8 +10,9 @@ import 'package:intl/intl.dart';
 
 class CouponAddEditPage extends StatefulWidget {
   final Coupon? coupon;
+  final Map<String, dynamic>? prefill;
 
-  const CouponAddEditPage({super.key, this.coupon});
+  const CouponAddEditPage({super.key, this.coupon, this.prefill});
 
   @override
   State<CouponAddEditPage> createState() => _CouponAddEditPageState();
@@ -46,7 +47,13 @@ class _CouponAddEditPageState extends State<CouponAddEditPage> {
   @override
   void initState() {
     super.initState();
-    if (widget.coupon != null) {
+    if (widget.prefill != null && widget.coupon == null) {
+      final p = widget.prefill!;
+      _titleController.text = (p['title'] as String?) ?? 'Demand recovery promo';
+      _discountType = (p['discountType'] as String?) ?? 'percentage';
+      _discountValueController.text = (p['discountValue']?.toString() ?? '20');
+      _validTo = (p['validTo'] as DateTime?) ?? DateTime.now().add(const Duration(days: 7));
+    } else if (widget.coupon != null) {
       final coupon = widget.coupon!;
       _codeController.text = coupon.code;
       _titleController.text = coupon.title;

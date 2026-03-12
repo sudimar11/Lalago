@@ -10,6 +10,20 @@ const ORDERS = 'restaurant_orders';
 const FORECAST_AGGREGATES = 'forecast_aggregates';
 const BATCH_SIZE = 500;
 
+/** Only fulfilled orders contribute to forecast baseline. */
+const FULFILLED_ORDER_STATUSES = [
+  'Order Completed',
+  'order completed',
+  'completed',
+  'Completed',
+  'Order Shipped',
+  'order shipped',
+  'Order Delivered',
+  'order delivered',
+  'In Transit',
+  'in transit',
+];
+
 function getDb() {
   if (!admin.apps.length) {
     admin.initializeApp();
@@ -126,6 +140,7 @@ exports.aggregateForecastData = functions
     while (true) {
       let query = db
         .collection(ORDERS)
+        .where('status', 'in', FULFILLED_ORDER_STATUSES)
         .where('createdAt', '>=', startTs)
         .where('createdAt', '<', endTs)
         .orderBy('createdAt', 'asc')

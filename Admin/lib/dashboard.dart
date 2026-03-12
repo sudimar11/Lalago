@@ -71,10 +71,21 @@ import 'package:brgy/pages/full_operations_page.dart';
 import 'package:brgy/pages/user_segments_page.dart';
 import 'package:brgy/map_page.dart';
 import 'package:brgy/widgets/dashboard/analytics_kpi_cards.dart';
+import 'package:brgy/widgets/dashboard/health_score_gauge.dart';
+import 'package:brgy/widgets/dashboard/forecast_card.dart';
+import 'package:brgy/widgets/dashboard/alert_item.dart';
+import 'package:brgy/widgets/dashboard/promo_impact_card.dart';
+import 'package:brgy/widgets/dashboard/health_sparkline.dart';
+import 'package:brgy/services/main_dashboard_service.dart';
+import 'package:brgy/pages/demand_health_dashboard.dart';
+import 'package:brgy/pages/forecast_dashboard.dart';
+import 'package:brgy/pages/demand_alerts_page.dart';
+import 'package:brgy/pages/promo_dashboard.dart';
 import 'package:brgy/constants.dart';
 import 'package:brgy/services/order_sound_service.dart';
 import 'package:brgy/utils/order_ready_time_helper.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -189,6 +200,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon: const Icon(Icons.trending_up),
             tooltip: 'View Trends',
             onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+          StreamBuilder<int>(
+            stream: MainDashboardService.streamActiveAlertCount(),
+            builder: (context, snapshot) {
+              final count = snapshot.data ?? 0;
+              return Stack(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.warning_amber),
+                    tooltip: 'Demand Alerts',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const DemandAlertsPage(),
+                        ),
+                      );
+                    },
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: Container(
+                        padding: const EdgeInsets.all(2),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 16,
+                          minHeight: 16,
+                        ),
+                        child: Text(
+                          count > 9 ? '9+' : '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
           ),
           // Notification icon with badge
           StreamBuilder<int>(
@@ -531,24 +589,54 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _AtRiskFocalSection(onNavigate: push),
-                const SizedBox(height: 12),
-                if (isWideHeader) ...[
+                _HealthGaugeCard(onNavigate: push),
+                const SizedBox(height: 16),
+                if (isWideHeader)
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Expanded(child: _TodaysOrdersCard()),
-                      const SizedBox(width: 12),
                       Expanded(
-                        child: _QuickActionsCard(items: quickActions),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _MainForecastCard(onNavigate: push),
+                            const SizedBox(height: 12),
+                            const _TodaysOrdersCard(),
+                            const SizedBox(height: 12),
+                            _QuickActionsCard(items: quickActions),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _AlertsFeedSection(onNavigate: push),
+                            const SizedBox(height: 16),
+                            _PromoHighlightsSection(onNavigate: push),
+                          ],
+                        ),
                       ),
                     ],
+                  )
+                else
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _MainForecastCard(onNavigate: push),
+                      const SizedBox(height: 12),
+                      _AlertsFeedSection(onNavigate: push),
+                      const SizedBox(height: 12),
+                      _PromoHighlightsSection(onNavigate: push),
+                      const SizedBox(height: 12),
+                      const _TodaysOrdersCard(),
+                      const SizedBox(height: 12),
+                      _QuickActionsCard(items: quickActions),
+                    ],
                   ),
-                ] else ...[
-                  const _TodaysOrdersCard(),
-                  const SizedBox(height: 12),
-                  _QuickActionsCard(items: quickActions),
-                ],
+                const SizedBox(height: 16),
+                _AtRiskFocalSection(onNavigate: push),
                 const SizedBox(height: 12),
                 _AtAGlanceSection(
                   columns: columns,
@@ -563,6 +651,290 @@ class _DashboardBlankPageState extends State<DashboardBlankPage> {
           ),
         );
       },
+    );
+  }
+}
+
+class _HealthGaugeCard extends StatelessWidget {
+  const _HealthGaugeCard({required this.onNavigate});
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>?>(
+      stream: MainDashboardService.streamLatestHealth(),
+      builder: (context, snapshot) {
+        final data = snapshot.data?.data();
+        final score =
+            (data?['overallScore'] as num?)?.toInt() ?? 0;
+
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Overall Health Score',
+                      style:
+                          Theme.of(context).textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                    ),
+                    TextButton(
+                      onPressed: () =>
+                          onNavigate(const DemandHealthDashboard()),
+                      child: const Text('View details'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Center(
+                  child: HealthScoreGauge(
+                    score: score,
+                    size: 100,
+                    showLabel: true,
+                    onTap: () =>
+                        onNavigate(const DemandHealthDashboard()),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Last 7 days',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 8),
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: MainDashboardService.getHealthHistory(7),
+                  builder: (context, snap) {
+                    if (!snap.hasData) {
+                      return const SizedBox(
+                        height: 48,
+                        child: Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+                    return HealthSparkline(
+                      history: snap.data!,
+                      height: 48,
+                      days: 7,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MainForecastCard extends StatelessWidget {
+  const _MainForecastCard({required this.onNavigate});
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<TodayForecastData>(
+      future: MainDashboardService.getTodayForecast(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(20),
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+          );
+        }
+        final data = snapshot.data!;
+        return FutureBuilder<List<FlSpot>>(
+          future: MainDashboardService.getForecastTrendNext7Days(),
+          builder: (context, sparkSnap) {
+            final spots = sparkSnap.hasData && sparkSnap.data!.isNotEmpty
+                ? sparkSnap.data
+                : null;
+            return ForecastCard(
+              predicted: data.predicted,
+              actual: data.actual,
+              lowerBound: data.lowerBound,
+              upperBound: data.upperBound,
+              source: data.source,
+              sparklineSpots: spots != null && spots.isNotEmpty ? spots : null,
+              onTap: () => onNavigate(const ForecastDashboard()),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _AlertsFeedSection extends StatelessWidget {
+  const _AlertsFeedSection({required this.onNavigate});
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Active Alerts',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                TextButton(
+                  onPressed: () => onNavigate(const DemandAlertsPage()),
+                  child: const Text('View All'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<List<Map<String, dynamic>>>(
+              stream: MainDashboardService.streamActiveAlerts(limit: 5),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  );
+                }
+                final alerts = snapshot.data ?? [];
+                if (alerts.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No active alerts',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                  );
+                }
+                return Column(
+                  children: alerts
+                      .map((a) => AlertItem(
+                            alertId: a['id'] as String? ?? '',
+                            data: a,
+                            compact: true,
+                            showViewButton: true,
+                            onTap: () =>
+                                onNavigate(const DemandAlertsPage()),
+                          ))
+                      .toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PromoHighlightsSection extends StatelessWidget {
+  const _PromoHighlightsSection({required this.onNavigate});
+
+  final void Function(Widget page) onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Top Promos',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                TextButton(
+                  onPressed: () => onNavigate(const PromoDashboard()),
+                  child: const Text('View All'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: MainDashboardService.getTopPromosByIncrementalOrders(
+                limit: 3,
+              ),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  );
+                }
+                final promos = snapshot.data ?? [];
+                if (promos.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No promo data yet',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                  );
+                }
+                return Column(
+                  children: promos
+                      .map((p) => PromoImpactCard(
+                            promoId: p['promoId'] as String? ?? p['id'] ?? '',
+                            data: p,
+                            compact: true,
+                            onTap: () =>
+                                onNavigate(const PromoDashboard()),
+                          ))
+                      .toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

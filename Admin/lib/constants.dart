@@ -27,3 +27,6 @@ const CUSTOMER_FEEDBACK = 'customer_feedback';
 const FOODS_REVIEW = 'foods_review';
 const SEARCH_ANALYTICS = 'search_analytics';
 const USER_CLICKS = 'user_clicks';
+const ORDER_FORECASTS = 'order_forecasts';
+const FORECAST_AGGREGATES = 'forecast_aggregates';
+const DEMAND_FORECASTS = 'demand_forecasts';

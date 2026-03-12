@@ -194,6 +194,27 @@ class NotificationService {
     );
   }
 
+  /// Create demand alert notification (in-app).
+  static Future<void> createDemandAlertNotification({
+    required String alertId,
+    required String type,
+    required String severity,
+    required String message,
+    Map<String, dynamic>? data,
+  }) async {
+    await createNotification(
+      title: 'Demand Alert: ${severity.toUpperCase()}',
+      message: message,
+      type: 'demand_alert',
+      data: {
+        'alertId': alertId,
+        'type': type,
+        'severity': severity,
+        ...?data,
+      },
+    );
+  }
+
   /// Create a note/reminder notification
   static Future<void> createNote({
     required String title,

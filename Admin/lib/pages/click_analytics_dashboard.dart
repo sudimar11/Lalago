@@ -4,6 +4,11 @@ import 'package:fl_chart/fl_chart.dart';
 
 import 'package:brgy/constants.dart';
 
+/// Safe access for optional Firestore fields. [DocumentSnapshot.get] throws when
+/// a field does not exist; data() returns null for missing keys.
+Object? _field(QueryDocumentSnapshot d, String key) =>
+    (d.data() as Map<String, dynamic>?)?[key];
+
 class ClickAnalyticsDashboard extends StatefulWidget {
   const ClickAnalyticsDashboard({super.key});
 
@@ -95,7 +100,7 @@ class _ClickAnalyticsDashboardState extends State<ClickAnalyticsDashboard> {
         final docs = snapshot.data!.docs;
         final Map<String, int> sourceCounts = {};
         for (final d in docs) {
-          final src = (d.get('source') ?? 'unknown').toString();
+          final src = (_field(d, 'source') ?? 'unknown').toString();
           sourceCounts[src] = (sourceCounts[src] ?? 0) + 1;
         }
 
@@ -180,10 +185,10 @@ class _ClickAnalyticsDashboardState extends State<ClickAnalyticsDashboard> {
         final Map<String, int> restCounts = {};
         final Map<String, int> restConversions = {};
         for (final d in docs) {
-          final rid = (d.get('restaurantId') ?? '').toString();
+          final rid = (_field(d, 'restaurantId') ?? '').toString();
           if (rid.isEmpty) continue;
           restCounts[rid] = (restCounts[rid] ?? 0) + 1;
-          if (d.get('convertedToOrder') == true) {
+          if (_field(d, 'convertedToOrder') == true) {
             restConversions[rid] = (restConversions[rid] ?? 0) + 1;
           }
         }
@@ -270,7 +275,8 @@ class _ClickAnalyticsDashboardState extends State<ClickAnalyticsDashboard> {
             .doc(id)
             .get();
         if (doc.exists) {
-          result[id] = doc.get('title') ?? id;
+          final data = doc.data() as Map<String, dynamic>?;
+          result[id] = data?['title']?.toString() ?? id;
         } else {
           result[id] = id;
         }
@@ -298,9 +304,9 @@ class _ClickAnalyticsDashboardState extends State<ClickAnalyticsDashboard> {
         final Map<String, int> sourceClicks = {};
         final Map<String, int> sourceOrders = {};
         for (final d in docs) {
-          final src = (d.get('source') ?? 'unknown').toString();
+          final src = (_field(d, 'source') ?? 'unknown').toString();
           sourceClicks[src] = (sourceClicks[src] ?? 0) + 1;
-          if (d.get('convertedToOrder') == true) {
+          if (_field(d, 'convertedToOrder') == true) {
             sourceOrders[src] = (sourceOrders[src] ?? 0) + 1;
           }
         }
@@ -308,7 +314,7 @@ class _ClickAnalyticsDashboardState extends State<ClickAnalyticsDashboard> {
         final sources = sourceClicks.keys.toList()..sort();
         final totalClicks = docs.length;
         final totalOrders =
-            docs.where((d) => d.get('convertedToOrder') == true).length;
+            docs.where((d) => _field(d, 'convertedToOrder') == true).length;
 
         return Card(
           child: Padding(

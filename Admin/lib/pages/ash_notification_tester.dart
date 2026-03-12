@@ -1,7 +1,5 @@
-import 'dart:convert';
 import 'dart:developer' as developer;
 
-import 'package:brgy/debug_log_io.dart' if (dart.library.html) 'package:brgy/debug_log_stub.dart' as debug_log;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart' show Firebase, FirebaseException;
 import 'package:cloud_functions/cloud_functions.dart';
@@ -248,20 +246,10 @@ class _AshNotificationTesterPageState extends State<AshNotificationTesterPage> {
   }
 
   void _debugLog(String location, String message, Map<String, dynamic> data) {
-    // #region agent log
-    try {
-      const path =
-          '/Users/sudimard/Downloads/Lalago Final/.cursor/debug-78ab7c.log';
-      final payload = {
-        'sessionId': '78ab7c',
-        'location': location,
-        'message': message,
-        'data': data,
-        'timestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-      debug_log.debugLogAppend(path, '${jsonEncode(payload)}\n');
-    } catch (_) {}
-    // #endregion
+    developer.log(
+      data.isEmpty ? message : '$message $data',
+      name: location,
+    );
   }
 
   Future<void> _loadAllUsersWithTokens() async {

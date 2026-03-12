@@ -3,6 +3,11 @@ import 'package:flutter/material.dart';
 
 import 'package:brgy/constants.dart';
 
+/// Safe access for optional Firestore fields. [DocumentSnapshot.get] throws when
+/// a field does not exist; data() returns null for missing keys.
+Object? _field(QueryDocumentSnapshot d, String key) =>
+    (d.data() as Map<String, dynamic>?)?[key];
+
 class RecommendationPerformance extends StatefulWidget {
   const RecommendationPerformance({super.key});
 
@@ -99,9 +104,9 @@ class _RecommendationPerformanceState extends State<RecommendationPerformance> {
         final Map<String, int> sourceClicks = {};
         final Map<String, int> sourceOrders = {};
         for (final d in docs) {
-          final src = (d.get('source') ?? 'unknown').toString();
+          final src = (_field(d, 'source') ?? 'unknown').toString();
           sourceClicks[src] = (sourceClicks[src] ?? 0) + 1;
-          if (d.get('convertedToOrder') == true) {
+          if (_field(d, 'convertedToOrder') == true) {
             sourceOrders[src] = (sourceOrders[src] ?? 0) + 1;
           }
         }
@@ -191,9 +196,9 @@ class _RecommendationPerformanceState extends State<RecommendationPerformance> {
         final docs = snapshot.data!.docs;
         final byType = <String, List<QueryDocumentSnapshot<Object?>>>{};
         for (final d in docs) {
-          var type = d.get('recommendationType')?.toString();
+          var type = _field(d, 'recommendationType')?.toString();
           if (type == null || type.isEmpty) {
-            final data = d.get('data');
+            final data = _field(d, 'data');
             if (data is Map && data['reason'] != null) {
               type = data['reason'].toString();
             }
@@ -253,7 +258,7 @@ class _RecommendationPerformanceState extends State<RecommendationPerformance> {
                       final list = byType[type]!;
                       final sent = list.length;
                       final opened = list
-                          .where((d) => d.get('openedAt') != null)
+                          .where((d) => _field(d, 'openedAt') != null)
                           .length;
                       final openRate = sent > 0
                           ? (opened / sent * 100).toStringAsFixed(1)

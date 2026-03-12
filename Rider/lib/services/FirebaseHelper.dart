@@ -1786,6 +1786,7 @@ class FireStoreUtils {
         email: emailAddress,
         settings: UserSettings(),
         lastOnlineTimestamp: Timestamp.now(),
+        lastActivityTimestamp: Timestamp.now(),
         isActive: true,
         phoneNumber: mobile,
         firstName: firstName,

@@ -31,6 +31,7 @@ import 'package:foodie_driver/ui/ordersScreen/OrdersBlankScreen.dart';
 import 'package:foodie_driver/ui/pautos/pautos_order_detail_screen.dart';
 import 'package:foodie_driver/ui/communication/unified_communication_hub_screen.dart';
 import 'package:foodie_driver/ui/heat_map/DriverHeatMapScreen.dart';
+import 'package:foodie_driver/ui/profile/zone_browser_screen.dart';
 import 'package:foodie_driver/widgets/shared_bottom_navigation_bar.dart';
 import 'package:foodie_driver/services/helper.dart';
 import 'package:foodie_driver/ui/auth/AuthScreen.dart';
@@ -1047,6 +1048,38 @@ class _ContainerScreen extends State<ContainerScreen>
     if (user == null) return;
 
     if (user.isOnline != true) {
+      if (!RiderPresetLocationService.hasValidWorkArea(user)) {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Select Work Area'),
+              content: const Text(
+                'Please select a work area before going online.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const ZoneBrowserScreen(),
+                      ),
+                    );
+                  },
+                  child: const Text('Select Work Area'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
       // Check zone capacity before allowing go-online
       final presetId = user.selectedPresetLocationId;
       if (presetId != null && presetId.trim().isNotEmpty) {
@@ -1202,6 +1235,7 @@ class _ContainerScreen extends State<ContainerScreen>
   }
 
   void _onBottomNavTap(int index) {
+    _handleUserInteraction();
     // Prevent navigation if account is suspended
     if (MyAppState.currentUser?.suspended == true) {
       return;
@@ -1278,11 +1312,14 @@ class _ContainerScreen extends State<ContainerScreen>
               }
             });
 
-            return GestureDetector(
-              onTap: _handleUserInteraction,
-              onPanDown: (_) => _handleUserInteraction(),
-              behavior: HitTestBehavior.opaque,
-              child: Scaffold(
+            return Listener(
+              onPointerDown: (_) => _handleUserInteraction(),
+              behavior: HitTestBehavior.translucent,
+              child: GestureDetector(
+                onTap: _handleUserInteraction,
+                onPanDown: (_) => _handleUserInteraction(),
+                behavior: HitTestBehavior.opaque,
+                child: Scaffold(
                 appBar: SharedAppBar(
                 title: _appBarTitle,
                 user: user,
@@ -1292,6 +1329,14 @@ class _ContainerScreen extends State<ContainerScreen>
                 firstOutsideAt: _firstOutsideRadiusAt,
                 outsidePenaltyThresholdMinutes: 30,
                 onToggleAttendance: _toggleAttendance,
+                onWorkAreaTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ZoneBrowserScreen(),
+                    ),
+                  );
+                },
               ),
               body: isLoading == true
                   ? const Center(child: CircularProgressIndicator())
@@ -1333,6 +1378,7 @@ class _ContainerScreen extends State<ContainerScreen>
                 onTap: _onBottomNavTap,
                 isDisabled: user.suspended == true,
               ),
+            ),
             ),
             );
           },

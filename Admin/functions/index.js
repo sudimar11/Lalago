@@ -11251,8 +11251,16 @@ exports.resetLoyaltyCycles = resetLoyaltyCycles;
 // Demand forecasting
 const { aggregateForecastData } = require('./forecastAggregation');
 const { generateDemandForecasts } = require('./demandForecasting');
+const { generatePlatformForecast } = require('./platformForecast');
+const { detectSlowDemand } = require('./detectSlowDemand');
+const { calculatePromoImpact } = require('./calculatePromoImpact');
+const { demandHealthAggregator } = require('./demandHealthAggregator');
 exports.aggregateForecastData = aggregateForecastData;
 exports.generateDemandForecasts = generateDemandForecasts;
+exports.generatePlatformForecast = generatePlatformForecast;
+exports.detectSlowDemand = detectSlowDemand;
+exports.calculatePromoImpact = calculatePromoImpact;
+exports.demandHealthAggregator = demandHealthAggregator;
 
 // Driver performance analytics
 const driverMetrics = require('./driverMetrics');

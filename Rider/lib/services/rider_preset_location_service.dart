@@ -149,6 +149,12 @@ class RiderPresetLocationService {
     );
   }
 
+  static bool hasValidWorkArea(User? user) {
+    if (user == null) return false;
+    final id = user.selectedPresetLocationId;
+    return id != null && id.trim().isNotEmpty;
+  }
+
   static double? _toDouble(dynamic v) {
     if (v == null) return null;
     if (v is num) return v.toDouble();
