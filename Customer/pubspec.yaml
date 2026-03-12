@@ -83,6 +83,7 @@ dependencies:
   fl_chart: ^0.70.0
   device_info_plus: ^10.1.0
   visibility_detector: ^0.4.0+2
+  google_mobile_ads: ^5.0.0
 
 dependency_overrides:
   #webview_flutter: ^4.4.2

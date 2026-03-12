@@ -37,7 +37,9 @@ import 'photos.dart';
 import 'widgets/vendor_header_delegate.dart';
 import '../searchScreen/SearchScreen.dart';
 import 'package:foodie_customer/ui/orderHistory/order_history_screen.dart';
+import 'package:foodie_customer/services/ad_service.dart';
 import 'package:foodie_customer/services/reorder_service.dart';
+import 'package:foodie_customer/widgets/banner_ad_widget.dart';
 
 class NewVendorProductsScreen extends StatefulWidget {
   final VendorModel vendorModel;
@@ -686,6 +688,9 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
           SliverToBoxAdapter(
             child: _buildLowPerfWarningBanner(),
           ),
+        SliverToBoxAdapter(
+          child: BannerAdWidget(adUnitId: AdService.instance.bannerAdUnitId),
+        ),
         if (searchQuery.isEmpty)
           SliverAppBar(
             automaticallyImplyLeading: false,

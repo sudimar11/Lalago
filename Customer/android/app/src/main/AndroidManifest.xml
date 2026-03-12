@@ -47,8 +47,9 @@
         android:largeHeap="true">
         <!-- Set custom default icon. This is used when no icon is set for incoming notification messages. -->
 
-
-      
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-4534028104040637~4418519166"/>
 
         <activity
             android:name="com.lalago.customer.android.MainActivity"

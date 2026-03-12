@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:foodie_customer/services/ad_service.dart';
+import 'package:foodie_customer/widgets/banner_ad_widget.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -777,6 +779,10 @@ class _OrderTrackingPageState extends State<OrderTrackingPage>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
+                      children: [
+                        BannerAdWidget(
+                            adUnitId: AdService.instance.bannerAdUnitId),
+                      ],
                     ),
                   ),
                 ),

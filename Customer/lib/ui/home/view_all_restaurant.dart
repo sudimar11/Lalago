@@ -13,6 +13,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
 import 'package:foodie_customer/ui/login/LoginScreen.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
+import 'package:foodie_customer/widgets/native_ad_restaurant_card.dart';
 import 'package:geoflutterfire3/geoflutterfire3.dart';
 import 'package:intl/intl.dart';
 
@@ -99,11 +100,20 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
                     shrinkWrap: true,
                     scrollDirection: Axis.vertical,
                     physics: const AlwaysScrollableScrollPhysics(),
-                    itemCount: vendors.length,
-                    itemBuilder: (context, index) =>
-                        //buildVendorItem(vendors[index])
-
-                        buildAllRestaurantsData(vendors[index]),
+                    itemCount:
+                        vendors.length + (vendors.length / 5).floor(),
+                    itemBuilder: (context, index) {
+                      if ((index + 1) % 6 == 0) {
+                        return const NativeAdRestaurantCard();
+                      }
+                      final restaurantIndex =
+                          index - (index + 1) ~/ 6;
+                      if (restaurantIndex >= vendors.length) {
+                        return const SizedBox.shrink();
+                      }
+                      return buildAllRestaurantsData(
+                          vendors[restaurantIndex]);
+                    },
                   ),
           ),
           isLoading ? const CircularProgressIndicator() : Container()

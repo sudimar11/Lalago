@@ -44,12 +44,14 @@ import 'package:foodie_customer/ui/cartScreen/voucher_screen.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:foodie_customer/ui/home/view_all_restaurant.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
+import 'package:foodie_customer/widgets/banner_ad_widget.dart';
 import 'package:foodie_customer/ui/cartScreen/estimated_delivery_time_card.dart';
 import 'package:foodie_customer/model/User.dart';
 import 'package:foodie_customer/model/addon_promo_model.dart';
 import 'package:foodie_customer/services/addon_promo_service.dart';
 import 'package:foodie_customer/ui/addon/addon_promo_card.dart';
 import 'package:foodie_customer/utils/extensions/cart_product_extension.dart';
+import 'package:foodie_customer/services/ad_service.dart';
 import 'package:foodie_customer/services/analytics_service.dart';
 import 'package:foodie_customer/services/performance_logger.dart';
 import 'package:foodie_customer/services/restaurant_status_service.dart';
@@ -2639,6 +2641,9 @@ class _CartScreenState extends State<CartScreen> {
                                     : const []),
                             lstExtras,
                             currentVendorID),
+                        BannerAdWidget(
+                            adUnitId: AdService.instance.bannerAdUnitId),
+                        const SizedBox(height: 8),
                       ],
                     ),
                   ),

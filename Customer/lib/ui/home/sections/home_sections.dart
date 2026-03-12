@@ -6,6 +6,7 @@ import 'package:foodie_customer/ui/home/sections/home_header_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_categories_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_nearby_foods_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_popular_today_section.dart';
+import 'package:foodie_customer/ui/home/sections/home_sponsored_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_order_again_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_all_restaurants_section.dart';
 import 'package:foodie_customer/ui/home/sections/home_pautos_entry_section.dart';
@@ -88,6 +89,9 @@ class HomeSections extends StatelessWidget {
               popularTodayFoods: popularTodayFoods,
               vendors: popularTodayVendors,
             ),
+
+            // Sponsored Section
+            const HomeSponsoredSection(),
 
             // Nearby Foods Section
             HomeNearbyFoodsSection(

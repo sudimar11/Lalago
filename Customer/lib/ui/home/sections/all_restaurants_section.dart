@@ -19,6 +19,7 @@ import 'package:foodie_customer/ui/home/sections/restaurant_filter_card.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/vendorProductsScreen/newVendorProductsScreen.dart';
 import 'package:foodie_customer/widget/lazy_loading_widget.dart';
+import 'package:foodie_customer/widgets/native_ad_restaurant_card.dart';
 import 'package:foodie_customer/widgets/performance_badge.dart';
 import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/main.dart';
@@ -353,18 +354,26 @@ class _AllRestaurantsSectionState extends State<AllRestaurantsSection> {
               scrollDirection: Axis.vertical,
               physics: const NeverScrollableScrollPhysics(),
               cacheExtent: 500.0,
-              itemCount: sortedRestaurants.length,
+              itemCount: sortedRestaurants.length +
+                  (sortedRestaurants.length / 5).floor(),
               itemBuilder: (context, index) {
-              VendorModel vendorModel = sortedRestaurants[index];
-              return _AllRestaurantCard(
-                vendorModel: vendorModel,
-                offerList: widget.offerList,
-                allProducts: widget.allProducts,
-                currencyModel: widget.currencyModel,
-                lstFav: widget.lstFav,
-                onFavoriteChanged: widget.onFavoriteChanged,
-              );
-            },
+                if ((index + 1) % 6 == 0) {
+                  return const NativeAdRestaurantCard();
+                }
+                final restaurantIndex = index - (index + 1) ~/ 6;
+                if (restaurantIndex >= sortedRestaurants.length) {
+                  return const SizedBox.shrink();
+                }
+                final vendorModel = sortedRestaurants[restaurantIndex];
+                return _AllRestaurantCard(
+                  vendorModel: vendorModel,
+                  offerList: widget.offerList,
+                  allProducts: widget.allProducts,
+                  currencyModel: widget.currencyModel,
+                  lstFav: widget.lstFav,
+                  onFavoriteChanged: widget.onFavoriteChanged,
+                );
+              },
             ),
           ),
           // Loading indicator at the bottom

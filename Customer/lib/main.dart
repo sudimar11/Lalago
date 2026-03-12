@@ -31,6 +31,7 @@ import 'package:foodie_customer/utils/notification_service.dart';
 import 'package:provider/provider.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:foodie_customer/utils/connection_tester.dart';
+import 'package:foodie_customer/services/ad_service.dart';
 import 'package:foodie_customer/services/network_safe_api.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
@@ -295,6 +296,8 @@ void main() async {
       }
     }());
   }
+
+  await AdService.instance.initialize();
 
   runApp(
     MultiProvider(
