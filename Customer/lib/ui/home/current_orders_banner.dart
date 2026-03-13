@@ -15,6 +15,7 @@ import 'package:foodie_customer/ui/orderDetailsScreen/ordertracknew.dart';
 import 'package:foodie_customer/ui/productDetailsScreen/ProductDetailsScreen.dart';
 import 'package:foodie_customer/userPrefrence.dart';
 import 'package:foodie_customer/utils/order_status_messages.dart';
+import 'package:foodie_customer/services/bottom_banner_visibility.dart';
 import 'package:foodie_customer/widget/order_eta_badge.dart';
 import 'package:foodie_customer/widget/order_status_progress_bar.dart';
 import 'package:shimmer/shimmer.dart';
@@ -167,7 +168,11 @@ class _CurrentOrdersBannerState extends State<CurrentOrdersBanner> {
           },
           child: KeyedSubtree(
             key: ValueKey<String>(bannerKey),
-            child: content,
+            child: BottomBannerVisibilityReporter(
+              bannerKey: 'current_orders',
+              visible: !isEmpty,
+              child: content,
+            ),
           ),
         );
       },

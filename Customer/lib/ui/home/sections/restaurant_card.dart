@@ -128,11 +128,20 @@ class RestaurantCard extends StatelessWidget {
                         memCacheWidth: 200,
                         memCacheHeight: 200,
                         fit: BoxFit.cover,
-                        placeholder: (context, url) => Center(
-                            child: CircularProgressIndicator.adaptive(
-                          valueColor:
-                              AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
-                        )),
+                        placeholder: (context, url) => Container(
+                          width: double.infinity,
+                          height: 180,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[300],
+                            borderRadius:
+                                BorderRadius.circular(20),
+                          ),
+                          child: const Center(
+                            child: Icon(Icons.restaurant,
+                                color: Colors.grey,
+                                size: 40),
+                          ),
+                        ),
                         errorWidget: (context, url, error) => ClipRRect(
                             borderRadius: BorderRadius.circular(20),
                             child: CachedNetworkImage(

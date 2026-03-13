@@ -11,6 +11,7 @@ import 'package:foodie_customer/model/inbox_model.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/chat_screen/chat_screen.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 
 class InboxDriverScreen extends StatefulWidget {
   const InboxDriverScreen({Key? key}) : super(key: key);
@@ -21,6 +22,40 @@ class InboxDriverScreen extends StatefulWidget {
 
 class _InboxDriverScreenState extends State<InboxDriverScreen> {
   bool _isNavigating = false;
+  final Map<String, Future<String?>> _driverImageCache = {};
+
+  Future<String?> _getDriverProfileImageUrl(InboxModel inbox) async {
+    final url = inbox.restaurantProfileImage?.toString().trim();
+    if (url != null && url.isNotEmpty) return url;
+    var driverId = inbox.restaurantId?.toString().trim() ?? '';
+    if (driverId.isEmpty) {
+      final orderId = inbox.orderId ?? '';
+      if (orderId.isEmpty) return null;
+      driverId = (await _resolveDriverIdFromOrder(orderId)) ?? '';
+    }
+    if (driverId.isEmpty) return null;
+    final user = await FireStoreUtils.getCurrentUser(driverId);
+    return user?.profilePictureURL;
+  }
+
+  Future<String?> _resolveDriverIdFromOrder(String orderId) async {
+    try {
+      for (final col in [ORDERS, PAUTOS_ORDERS]) {
+        final snap = await FirebaseFirestore.instance
+            .collection(col)
+            .doc(orderId)
+            .get();
+        if (snap.exists) {
+          final d = snap.data();
+          final id = (d?['driverID'] ?? d?['driverId'] ?? '')
+              .toString()
+              .trim();
+          if (id.isNotEmpty) return id;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
 
   Future<void> _markOrderAsRead(String orderId) async {
     final userId = MyAppState.currentUser?.userID ?? '';
@@ -174,11 +209,24 @@ class _InboxDriverScreenState extends State<InboxDriverScreen> {
       body: PaginateFirestore(
         physics: const BouncingScrollPhysics(),
         itemBuilder: (context, documentSnapshots, index) {
-          final data = documentSnapshots[index].data() as Map<String, dynamic>?;
-          InboxModel inboxModel = InboxModel.fromJson(data!);
-          return _buildMessageCard(inboxModel);
+          final snapshot = documentSnapshots[index];
+          final data =
+              Map<String, dynamic>.from(snapshot.data() as Map? ?? {});
+          if (data['orderId'] == null || data['orderId'].toString().isEmpty) {
+            data['orderId'] = snapshot.id;
+          }
+          InboxModel inboxModel = InboxModel.fromJson(data);
+          return RepaintBoundary(child: _buildMessageCard(inboxModel));
         },
-        shrinkWrap: true,
+        shrinkWrap: false,
+        itemsPerPage: 10,
+        initialLoader: ShimmerWidgets.baseShimmer(
+          baseColor: isDarkMode(context) ? Colors.grey[800] : null,
+          highlightColor: isDarkMode(context) ? Colors.grey[700] : null,
+          child: ShimmerWidgets.driverMessageListShimmer(
+            isDarkMode: isDarkMode(context),
+          ),
+        ),
         onEmpty: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -205,9 +253,6 @@ class _InboxDriverScreenState extends State<InboxDriverScreen> {
             .where("customerId", isEqualTo: MyAppState.currentUser!.userID)
             .orderBy('createdAt', descending: true),
         itemBuilderType: PaginateBuilderType.listView,
-        initialLoader: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(Color(COLOR_PRIMARY)),
-        ),
         isLive: true,
       ),
     );
@@ -241,41 +286,82 @@ class _InboxDriverScreenState extends State<InboxDriverScreen> {
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
           onTap: () async {
-            if (_isNavigating) {
-              return;
-            }
+            if (_isNavigating) return;
             _isNavigating = true;
             final orderId = inboxModel.orderId ?? '';
+            final customerId = inboxModel.customerId?.toString() ?? '';
+            final restaurantId = inboxModel.restaurantId?.toString() ?? '';
             if (orderId.isNotEmpty) {
-              await _markOrderAsRead(orderId);
+              _markOrderAsRead(orderId);
             }
-            User? customer = await FireStoreUtils.getCurrentUser(
-                inboxModel.customerId.toString());
-            User? restaurantUser = await FireStoreUtils.getCurrentUser(
-                inboxModel.restaurantId.toString());
-            hideProgress();
+            String resolvedRestaurantId = restaurantId;
+            if (resolvedRestaurantId.isEmpty && orderId.isNotEmpty) {
+              final driverId = await _resolveDriverIdFromOrder(orderId);
+              resolvedRestaurantId = driverId ?? '';
+            }
             try {
+              final customerFuture = customerId.isNotEmpty
+                  ? FireStoreUtils.getCurrentUser(customerId)
+                  : Future<User?>.value(null);
+              final driverFuture = resolvedRestaurantId.isNotEmpty
+                  ? FireStoreUtils.getCurrentUser(resolvedRestaurantId)
+                  : Future<User?>.value(null);
+              final results = await Future.wait([customerFuture, driverFuture]);
+              final customer = results[0] as User?;
+              final restaurantUser = results[1] as User?;
+              String customerName;
+              String restaurantName;
+              String? customerProfileImage;
+              String? restaurantProfileImage;
+              String? token;
+              if (customer != null && restaurantUser != null) {
+                customerName = '${customer.firstName} ${customer.lastName}';
+                restaurantName =
+                    '${restaurantUser.firstName} ${restaurantUser.lastName}';
+                customerProfileImage = customer.profilePictureURL;
+                restaurantProfileImage = restaurantUser.profilePictureURL;
+                token = restaurantUser.fcmToken;
+              } else {
+                customerName =
+                    inboxModel.customerName?.toString().trim() ?? 'Customer';
+                restaurantName =
+                    inboxModel.restaurantName?.toString().trim() ?? 'Driver';
+                customerProfileImage = inboxModel.customerProfileImage;
+                restaurantProfileImage = inboxModel.restaurantProfileImage;
+                token = null;
+              }
+              if (!mounted) return;
               await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => ChatScreens(
-                    customerName:
-                        '${customer!.firstName + " " + customer.lastName}',
-                    restaurantName:
-                        '${restaurantUser!.firstName + " " + restaurantUser.lastName}',
+                    customerName: customerName,
+                    restaurantName: restaurantName,
                     orderId: inboxModel.orderId,
-                    restaurantId: restaurantUser.userID,
-                    customerId: customer.userID,
-                    customerProfileImage: customer.profilePictureURL,
-                    restaurantProfileImage: restaurantUser.profilePictureURL,
-                    token: restaurantUser.fcmToken,
-                    chatType: inboxModel.chatType,
+                    restaurantId:
+                        resolvedRestaurantId.isEmpty ? null : resolvedRestaurantId,
+                    customerId: customerId.isEmpty ? null : customerId,
+                    customerProfileImage: customerProfileImage,
+                    restaurantProfileImage: restaurantProfileImage,
+                    token: token,
+                    chatType: inboxModel.chatType ?? 'Driver',
                   ),
                 ),
               );
-            } finally {
+            } catch (e) {
               if (mounted) {
-                _isNavigating = false;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: SelectableText.rich(
+                      TextSpan(
+                        text: 'Could not open chat: $e',
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  ),
+                );
               }
+            } finally {
+              if (mounted) _isNavigating = false;
             }
           },
           onLongPress: () => _showDeleteDialog(inboxModel),
@@ -292,43 +378,75 @@ class _InboxDriverScreenState extends State<InboxDriverScreen> {
                     ),
                   ),
                   child: ClipOval(
-                    child: CachedNetworkImage(
-                      width: 60,
-                      height: 60,
-                      imageUrl: inboxModel.restaurantProfileImage.toString(),
-                      imageBuilder: (context, imageProvider) => Container(
-                        width: 60,
-                        height: 60,
-                        decoration: BoxDecoration(
-                          image: DecorationImage(
-                            image: imageProvider,
-                            fit: BoxFit.cover,
-                          ),
-                        ),
+                    child: FutureBuilder<String?>(
+                      key: ValueKey(inboxModel.orderId ?? ''),
+                      future: _driverImageCache.putIfAbsent(
+                        inboxModel.orderId ?? '',
+                        () => _getDriverProfileImageUrl(inboxModel),
                       ),
-                      placeholder: (context, url) => Container(
-                        width: 60,
-                        height: 60,
-                        color: Colors.grey.shade200,
-                        child: Center(
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                                Color(COLOR_PRIMARY)),
-                          ),
-                        ),
-                      ),
-                      errorWidget: (context, url, error) => ClipRRect(
-                        borderRadius: BorderRadius.circular(30),
-                        child: CachedNetworkImage(
-                          imageUrl: AppGlobal.placeHolderImage!,
+                      builder: (context, snapshot) {
+                        final url = snapshot.data;
+                        if (url == null || url.isEmpty) {
+                          return Container(
+                            width: 60,
+                            height: 60,
+                            color: Colors.grey.shade200,
+                            child: snapshot.connectionState ==
+                                    ConnectionState.waiting
+                                ? Center(
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                          Color(COLOR_PRIMARY)),
+                                    ),
+                                  )
+                                : Center(
+                                    child: Icon(
+                                      Icons.person,
+                                      size: 32,
+                                      color: Colors.grey.shade400,
+                                    ),
+                                  ),
+                          );
+                        }
+                        return CachedNetworkImage(
                           width: 60,
                           height: 60,
-                          memCacheWidth: 120,
-                          memCacheHeight: 120,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
+                          imageUrl: url,
+                          imageBuilder: (context, imageProvider) => Container(
+                            width: 60,
+                            height: 60,
+                            decoration: BoxDecoration(
+                              image: DecorationImage(
+                                image: imageProvider,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                          placeholder: (context, u) => Container(
+                            width: 60,
+                            height: 60,
+                            color: Colors.grey.shade200,
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                    Color(COLOR_PRIMARY)),
+                              ),
+                            ),
+                          ),
+                          errorWidget: (context, u, e) => Container(
+                            width: 60,
+                            height: 60,
+                            color: Colors.grey.shade200,
+                            child: Icon(
+                              Icons.person,
+                              size: 32,
+                              color: Colors.grey.shade400,
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -381,22 +499,26 @@ class _InboxDriverScreenState extends State<InboxDriverScreen> {
                       SizedBox(height: 6),
                       Row(
                         children: [
-                          Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Color(COLOR_PRIMARY).withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              "Order #${inboxModel.orderId}",
-                              style: TextStyle(
-                                fontFamily: "Poppinsm",
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: Color(COLOR_PRIMARY),
+                          Flexible(
+                            child: Container(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Color(COLOR_PRIMARY).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                "Order #${inboxModel.orderId}",
+                                style: TextStyle(
+                                  fontFamily: "Poppinsm",
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: Color(COLOR_PRIMARY),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ),
@@ -437,6 +559,19 @@ class _InboxDriverScreenState extends State<InboxDriverScreen> {
                       shape: BoxShape.circle,
                     ),
                   ),
+                IconButton(
+                  icon: Icon(
+                    Icons.delete_outline,
+                    size: 20,
+                    color: Colors.grey.shade600,
+                  ),
+                  onPressed: () => _showDeleteDialog(inboxModel),
+                  padding: EdgeInsets.zero,
+                  constraints: BoxConstraints(minWidth: 32, minHeight: 32),
+                  style: IconButton.styleFrom(
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
                 Icon(
                   Icons.chevron_right,
                   color: Colors.grey,

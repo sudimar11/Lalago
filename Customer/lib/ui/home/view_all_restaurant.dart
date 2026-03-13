@@ -104,19 +104,34 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
                         vendors.length + (vendors.length / 5).floor(),
                     itemBuilder: (context, index) {
                       if ((index + 1) % 6 == 0) {
-                        return const NativeAdRestaurantCard();
+                        return KeyedSubtree(
+                          key: ValueKey('ad_$index'),
+                          child: const NativeAdRestaurantCard(),
+                        );
                       }
                       final restaurantIndex =
                           index - (index + 1) ~/ 6;
                       if (restaurantIndex >= vendors.length) {
-                        return const SizedBox.shrink();
+                        return KeyedSubtree(
+                          key: ValueKey('gap_$index'),
+                          child: const SizedBox.shrink(),
+                        );
                       }
-                      return buildAllRestaurantsData(
-                          vendors[restaurantIndex]);
+                      return KeyedSubtree(
+                        key: ValueKey(vendors[restaurantIndex].id),
+                        child: buildAllRestaurantsData(
+                            vendors[restaurantIndex]),
+                      );
                     },
                   ),
           ),
-          isLoading ? const CircularProgressIndicator() : Container()
+          isLoading
+              ? Container(
+                  height: 60,
+                  alignment: Alignment.center,
+                  child: const CircularProgressIndicator(),
+                )
+              : const SizedBox.shrink()
         ],
       ),
     );
@@ -173,11 +188,20 @@ class _ViewAllRestaurantState extends State<ViewAllRestaurant> {
                                   image: imageProvider, fit: BoxFit.cover),
                             ),
                           ),
-                          placeholder: (context, url) => Center(
-                              child: CircularProgressIndicator.adaptive(
-                            valueColor:
-                                AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
-                          )),
+                          placeholder: (context, url) => Container(
+                            width: 100,
+                            height: 100,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[300],
+                              borderRadius:
+                                  BorderRadius.circular(10),
+                            ),
+                            child: const Center(
+                              child: Icon(Icons.image,
+                                  color: Colors.grey,
+                                  size: 30),
+                            ),
+                          ),
                           errorWidget: (context, url, error) => ClipRRect(
                               borderRadius: BorderRadius.circular(10),
                               child: CachedNetworkImage(

@@ -96,7 +96,11 @@ class TopRestaurantsSection extends StatelessWidget {
                         cacheExtent: 400.0,
                         itemCount: count,
                         itemBuilder: (context, index) =>
-                            _buildRestaurantCard(uniqueRestaurants[index]),
+                            KeyedSubtree(
+                          key: ValueKey(uniqueRestaurants[index].id),
+                          child: _buildRestaurantCard(
+                              uniqueRestaurants[index]),
+                        ),
                       ),
                     ),
                   );
@@ -124,8 +128,10 @@ class TopRestaurantsSection extends StatelessWidget {
           itemCount: uniqueRestaurants.length >= 5
               ? 5
               : uniqueRestaurants.length,
-          itemBuilder: (context, index) =>
-              _buildRestaurantCard(uniqueRestaurants[index]),
+          itemBuilder: (context, index) => KeyedSubtree(
+            key: ValueKey(uniqueRestaurants[index].id),
+            child: _buildRestaurantCard(uniqueRestaurants[index]),
+          ),
         ),
       ),
     );

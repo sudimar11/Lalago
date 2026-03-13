@@ -24,6 +24,7 @@ import 'package:foodie_customer/services/cart_sync_service.dart';
 import 'package:foodie_customer/services/device_capability.dart';
 import 'package:foodie_customer/services/image_cache_config.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:foodie_customer/services/bottom_banner_visibility.dart';
 import 'package:foodie_customer/services/chat_read_service.dart';
 import 'package:foodie_customer/services/app_configuration_service.dart';
 import 'package:foodie_customer/utils/performance_logger.dart';
@@ -872,7 +873,9 @@ class _ContainerScreen extends State<ContainerScreen>
   }
 
   Widget _buildMainScaffold(BuildContext context) {
-    return Scaffold(
+    return ValueListenableBuilder<double>(
+      valueListenable: BottomBannerVisibility.instance.offsetNotifier,
+      builder: (context, _, __) => Scaffold(
         body: PerformanceDebugOverlay(
           child: Column(
           children: [
@@ -1006,7 +1009,11 @@ class _ContainerScreen extends State<ContainerScreen>
                         )
                       : const SizedBox(key: ValueKey('ai_fab_empty')),
                 ),
-                appBar: null);
+                floatingActionButtonLocation:
+                    BannerAwareFloatingActionButtonLocation(),
+                appBar: null,
+      )
+    );
   }
 
   Widget _buildGuestProfilePlaceholder() {

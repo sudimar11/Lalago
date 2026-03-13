@@ -71,6 +71,7 @@ class _PautosConfigFormState extends State<_PautosConfigForm> {
   late TextEditingController _minimumDistanceKmController;
   late TextEditingController _riderCommissionController;
   late bool _useDistanceDeliveryFee;
+  late bool _pautosEnabled;
   bool _isLoading = false;
 
   @override
@@ -99,6 +100,7 @@ class _PautosConfigFormState extends State<_PautosConfigForm> {
       text: c.riderCommissionPercent?.toString() ?? '',
     );
     _useDistanceDeliveryFee = c.useDistanceDeliveryFee;
+    _pautosEnabled = c.enabled;
   }
 
   @override
@@ -117,6 +119,7 @@ class _PautosConfigFormState extends State<_PautosConfigForm> {
     try {
       final riderComm = _riderCommissionController.text.trim();
       final config = PautosConfig(
+        enabled: _pautosEnabled,
         serviceFeePercent: double.tryParse(
           _serviceFeeController.text.trim(),
         ) ??
@@ -164,11 +167,58 @@ class _PautosConfigFormState extends State<_PautosConfigForm> {
     }
   }
 
+  Future<void> _onPautosEnabledChanged(bool newValue) async {
+    if (!newValue) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Disable PAUTOS?'),
+          content: const Text(
+            'This will immediately hide the PAUTOS entry section from all '
+            'customer homescreens. Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Disable'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    setState(() => _pautosEnabled = newValue);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SwitchListTile(
+                  title: const Text('Enable PAUTOS on customer homescreen'),
+                  subtitle: const Text(
+                    'When off, the PAUTOS entry section is hidden from customers.',
+                  ),
+                  value: _pautosEnabled,
+                  onChanged: _onPautosEnabledChanged,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),

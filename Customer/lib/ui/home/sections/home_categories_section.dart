@@ -7,6 +7,7 @@ import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/categoryDetailsScreen/CategoryDetailsScreen.dart';
 import 'package:foodie_customer/ui/cuisinesScreen/CuisinesScreen.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:foodie_customer/AppGlobal.dart';
 
 class HomeCategoriesSection extends StatelessWidget {
@@ -36,10 +37,10 @@ class HomeCategoriesSection extends StatelessWidget {
             initialData: const [],
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
-                return Center(
-                  child: CircularProgressIndicator.adaptive(
-                    valueColor: AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
-                  ),
+                return Container(
+                  height: 150,
+                  padding: const EdgeInsets.only(left: 10),
+                  child: ShimmerWidgets.categoryListShimmer(),
                 );
               }
 

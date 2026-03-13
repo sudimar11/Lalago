@@ -1,5 +1,4 @@
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 class CommonNetworkImage extends StatelessWidget {
@@ -98,7 +97,7 @@ class CommonNetworkImage extends StatelessWidget {
             ),
           ),
         ),
-        placeholder: (_, __) => placeholder ?? _placeholderBox(),
+        placeholder: (_, __) => placeholder ?? _placeholderBox(w: w, h: h),
         errorWidget: (_, __, ___) => error ?? _errorBox(),
       );
     }
@@ -119,10 +118,12 @@ class CommonNetworkImage extends StatelessWidget {
     );
   }
 
-  Widget _placeholderBox() => Container(
-    color: Colors.black12,
+  Widget _placeholderBox({double? w, double? h}) => Container(
+    width: w ?? 120,
+    height: h ?? 120,
+    color: Colors.grey[300],
     alignment: Alignment.center,
-    child: const CupertinoActivityIndicator(),
+    child: Icon(Icons.image, color: Colors.grey[400], size: 40),
   );
 
   Widget _errorBox() => Container(

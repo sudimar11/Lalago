@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/HappyHourConfig.dart';
 import 'package:foodie_customer/services/helper.dart';
+import 'package:foodie_customer/services/bottom_banner_visibility.dart';
 import 'package:foodie_customer/services/happy_hour_helper.dart';
 import 'package:foodie_customer/services/happy_hour_service.dart';
 
@@ -415,8 +416,11 @@ class _HappyHourBannerState extends State<HappyHourBanner> {
                 : Colors.white;
             final Color borderColor = Color(COLOR_PRIMARY);
 
-            return SafeArea(
-              top: false,
+            return BottomBannerVisibilityReporter(
+              bannerKey: 'happy_hour',
+              visible: true,
+              child: SafeArea(
+                top: false,
               child: Container(
                 margin: const EdgeInsets.all(12),
                 child: Stack(
@@ -559,6 +563,7 @@ class _HappyHourBannerState extends State<HappyHourBanner> {
                   ],
                 ),
               ),
+            ),
             );
           },
         );

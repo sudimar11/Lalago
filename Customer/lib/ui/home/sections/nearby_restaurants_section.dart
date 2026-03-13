@@ -80,15 +80,42 @@ class _NearbyRestaurantsSectionState extends State<NearbyRestaurantsSection> {
     return Column(
       mainAxisAlignment: MainAxisAlignment.start,
       children: [
-        HomeSectionUtils.buildTitleRow(
-          titleValue: "Nearby Restaurants",
-          titleIcon: Icons.restaurant_rounded,
-          onClick: () {
-            push(
-              context,
-              const ViewAllNewArrivalRestaurantScreen(),
-            );
-          },
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.near_me, color: Colors.orange[700], size: 22),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Nearby Restaurants',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange[800],
+                    ),
+                  ),
+                ],
+              ),
+              GestureDetector(
+                onTap: () {
+                  push(
+                    context,
+                    const ViewAllNewArrivalRestaurantScreen(),
+                  );
+                },
+                child: Text(
+                  'View All',
+                  style: TextStyle(
+                    color: Colors.orange[800],
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         StreamBuilder<List<VendorModel>>(
           stream: widget.vendorsStream,
@@ -207,6 +234,7 @@ class _NearbyRestaurantsList extends StatelessWidget {
           cacheExtent: 400.0,
           itemCount: itemCount,
           itemBuilder: (context, index) => NewArrivalCard(
+            key: ValueKey(displayList[index].id),
             vendorModel: displayList[index],
             allProducts: allProducts,
             lstFav: lstFav,

@@ -30,6 +30,26 @@ class HomePopularTodaySection extends StatelessWidget {
     this.onRetry,
   }) : super(key: key);
 
+  Widget _popularTodayHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Row(
+        children: [
+          Icon(Icons.whatshot, color: Colors.orange[700], size: 22),
+          const SizedBox(width: 8),
+          Text(
+            'Popular Today',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.orange[800],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _writeDebugLog({
     required String runId,
     required String hypothesisId,
@@ -57,10 +77,7 @@ class HomePopularTodaySection extends StatelessWidget {
       return Column(
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
-          HomeSectionUtils.buildTitleRow(
-            titleValue: "Popular Today",
-            isViewAll: true,
-          ),
+          _popularTodayHeader(),
           HomeSectionUtils.sectionError(
             message: 'Failed to load popular today',
             onRetry: onRetry!,
@@ -72,10 +89,7 @@ class HomePopularTodaySection extends StatelessWidget {
       return Column(
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
-          HomeSectionUtils.buildTitleRow(
-            titleValue: "Popular Today",
-            isViewAll: true,
-          ),
+          _popularTodayHeader(),
           SizedBox(
             height: 150,
             child: ShimmerWidgets.productListShimmer(),
@@ -98,10 +112,7 @@ class HomePopularTodaySection extends StatelessWidget {
     return Column(
       mainAxisAlignment: MainAxisAlignment.start,
       children: [
-        HomeSectionUtils.buildTitleRow(
-          titleValue: "Popular Today",
-          isViewAll: true,
-        ),
+        _popularTodayHeader(),
         SizedBox(
           height: 150,
           child: displayFoods.isEmpty
@@ -127,11 +138,17 @@ class HomePopularTodaySection extends StatelessWidget {
                       }
 
                       return popularTodayVendorModel == null
-                          ? Container()
-                          : popularFoodItem(
-                              context,
-                              displayFoods[index],
-                              popularTodayVendorModel,
+                          ? KeyedSubtree(
+                              key: ValueKey('empty_$index'),
+                              child: Container(),
+                            )
+                          : KeyedSubtree(
+                              key: ValueKey(displayFoods[index].id),
+                              child: popularFoodItem(
+                                context,
+                                displayFoods[index],
+                                popularTodayVendorModel,
+                              ),
                             );
                     },
                   ),

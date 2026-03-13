@@ -63,19 +63,17 @@ class BannerSection extends StatelessWidget {
               // Only render carousel when images are cached
               if (!areBannerImagesCached || cachedFilteredBanners.isEmpty) {
                 // Show placeholder while caching or if no banners
-                return Container(
-                  width: double.infinity,
-                  height: 170,
-                  color: Colors.grey[200],
-                  child: Center(
-                    child: cachedFilteredBanners.isEmpty
-                        ? Image.asset(
-                            'assets/slides/1.png',
-                            fit: BoxFit.cover,
-                          )
-                        : const CircularProgressIndicator(),
-                  ),
-                );
+                return cachedFilteredBanners.isEmpty
+                    ? Container(
+                        width: double.infinity,
+                        height: 170,
+                        color: Colors.grey[200],
+                        child: Image.asset(
+                          'assets/slides/1.png',
+                          fit: BoxFit.cover,
+                        ),
+                      )
+                    : ShimmerWidgets.bannerSkeleton();
               }
 
               // Rebuild items if not cached or if banners changed

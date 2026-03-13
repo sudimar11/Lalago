@@ -56,25 +56,19 @@ class PopularsCard extends StatelessWidget {
                         memCacheHeight: 280,
                         fit: BoxFit.cover,
                         placeholder: (context, url) => Container(
+                          width: double.infinity,
+                          height: double.infinity,
                           decoration: BoxDecoration(
+                            color: Colors.grey[300],
                             borderRadius: const BorderRadius.only(
                               topLeft: Radius.circular(24),
                               topRight: Radius.circular(24),
                             ),
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                Color(COLOR_PRIMARY).withOpacity(0.1),
-                                Color(COLOR_PRIMARY).withOpacity(0.05),
-                              ],
-                            ),
                           ),
-                          child: Center(
-                            child: CircularProgressIndicator.adaptive(
-                              valueColor:
-                                  AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
-                            ),
+                          child: const Center(
+                            child: Icon(Icons.image,
+                                color: Colors.grey,
+                                size: 30),
                           ),
                         ),
                         errorWidget: (context, url, error) => Container(

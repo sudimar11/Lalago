@@ -169,6 +169,37 @@ class LoyaltyService {
     return progress.clamp(0.0, 1.0);
   }
 
+  /// Returns the list of benefits for the next tier (excluding inherited ones).
+  static List<Map<String, dynamic>> getNextTierBenefits(
+    int tokensThisCycle,
+    Map<String, dynamic>? config,
+  ) {
+    final nextTier = getNextTierName(tokensThisCycle, config);
+    if (nextTier == null) return [];
+    final benefitsConfig = config?['benefits'] as Map<String, dynamic>?;
+    if (benefitsConfig == null) return [];
+    final list = benefitsConfig[nextTier] as List?;
+    if (list == null) return [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .where((b) => b['type'] != 'inherits')
+        .toList();
+  }
+
+  /// Returns the minimum token threshold for the next tier (if any).
+  static int? getMinTokensForNextTier(
+    int tokensThisCycle,
+    Map<String, dynamic>? config,
+  ) {
+    final nextTier = getNextTierName(tokensThisCycle, config);
+    if (nextTier == null) return null;
+    final tiers = config?['tiers'] as Map<String, dynamic>?;
+    if (tiers == null) return null;
+    final tierConfig = tiers[nextTier] as Map<String, dynamic>?;
+    if (tierConfig == null) return null;
+    return (tierConfig['minTokens'] as num?)?.toInt();
+  }
+
   static String _getCurrentTierFromTokens(
     int tokens,
     Map<String, dynamic>? config,

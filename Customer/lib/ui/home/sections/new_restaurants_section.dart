@@ -33,15 +33,42 @@ class NewRestaurantsSection extends StatelessWidget {
     return Column(
       mainAxisAlignment: MainAxisAlignment.start,
       children: [
-        HomeSectionUtils.buildTitleRow(
-          titleValue: "New Restaurants",
-          titleIcon: Icons.restaurant_rounded,
-          onClick: () {
-            push(
-              context,
-              const ViewAllNewArrivalRestaurantScreen(),
-            );
-          },
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.fiber_new, color: Colors.orange[700], size: 22),
+                  const SizedBox(width: 8),
+                  Text(
+                    'New Restaurants',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange[800],
+                    ),
+                  ),
+                ],
+              ),
+              GestureDetector(
+                onTap: () {
+                  push(
+                    context,
+                    const ViewAllNewArrivalRestaurantScreen(),
+                  );
+                },
+                child: Text(
+                  'View All',
+                  style: TextStyle(
+                    color: Colors.orange[800],
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         StreamBuilder<List<VendorModel>>(
           stream: vendorsStream,
@@ -96,7 +123,9 @@ class NewRestaurantsSection extends StatelessWidget {
                           itemCount: displayList.length >= 15
                               ? 15
                               : displayList.length,
-                          itemBuilder: (context, index) => NewArrivalCard(
+                          itemBuilder: (context, index) =>
+                              NewArrivalCard(
+                            key: ValueKey(displayList[index].id),
                             vendorModel: displayList[index],
                             allProducts: allProducts,
                             lstFav: lstFav,

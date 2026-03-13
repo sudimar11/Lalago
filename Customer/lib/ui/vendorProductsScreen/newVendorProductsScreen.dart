@@ -40,6 +40,7 @@ import 'package:foodie_customer/ui/orderHistory/order_history_screen.dart';
 import 'package:foodie_customer/services/ad_service.dart';
 import 'package:foodie_customer/services/reorder_service.dart';
 import 'package:foodie_customer/widgets/banner_ad_widget.dart';
+import 'package:foodie_customer/ui/home/widgets/lazy_section.dart';
 
 class NewVendorProductsScreen extends StatefulWidget {
   final VendorModel vendorModel;
@@ -137,12 +138,18 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
     if (mounted) setState(() {});
 
     final ProductPageResult result;
-    if (foodType == "Takeaway") {
-      result = await fireStoreUtils.getVendorProductsTakeAWay(
-        widget.vendorModel.id,
-        lastDocument: _lastProductDocument,
-        limit: _pageSize,
-      );
+    if (foodType == "Takeaway" || _usingVendorIdOnlyFallback) {
+      result = await (_usingVendorIdOnlyFallback
+          ? fireStoreUtils.getVendorProductsVendorIdOnly(
+              widget.vendorModel.id,
+              lastDocument: _lastProductDocument,
+              limit: _pageSize,
+            )
+          : fireStoreUtils.getVendorProductsTakeAWay(
+              widget.vendorModel.id,
+              lastDocument: _lastProductDocument,
+              limit: _pageSize,
+            ));
     } else {
       result = await fireStoreUtils.getVendorProductsDelivery(
         widget.vendorModel.id,
@@ -393,23 +400,60 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   bool _isLoadingMore = false;
   static const int _pageSize = 20;
 
+  /// True when publish filter returned 0 and we fell back to vendorID-only.
+  bool _usingVendorIdOnlyFallback = false;
+
   Future<void> getFoodType() async {
     log('PERF: Starting product fetch at '
         '${DateTime.now().millisecondsSinceEpoch}');
     final sp = await SharedPreferences.getInstance();
     foodType = sp.getString("foodType") ?? "Delivery";
 
-    final ProductPageResult result;
-    if (foodType == "Takeaway") {
-      result = await fireStoreUtils.getVendorProductsTakeAWay(
-        widget.vendorModel.id,
-        limit: _pageSize,
-      );
-    } else {
-      result = await fireStoreUtils.getVendorProductsDelivery(
-        widget.vendorModel.id,
-        limit: _pageSize,
-      );
+    ProductPageResult result;
+    try {
+      if (foodType == "Takeaway") {
+        result = await fireStoreUtils.getVendorProductsTakeAWay(
+          widget.vendorModel.id,
+          limit: _pageSize,
+        );
+        if (result.products.isEmpty) {
+          final any = await fireStoreUtils
+              .countVendorProductsByVendorIdOnly(widget.vendorModel.id);
+          if (any > 0) {
+            _usingVendorIdOnlyFallback = true;
+            result = await fireStoreUtils.getVendorProductsVendorIdOnly(
+              widget.vendorModel.id,
+              limit: _pageSize,
+            );
+          } else {
+            _usingVendorIdOnlyFallback = false;
+          }
+        } else {
+          _usingVendorIdOnlyFallback = false;
+        }
+      } else {
+        result = await fireStoreUtils.getVendorProductsDelivery(
+          widget.vendorModel.id,
+          limit: _pageSize,
+        );
+        if (result.products.isEmpty) {
+          final any = await fireStoreUtils
+              .countVendorProductsByVendorIdOnly(widget.vendorModel.id);
+          if (any > 0) {
+            _usingVendorIdOnlyFallback = true;
+            result = await fireStoreUtils.getVendorProductsVendorIdOnly(
+              widget.vendorModel.id,
+              limit: _pageSize,
+            );
+          } else {
+            _usingVendorIdOnlyFallback = false;
+          }
+        } else {
+          _usingVendorIdOnlyFallback = false;
+        }
+      }
+    } catch (e, st) {
+      rethrow;
     }
 
     productModel.clear();
@@ -419,8 +463,28 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
     log('PERF: Products loaded (${result.products.length}) at '
         '${DateTime.now().millisecondsSinceEpoch}');
 
-    await _fetchCategoriesAndOffers();
+    final Set<String> uniqueIds = {};
+    final List<String> orderedIds = [];
+    for (final p in productModel) {
+      String cid = p.categoryID.trim();
+      if (cid.isEmpty && p.sectionId.trim().isNotEmpty) {
+        cid = p.sectionId.trim();
+      }
+      if (cid.isNotEmpty && !uniqueIds.contains(cid)) {
+        uniqueIds.add(cid);
+        orderedIds.add(cid);
+      }
+    }
+    vendorCateoryModel = orderedIds
+        .map((id) => VendorCategoryModel(id: id, title: id))
+        .toList();
+    a = List<String>.from(orderedIds);
+    tabController = TabController(
+      length: vendorCateoryModel.length + 2,
+      vsync: this,
+    );
     if (mounted) setState(() {});
+    _fetchCategoriesAndOffers();
   }
 
   List<VendorCategoryModel> vendorCateoryModel = [];
@@ -428,18 +492,27 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   List<OfferModel> offerList = [];
 
   Future<void> _fetchCategoriesAndOffers() async {
-    vendorCateoryModel.clear();
-    a.clear();
-
     final Set<String> uniqueCategoryIds = {};
+    final List<String> orderedIds = [];
     for (int i = 0; i < productModel.length; i++) {
-      if (!uniqueCategoryIds.contains(productModel[i].categoryID)) {
-        uniqueCategoryIds.add(productModel[i].categoryID);
-        a.add(productModel[i].categoryID);
+      String cid = productModel[i].categoryID.trim();
+      if (cid.isEmpty && productModel[i].sectionId.trim().isNotEmpty) {
+        cid = productModel[i].sectionId.trim();
+      }
+      if (cid.isNotEmpty && !uniqueCategoryIds.contains(cid)) {
+        uniqueCategoryIds.add(cid);
+        orderedIds.add(cid);
       }
     }
+    final categoryIdsList = orderedIds;
 
-    final categoryIdsList = uniqueCategoryIds.toList();
+    if (categoryIdsList.isEmpty) {
+      final offers =
+          await FireStoreUtils().getOfferByVendorID(widget.vendorModel.id);
+      if (mounted) setState(() => offerList = offers);
+      return;
+    }
+
     final categoriesFuture =
         fireStoreUtils.getVendorCategoriesByIds(categoryIdsList);
     final offerFuture =
@@ -457,9 +530,12 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
       log('PERF: Categories loaded at '
           '${DateTime.now().millisecondsSinceEpoch}');
       setState(() {
-        vendorCateoryModel.addAll(validCategories);
-        tabController =
-            TabController(length: vendorCateoryModel.length + 2, vsync: this);
+        vendorCateoryModel = validCategories.isNotEmpty
+            ? validCategories
+            : orderedIds
+                .map((id) => VendorCategoryModel(id: id, title: id))
+                .toList();
+        a = List<String>.from(orderedIds);
         offerList = offers;
       });
     }
@@ -505,7 +581,7 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   }
 
   bool onScrollNotification(ScrollNotification notification) {
-    if (pauseRectGetterIndex) return true;
+    if (pauseRectGetterIndex || tabController == null) return true;
 
     int lastTabIndex = tabController!.length - 1;
 
@@ -574,26 +650,24 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
           ),
         ],
       ),
-      body: tabController == null
-          ? ShimmerWidgets.vendorProductsScreenShimmer()
-          : Builder(
-              builder: (context) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!_hasLoggedFirstFrame && mounted) {
-                    _hasLoggedFirstFrame = true;
-                    log('PERF: First frame rendered at '
-                        '${DateTime.now().millisecondsSinceEpoch}');
-                  }
-                });
-                return RectGetter(
-                  key: listViewKey,
-                  child: NotificationListener<ScrollNotification>(
-                    child: buildSliverScrollView(),
-                    onNotification: onScrollNotification,
-                  ),
-                );
-              },
+      body: Builder(
+        builder: (context) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!_hasLoggedFirstFrame && mounted) {
+              _hasLoggedFirstFrame = true;
+              log('PERF: First frame rendered at '
+                  '${DateTime.now().millisecondsSinceEpoch}');
+            }
+          });
+          return RectGetter(
+            key: listViewKey,
+            child: NotificationListener<ScrollNotification>(
+              child: buildSliverScrollView(),
+              onNotification: onScrollNotification,
             ),
+          );
+        },
+      ),
       bottomNavigationBar: priceTemp > 0
           ? Container(
               padding: const EdgeInsets.only(
@@ -692,65 +766,75 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
           child: BannerAdWidget(adUnitId: AdService.instance.bannerAdUnitId),
         ),
         if (searchQuery.isEmpty)
-          SliverAppBar(
-            automaticallyImplyLeading: false,
-            pinned: false,
-            floating: true,
-            toolbarHeight: 48,
-            backgroundColor: Colors.white,
-            flexibleSpace: Align(
-              alignment: Alignment.bottomCenter,
-              child: TabBar(
-                isScrollable: true,
-                controller: tabController,
-                indicatorPadding: const EdgeInsets.symmetric(horizontal: 8.0),
-                indicatorColor: CustomColors.primary,
-                labelStyle: const TextStyle(
-                  color: CustomColors.primary,
-                  fontSize: 16.0,
-                  fontWeight: FontWeight.w600,
-                ),
-                unselectedLabelStyle: TextStyle(
-                  color: Colors.black.withValues(alpha: 0.60),
-                  fontSize: 14.0,
-                  fontWeight: FontWeight.w400,
-                ),
-                indicatorWeight: 3.0,
-                tabs: [
-                  Tab(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.local_fire_department,
-                          size: 16,
-                          color: CustomColors.primary,
+          tabController == null
+              ? SliverToBoxAdapter(
+                  child: Container(
+                    height: 48,
+                    margin: const EdgeInsets.symmetric(vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: ShimmerWidgets.categoryChipsShimmer(),
+                  ),
+                )
+              : SliverAppBar(
+                  automaticallyImplyLeading: false,
+                  pinned: false,
+                  floating: true,
+                  toolbarHeight: 48,
+                  backgroundColor: Colors.white,
+                  flexibleSpace: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: TabBar(
+                      isScrollable: true,
+                      controller: tabController,
+                      indicatorPadding:
+                          const EdgeInsets.symmetric(horizontal: 8.0),
+                      indicatorColor: CustomColors.primary,
+                      labelStyle: const TextStyle(
+                        color: CustomColors.primary,
+                        fontSize: 16.0,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      unselectedLabelStyle: TextStyle(
+                        color: Colors.black.withValues(alpha: 0.60),
+                        fontSize: 14.0,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      indicatorWeight: 3.0,
+                      tabs: [
+                        Tab(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.local_fire_department,
+                                size: 16,
+                                color: CustomColors.primary,
+                              ),
+                              const SizedBox(width: 4),
+                              const Text("Popular"),
+                            ],
+                          ),
                         ),
-                        const SizedBox(width: 4),
-                        const Text("Popular"),
+                        ...vendorCateoryModel.map((e) => Tab(text: e.title)),
+                        Tab(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.inventory_2,
+                                size: 16,
+                                color: CustomColors.primary,
+                              ),
+                              const SizedBox(width: 4),
+                              const Text("Bundles"),
+                            ],
+                          ),
+                        ),
                       ],
+                      onTap: animateAndScrollTo,
                     ),
                   ),
-                  ...vendorCateoryModel.map((e) => Tab(text: e.title)),
-                  Tab(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.inventory_2,
-                          size: 16,
-                          color: CustomColors.primary,
-                        ),
-                        const SizedBox(width: 4),
-                        const Text("Bundles"),
-                      ],
-                    ),
-                  ),
-                ],
-                onTap: animateAndScrollTo,
-              ),
-            ),
-          ),
+                ),
         ...buildBodySlivers(),
       ],
     );
@@ -781,6 +865,36 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
   // }
 
   List<Widget> buildBodySlivers() {
+    if (tabController == null && searchQuery.isEmpty) {
+      return [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.all(10.0),
+            child: Row(
+              children: [
+                Icon(Icons.local_fire_department,
+                    size: 20, color: CustomColors.primary),
+                const SizedBox(width: 6),
+                Container(
+                  height: 18,
+                  width: 80,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: ShimmerWidgets.productGridShimmer(),
+          ),
+        ),
+      ];
+    }
     if (searchQuery.isNotEmpty) {
       if (filteredProducts.isEmpty) {
         return [
@@ -895,22 +1009,74 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
             key: const ValueKey(0),
             index: 0,
             controller: scrollController,
-            child: Padding(
-              padding: const EdgeInsets.all(10.0),
-              child: Row(
+            child: LazySection(
+              sectionKey: const ValueKey('popular_section'),
+              loadingPlaceholder: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.local_fire_department,
-                    size: 20,
-                    color: CustomColors.primary,
+                  Padding(
+                    padding: const EdgeInsets.all(10.0),
+                    child: Row(
+                      children: [
+                        Icon(Icons.local_fire_department,
+                            size: 20, color: CustomColors.primary),
+                        const SizedBox(width: 6),
+                        Container(
+                          height: 18,
+                          width: 80,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[300],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(width: 6),
-                  Text(
-                    "Popular",
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
+                  SizedBox(
+                    height: 320,
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: ShimmerWidgets.productGridShimmer(),
+                    ),
+                  ),
+                ],
+              ),
+              contentBuilder: () => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(10.0),
+                    child: Row(
+                      children: [
+                        Icon(Icons.local_fire_department,
+                            size: 20, color: CustomColors.primary),
+                        const SizedBox(width: 6),
+                        Text(
+                          "Popular",
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(10.0),
+                    child: GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        childAspectRatio: 0.75,
+                        crossAxisSpacing: 6.0,
+                        mainAxisSpacing: 6.0,
+                      ),
+                      itemCount: popularProducts.length,
+                      itemBuilder: (context, index) =>
+                          buildPopularFoodItem(popularProducts[index]),
                     ),
                   ),
                 ],
@@ -920,27 +1086,12 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
         ),
       ),
     );
-    slivers.add(
-      SliverGrid(
-        gridDelegate:
-            const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          childAspectRatio: 0.75,
-          crossAxisSpacing: 6.0,
-          mainAxisSpacing: 6.0,
-        ),
-        delegate: SliverChildBuilderDelegate(
-          (context, index) =>
-              buildPopularFoodItem(popularProducts[index]),
-          childCount: popularProducts.length,
-        ),
-      ),
-    );
 
     for (int i = 0; i < vendorCateoryModel.length; i++) {
       final category = vendorCateoryModel[i];
       final categoryProducts = productModel
-          .where((p) => p.categoryID == category.id)
+          .where((p) =>
+              p.categoryID == category.id || p.sectionId == category.id)
           .toList();
       final sectionIndex = i + 1;
       itemKeys[sectionIndex] = RectGetter.createGlobalKey();
@@ -952,36 +1103,48 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
               key: ValueKey(sectionIndex),
               index: sectionIndex,
               controller: scrollController,
-              child: _buildSectionTileHeader(category),
+              child: LazySection(
+                sectionKey: ValueKey('category_${category.id}'),
+                loadingPlaceholder: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: ShimmerWidgets.categorySectionShimmer(),
+                ),
+                contentBuilder: () => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildSectionTileHeader(category),
+                    if (categoryProducts.isEmpty)
+                      showEmptyState("No Food are available.", context)
+                    else
+                      ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: categoryProducts.length,
+                        separatorBuilder: (_, __) => SizedBox(
+                          height: 0,
+                          child: Divider(
+                            color: CustomColors.lightGray300,
+                            thickness: 0.5,
+                          ),
+                        ),
+                        itemBuilder: (context, index) {
+                          final p = categoryProducts[index];
+                          return buildRow(
+                            p,
+                            false,
+                            false,
+                            p.categoryID,
+                            index == categoryProducts.length - 1,
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
       );
-      if (categoryProducts.isEmpty) {
-        slivers.add(
-          SliverToBoxAdapter(
-            child: showEmptyState("No Food are available.", context),
-          ),
-        );
-      } else {
-        slivers.add(
-          SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final p = categoryProducts[index];
-                return buildRow(
-                  p,
-                  false,
-                  false,
-                  p.categoryID,
-                  index == categoryProducts.length - 1,
-                );
-              },
-              childCount: categoryProducts.length,
-            ),
-          ),
-        );
-      }
     }
 
     final bundleIndex = vendorCateoryModel.length + 1;
@@ -994,23 +1157,119 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
             key: ValueKey(bundleIndex),
             index: bundleIndex,
             controller: scrollController,
-            child: Padding(
-              padding: const EdgeInsets.all(4.0),
-              child: Row(
+            child: LazySection(
+              sectionKey: const ValueKey('bundles_section'),
+              loadingPlaceholder: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.inventory_2,
-                    size: 20,
-                    color: CustomColors.primary,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    "Bundles",
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
+                  Padding(
+                    padding: const EdgeInsets.all(4.0),
+                    child: Row(
+                      children: [
+                        Icon(Icons.inventory_2,
+                            size: 20, color: CustomColors.primary),
+                        const SizedBox(width: 6),
+                        Container(
+                          height: 18,
+                          width: 80,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[300],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ],
                     ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: Column(
+                      children: List.generate(
+                        2,
+                        (_) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: ShimmerWidgets.bundleCardShimmer(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              contentBuilder: () => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(4.0),
+                    child: Row(
+                      children: [
+                        Icon(Icons.inventory_2,
+                            size: 20, color: CustomColors.primary),
+                        const SizedBox(width: 6),
+                        Text(
+                          "Bundles",
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  StreamBuilder<List<BundleModel>>(
+                    stream: BundleService.getActiveBundlesStream(
+                      restaurantId: widget.vendorModel.id,
+                      limit: 20,
+                    ),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState ==
+                          ConnectionState.waiting) {
+                        return Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: Column(
+                            children: List.generate(
+                              3,
+                              (_) => Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: ShimmerWidgets.bundleCardShimmer(),
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                        return Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Center(
+                            child: Text(
+                              snapshot.hasError
+                                  ? 'Failed to load bundles'
+                                  : 'No bundles',
+                              style: TextStyle(
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      final bundles = snapshot.data!;
+                      return Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (final bundle in bundles)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: BundleCard(
+                                  bundle: bundle,
+                                  onAddToCart: () =>
+                                      _addBundleToCart(context, bundle),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -1019,55 +1278,12 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
         ),
       ),
     );
-    slivers.add(
-      SliverToBoxAdapter(
-        child: StreamBuilder<List<BundleModel>>(
-          stream: BundleService.getActiveBundlesStream(
-            restaurantId: widget.vendorModel.id,
-            limit: 20,
-          ),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return Padding(
-                padding: const EdgeInsets.all(16),
-                child: Center(
-                  child: Text(
-                    snapshot.hasError
-                        ? 'Failed to load bundles'
-                        : 'No bundles',
-                    style: TextStyle(color: Colors.grey.shade600),
-                  ),
-                ),
-              );
-            }
-            final bundles = snapshot.data!;
-            return Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final bundle in bundles)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: BundleCard(
-                        bundle: bundle,
-                        onAddToCart: () =>
-                            _addBundleToCart(context, bundle),
-                      ),
-                    ),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
 
     if (_hasMoreProducts && _isLoadingMore) {
       slivers.add(
         const SliverToBoxAdapter(
-          child: Padding(
-            padding: EdgeInsets.all(16),
+          child: SizedBox(
+            height: 60,
             child: Center(
               child: CircularProgressIndicator(),
             ),
@@ -1382,7 +1598,9 @@ class _NewVendorProductsScreenState extends State<NewVendorProductsScreen>
       BuildContext context, VendorCategoryModel category) {
     // Pre-filter products by category - O(m) instead of O(n*m)
     final categoryProducts = productModel
-        .where((product) => product.categoryID == category.id)
+        .where((product) =>
+              product.categoryID == category.id ||
+              product.sectionId == category.id)
         .toList();
 
     if (categoryProducts.isEmpty) {

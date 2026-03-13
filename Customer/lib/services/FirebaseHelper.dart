@@ -73,6 +73,19 @@ import 'package:uuid/uuid.dart';
 import '../constants.dart';
 import '../model/TaxModel.dart';
 
+/// Result of a paginated review fetch.
+class ReviewPageResult {
+  final List<RatingModel> reviews;
+  final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
+  final bool hasMore;
+
+  const ReviewPageResult({
+    required this.reviews,
+    required this.lastDocument,
+    required this.hasMore,
+  });
+}
+
 const String _debugLogPath =
     '/Users/sudimard/Documents/flutter_projects/LalaGo-Customer/.cursor/debug.log';
 const String _debugFallbackFileName = 'cursor-debug.log';
@@ -788,6 +801,39 @@ class FireStoreUtils {
     return reviewList;
   }
 
+  /// Paginated review fetch. Requires Firestore composite index:
+  /// Order_Rating: productId (ASC) + createdAt (DESC)
+  Future<ReviewPageResult> getReviewListPaginated(
+    String productId, {
+    int limit = 10,
+    DocumentSnapshot<Map<String, dynamic>>? startAfter,
+  }) async {
+    Query<Map<String, dynamic>> query = firestore
+        .collection(Order_Rating)
+        .where('productId', isEqualTo: productId)
+        .orderBy('createdAt', descending: true)
+        .limit(limit);
+    if (startAfter != null) {
+      query = query.startAfterDocument(startAfter);
+    }
+    final snapshot = await query.get();
+    final reviews = <RatingModel>[];
+    for (final doc in snapshot.docs) {
+      try {
+        reviews.add(RatingModel.fromJson(doc.data()));
+      } catch (e) {
+        debugPrint('FireStoreUtils.getReviewListPaginated Parse error $e');
+      }
+    }
+    final lastDoc =
+        snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+    return ReviewPageResult(
+      reviews: reviews,
+      lastDocument: lastDoc,
+      hasMore: snapshot.docs.length == limit,
+    );
+  }
+
   static Future<List<ProductModel>> getStoreProduct(String storeId) async {
     List<ProductModel> productList = [];
     QuerySnapshot<Map<String, dynamic>> currencyQuery = await firestore
@@ -1455,6 +1501,45 @@ class FireStoreUtils {
   /// Load products for home screen with pagination. Default limit 50.
   Future<List<ProductModel>> getHomeScreenProducts({int limit = 50}) async {
     return getProductsPaginatedWithPublish(limit: limit, lastDocument: null);
+  }
+
+  /// Paginated products with publish filter, returns products + cursor for
+  /// pagination (e.g. sulit screen).
+  Future<ProductPageResult> getProductsPaginatedWithPublishResult({
+    required int limit,
+    DocumentSnapshot<Map<String, dynamic>>? lastDocument,
+  }) async {
+    try {
+      Query<Map<String, dynamic>> query = firestore
+          .collection(PRODUCTS)
+          .where('publish', isEqualTo: true)
+          .orderBy('createdAt', descending: true);
+
+      if (lastDocument != null) {
+        query = query.startAfterDocument(lastDocument);
+      }
+
+      query = query.limit(limit);
+
+      final snapshot = await query.get();
+      final products = snapshot.docs.map((doc) {
+        final data = doc.data();
+        if (data.isEmpty) return null;
+        try {
+          return ProductModel.fromJson(data);
+        } catch (e) {
+          debugPrint('Error parsing product ${doc.id}: $e');
+          return null;
+        }
+      }).whereType<ProductModel>().toList();
+
+      final lastDoc =
+          snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+      return ProductPageResult(products, lastDoc);
+    } catch (e) {
+      debugPrint('Error loading products with cursor: $e');
+      return const ProductPageResult([], null);
+    }
   }
 
   Future<List<String>> getMostOrderedProductIdsForToday({int limit = 30}) async {
@@ -2125,6 +2210,26 @@ class FireStoreUtils {
     yield* categoryStreamController.stream;
   }
 
+  /// Non-geo fallback for category restaurants when stream returns empty.
+  Future<List<VendorModel>> getCategoryRestaurantsPaginated(
+    String categoryId, {
+    int limit = 20,
+  }) async {
+    try {
+      final snapshot = await firestore
+          .collection(VENDORS)
+          .where('categoryID', isEqualTo: categoryId)
+          .limit(limit)
+          .get();
+      return snapshot.docs
+          .map((doc) => VendorModel.fromJson(doc.data()))
+          .toList();
+    } catch (e) {
+      debugPrint('getCategoryRestaurantsPaginated error: $e');
+      return [];
+    }
+  }
+
   StreamController<List<VendorModel>>? newArrivalStreamController;
 
   Stream<List<VendorModel>> getVendorsForNewArrival({String? path}) async* {
@@ -2353,7 +2458,19 @@ class FireStoreUtils {
     return story;
   }
 
-  Future<ProductPageResult> getVendorProductsTakeAWay(
+  Future<int> countVendorProductsByVendorIdOnly(String vendorID) async {
+    final q = firestore
+        .collection(PRODUCTS)
+        .where('vendorID', isEqualTo: vendorID)
+        .limit(101);
+    final snap = await q.get();
+    return snap.docs.length;
+  }
+
+  /// Fallback when publish filter returns 0 but products exist (e.g. publish
+  /// false or missing). Queries by vendorID only. Uses documentId for ordering
+  /// so docs without createdAt are included.
+  Future<ProductPageResult> getVendorProductsVendorIdOnly(
     String vendorID, {
     DocumentSnapshot<Map<String, dynamic>>? lastDocument,
     int limit = 20,
@@ -2362,11 +2479,11 @@ class FireStoreUtils {
     Query<Map<String, dynamic>> q = firestore
         .collection(PRODUCTS)
         .where('vendorID', isEqualTo: vendorID)
-        .where('publish', isEqualTo: true)
-        .limit(limit);
+        .orderBy(FieldPath.documentId);
     if (lastDocument != null) {
       q = q.startAfterDocument(lastDocument);
     }
+    q = q.limit(limit);
     final productsQuery = await q.get();
     for (final document in productsQuery.docs) {
       try {
@@ -2377,7 +2494,38 @@ class FireStoreUtils {
         }
       }
     }
-    final lastDoc = productsQuery.docs.isNotEmpty ? productsQuery.docs.last : null;
+    final lastDoc =
+        productsQuery.docs.isNotEmpty ? productsQuery.docs.last : null;
+    return ProductPageResult(products, lastDoc);
+  }
+
+  Future<ProductPageResult> getVendorProductsTakeAWay(
+    String vendorID, {
+    DocumentSnapshot<Map<String, dynamic>>? lastDocument,
+    int limit = 20,
+  }) async {
+    List<ProductModel> products = [];
+    Query<Map<String, dynamic>> q = firestore
+        .collection(PRODUCTS)
+        .where('vendorID', isEqualTo: vendorID)
+        .where('publish', isEqualTo: true)
+        .orderBy('createdAt', descending: true);
+    if (lastDocument != null) {
+      q = q.startAfterDocument(lastDocument);
+    }
+    q = q.limit(limit);
+    final productsQuery = await q.get();
+    for (final document in productsQuery.docs) {
+      try {
+        products.add(ProductModel.fromJson(document.data()));
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('FireStoreUtils.getVendorProducts Parse error $e');
+        }
+      }
+    }
+    final lastDoc =
+        productsQuery.docs.isNotEmpty ? productsQuery.docs.last : null;
     return ProductPageResult(products, lastDoc);
   }
 
@@ -2390,12 +2538,12 @@ class FireStoreUtils {
     Query<Map<String, dynamic>> q = firestore
         .collection(PRODUCTS)
         .where('vendorID', isEqualTo: vendorID)
-        .where('takeawayOption', isEqualTo: false)
         .where('publish', isEqualTo: true)
-        .limit(limit);
+        .orderBy('createdAt', descending: true);
     if (lastDocument != null) {
       q = q.startAfterDocument(lastDocument);
     }
+    q = q.limit(limit);
     final productsQuery = await q.get();
     for (final document in productsQuery.docs) {
       try {
@@ -2406,7 +2554,8 @@ class FireStoreUtils {
         }
       }
     }
-    final lastDoc = productsQuery.docs.isNotEmpty ? productsQuery.docs.last : null;
+    final lastDoc =
+        productsQuery.docs.isNotEmpty ? productsQuery.docs.last : null;
     return ProductPageResult(products, lastDoc);
   }
 
@@ -5553,6 +5702,45 @@ class FireStoreUtils {
         'lastDocument': null,
       };
     }
+  }
+
+  /// Returns vendorID -> order count for user's completed orders (most recent
+  /// first). Used for personalizing restaurant ordering in Sulit list.
+  Future<Map<String, int>> getUserVendorOrderCounts(
+    String userID, {
+    int orderLimit = 50,
+  }) async {
+    final counts = <String, int>{};
+    dynamic lastDoc;
+    const pageSize = 25;
+    try {
+      int totalProcessed = 0;
+      while (totalProcessed < orderLimit) {
+        final result = await getOrdersByStatusPaginated(
+          userID: userID,
+          status: ORDER_STATUS_COMPLETED,
+          limit: pageSize,
+          lastDocument: lastDoc,
+        );
+        final orders = (result['orders'] as List<OrderModel>?) ?? [];
+        if (orders.isEmpty) break;
+        for (final o in orders) {
+          if (o.vendorID.isNotEmpty) {
+            counts[o.vendorID] = (counts[o.vendorID] ?? 0) + 1;
+          }
+        }
+        lastDoc = result['lastDocument'];
+        totalProcessed += orders.length;
+        if (totalProcessed >= orderLimit ||
+            lastDoc == null ||
+            orders.length < pageSize) {
+          break;
+        }
+      }
+    } catch (e) {
+      debugPrint('getUserVendorOrderCounts error: $e');
+    }
+    return counts;
   }
 
   Future<List<VendorModel>> getPopularRestaurantsPaginated({

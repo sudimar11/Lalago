@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
@@ -44,8 +45,8 @@ import 'package:foodie_customer/services/FirebaseHelper.dart';
 
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/services/restaurant_processing.dart';
-
 import 'package:foodie_customer/services/coupon_service.dart';
+import 'package:foodie_customer/services/pautos_visibility_service.dart';
 
 import 'package:foodie_customer/services/localDatabase.dart';
 import 'package:foodie_customer/utils/future_utils.dart';
@@ -69,7 +70,6 @@ import 'package:foodie_customer/ui/home/view_all_popular_restaurant_screen.dart'
 import 'package:foodie_customer/ui/home/view_all_restaurant.dart';
 import 'package:foodie_customer/ui/home/view_all_sulit_foods_screen.dart';
 import 'package:foodie_customer/ui/home/favourite_restaurant.dart';
-import 'package:foodie_customer/ui/home/sections/top_restaurants_section.dart';
 import 'package:foodie_customer/ui/home/sections/category_restaurants_section.dart';
 import 'package:foodie_customer/ui/home/sections/all_restaurants_section.dart';
 import 'package:foodie_customer/ui/home/sections/new_arrival_card.dart';
@@ -183,8 +183,6 @@ class _HomeScreenState extends State<HomeScreen> {
   List<VendorModel> nearbyFoodVendors = [];
   List<VendorModel> popularTodayVendors = [];
 
-  List<VendorModel> validRestaurants = [];
-  List<VendorModel> popularRestaurantLst = [];
 
   List<VendorModel> newArrivalLst = [];
 
@@ -219,9 +217,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _setStateDebounceTimer;
   bool _pendingStateUpdate = false;
 
-  /// True when restaurant stream has emitted at least once.
-  bool _hasReceivedVendorData = false;
-  bool _topRestaurantsError = false;
 
   /// Unified state update method with intelligent debouncing
   ///
@@ -853,7 +848,6 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('[HOME] getData failed: $e');
         if (mounted && !_isLeavingHome) {
           _updateState(callback: () {
-            _topRestaurantsError = true;
             _isLoadingNearbyFoods = false;
             _isLoadingPopularToday = false;
           });
@@ -1211,6 +1205,46 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted && !_isLeavingHome) setState(() {});
   }
 
+  Future<void> _fetchSulitFromVendors(List<VendorModel> vendorList) async {
+    final existingIds = mealForOneProducts.map((p) => p.id).toSet();
+    final List<ProductModel> added = [];
+    for (final vendor in vendorList) {
+      if (!mounted || _isLeavingHome) return;
+      try {
+        final result = await fireStoreUtils.getVendorProductsTakeAWay(
+          vendor.id,
+          limit: 30,
+        );
+        final products = result.products;
+        for (final p in products) {
+          if (existingIds.contains(p.id)) continue;
+          double price = double.tryParse(p.price) ?? 0.0;
+          final disPrice = double.tryParse(p.disPrice ?? '0') ?? 0.0;
+          final effective =
+              disPrice > 0 && disPrice < price ? disPrice : price;
+          if (effective <= sulitCap && effective > 0) {
+            added.add(p);
+            existingIds.add(p.id);
+          }
+        }
+      } catch (_) {}
+    }
+    if (added.isEmpty || !mounted || _isLeavingHome) return;
+    final merged = [...mealForOneProducts, ...added]
+      ..shuffle();
+    mealForOneProducts
+      ..clear()
+      ..addAll(merged.take(10));
+    for (final v in vendorList) {
+      if (added.any((p) => p.vendorID == v.id)) {
+        if (!mealForOneVendors.any((x) => x.id == v.id)) {
+          mealForOneVendors.add(v);
+        }
+      }
+    }
+    _updateState();
+  }
+
   // Fetch meal for one products (sulit price)
   Future<void> fetchMealForOneProducts() async {
     if (!mounted || _isLeavingHome) return;
@@ -1218,22 +1252,21 @@ class _HomeScreenState extends State<HomeScreen> {
       mealForOneError = false;
     });
     try {
-      List<ProductModel> mealForOneList = [];
-
-      for (ProductModel product in allProducts) {
-        double productPrice = double.tryParse(product.price) ?? 0.0;
-        if (productPrice <= sulitCap && productPrice > 0) {
+      final all = await fireStoreUtils.getAllProducts();
+      final List<ProductModel> mealForOneList = [];
+      for (final product in all) {
+        final productPrice = double.tryParse(product.price) ?? 0.0;
+        final disPrice = double.tryParse(product.disPrice ?? '0') ?? 0.0;
+        final effectivePrice =
+            disPrice > 0 && disPrice < productPrice ? disPrice : productPrice;
+        if (effectivePrice <= sulitCap && effectivePrice > 0) {
           mealForOneList.add(product);
         }
       }
+      mealForOneList.shuffle();
+      final mealForOneListLimited = mealForOneList.take(10).toList();
 
-      // Remove duplicates and shuffle for variety
-      mealForOneList = mealForOneList.toSet().toList();
-      mealForOneList
-          .shuffle(); // Randomize to show different products each time
-      mealForOneList = mealForOneList.take(10).toList();
-
-      final Set<String> vendorIds = mealForOneList
+      final Set<String> vendorIds = mealForOneListLimited
           .map((product) => product.vendorID)
           .where((id) => id.isNotEmpty)
           .toSet();
@@ -1244,18 +1277,67 @@ class _HomeScreenState extends State<HomeScreen> {
         final List<VendorModel?> fetchedVendors =
             await Future.wait(vendorFutures);
         mealForOneVendors = fetchedVendors.whereType<VendorModel>().toList();
+        for (final v in fetchedVendors) {
+          if (v != null) DataCacheService.instance.putVendor(v);
+        }
       } else {
         mealForOneVendors = [];
       }
 
-      if (mealForOneList.isEmpty) {
+      if (mealForOneListLimited.isNotEmpty && mealForOneVendors.isEmpty) {
+        Future.delayed(const Duration(seconds: 2), () async {
+          if (!mounted || _isLeavingHome) return;
+          final neededIds = mealForOneListLimited
+              .map((p) => p.vendorID)
+              .where((id) => id.isNotEmpty)
+              .toSet();
+          var resolved =
+              vendors.where((v) => neededIds.contains(v.id)).toList();
+          if (resolved.isEmpty) {
+            for (final vid in neededIds) {
+              final v = DataCacheService.instance.getVendor(vid);
+              if (v != null) resolved.add(v);
+            }
+          }
+          if (resolved.isEmpty) {
+            for (final vid in neededIds) {
+              final v = await FireStoreUtils.getVendor(vid);
+              if (v != null) {
+                resolved.add(v);
+                DataCacheService.instance.putVendor(v);
+              }
+            }
+          }
+          if (resolved.isNotEmpty) {
+            mealForOneVendors = resolved;
+            if (mounted && !_isLeavingHome) _updateState();
+          }
+        });
       }
 
       if (!mounted || _isLeavingHome) return;
       _updateState(callback: () {
-        mealForOneProducts = mealForOneList;
+        mealForOneProducts = mealForOneListLimited;
         isLoadingMealForOne = false;
       });
+
+      // Fallback: vendor stream may never emit (geo query returns empty).
+      // Enrich from getRestaurantsPaginated when we have few sulit products.
+      if (mealForOneListLimited.length < 5 && mounted && !_isLeavingHome) {
+        unawaited((() async {
+          try {
+            final result = await fireStoreUtils.getRestaurantsPaginated(
+              orderType: 'delivery',
+              limit: 15,
+            );
+            final List<VendorModel> vendors =
+                (result['restaurants'] as List<VendorModel>?) ?? [];
+            if (vendors.isNotEmpty && mounted && !_isLeavingHome) {
+              await _fetchSulitFromVendors(vendors.take(8).toList());
+            }
+          } catch (_) {}
+        })());
+      }
     } catch (e) {
       if (!mounted || _isLeavingHome) return;
       _updateState(callback: () {
@@ -1685,8 +1767,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                               SliverToBoxAdapter(
-                                child: RepaintBoundary(
-                                  child: const HomePautosEntrySection(),
+                                child: StreamBuilder<bool>(
+                                  stream: PautosVisibilityService
+                                      .getPautosEnabledStream(),
+                                  builder: (context, snapshot) {
+                                    final enabled = snapshot.data ?? true;
+                                    if (!enabled) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    return RepaintBoundary(
+                                      child: const HomePautosEntrySection(),
+                                    );
+                                  },
                                 ),
                               ),
                               SliverToBoxAdapter(
@@ -1719,7 +1811,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               SliverToBoxAdapter(
                                 child: MyAppState.currentUser != null
                                     ? LazySection(
-                                        sectionKey: const Key('section_order_again'),
+                                        sectionKey: const Key(
+                                            'section_order_again'),
                                         activateCondition: () =>
                                             MyAppState.currentUser != null,
                                         loadingPlaceholder: ShimmerWidgets
@@ -1731,55 +1824,13 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                               SliverToBoxAdapter(
                                 child: LazySection(
-                                  sectionKey: const Key('section_trending'),
-                                  loadingPlaceholder:
-                                      const SizedBox(height: 200),
-                                  contentBuilder: () => RepaintBoundary(
-                                    child: TrendingNowSection(
-                                      allProducts: allProducts,
-                                      lstFav: lstFav,
-                                      onFavoriteChanged: _onFavoriteChanged,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              SliverToBoxAdapter(
-                                child: LazySection(
-                                  sectionKey: const Key('section_time_based'),
-                                  loadingPlaceholder:
-                                      const SizedBox(height: 200),
-                                  contentBuilder: () => RepaintBoundary(
-                                    child: TimeBasedSection(
-                                      allProducts: allProducts,
-                                      lstFav: lstFav,
-                                      onFavoriteChanged: _onFavoriteChanged,
-                                      highlightMealPeriod:
-                                          widget.highlightMealPeriod,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              SliverToBoxAdapter(
-                                child: LazySection(
-                                  sectionKey:
-                                      const Key('section_personalized'),
-                                  loadingPlaceholder:
-                                      const SizedBox(height: 200),
-                                  contentBuilder: () => RepaintBoundary(
-                                    child: PersonalizedRecommendationsSection(
-                                      allProducts: allProducts,
-                                      offerList: offerList,
-                                      currencyModel: currencyModel,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              SliverToBoxAdapter(
-                                child: LazySection(
                                   sectionKey:
                                       const Key('section_meal_for_one'),
-                                  loadingPlaceholder:
-                                      const SizedBox(height: 220),
+                                  loadingPlaceholder: SizedBox(
+                                    height: 220,
+                                    child: ShimmerWidgets
+                                        .productListShimmer(),
+                                  ),
                                   contentBuilder: () => RepaintBoundary(
                                     child: MealForOneSection(
                                       mealForOneProducts: mealForOneProducts,
@@ -1798,8 +1849,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: LazySection(
                                   sectionKey: const Key(
                                       'section_nearby_restaurants'),
-                                  loadingPlaceholder:
-                                      const SizedBox(height: 280),
+                                  loadingPlaceholder: SizedBox(
+                                    height: 280,
+                                    child: ShimmerWidgets
+                                        .restaurantListShimmer(),
+                                  ),
                                   contentBuilder: () => RepaintBoundary(
                                     child: NearbyRestaurantsSection(
                                       vendorsStream: _cachedNewArrivalStream ??
@@ -1821,8 +1875,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: LazySection(
                                   sectionKey:
                                       const Key('section_new_restaurants'),
-                                  loadingPlaceholder:
-                                      const SizedBox(height: 280),
+                                  loadingPlaceholder: SizedBox(
+                                    height: 280,
+                                    child: ShimmerWidgets
+                                        .restaurantListShimmer(),
+                                  ),
                                   contentBuilder: () => RepaintBoundary(
                                     child: NewRestaurantsSection(
                                       vendorsStream:
@@ -1844,24 +1901,54 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                               SliverToBoxAdapter(
                                 child: LazySection(
-                                  sectionKey:
-                                      const Key('section_top_restaurants'),
-                                  loadingPlaceholder:
-                                      const SizedBox(height: 280),
+                                  sectionKey: const Key('section_trending'),
+                                  loadingPlaceholder: SizedBox(
+                                    height: 200,
+                                    child: ShimmerWidgets
+                                        .productListShimmer(),
+                                  ),
                                   contentBuilder: () => RepaintBoundary(
-                                    child: TopRestaurantsSection(
-                                      popularRestaurantLst:
-                                          popularRestaurantLst,
+                                    child: TrendingNowSection(
                                       allProducts: allProducts,
                                       lstFav: lstFav,
-                                      fallbackRestaurants:
-                                          mostRatedRestaurantsFallback,
                                       onFavoriteChanged: _onFavoriteChanged,
-                                      isLoading: popularRestaurantLst
-                                              .isEmpty &&
-                                          !_hasReceivedVendorData,
-                                      hasError: _topRestaurantsError,
-                                      onRetry: _refreshHomeData,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey: const Key('section_time_based'),
+                                  loadingPlaceholder: SizedBox(
+                                    height: 200,
+                                    child: ShimmerWidgets
+                                        .productListShimmer(),
+                                  ),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: TimeBasedSection(
+                                      allProducts: allProducts,
+                                      lstFav: lstFav,
+                                      onFavoriteChanged: _onFavoriteChanged,
+                                      highlightMealPeriod:
+                                          widget.highlightMealPeriod,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: LazySection(
+                                  sectionKey:
+                                      const Key('section_personalized'),
+                                  loadingPlaceholder: SizedBox(
+                                    height: 200,
+                                    child: ShimmerWidgets
+                                        .productListShimmer(),
+                                  ),
+                                  contentBuilder: () => RepaintBoundary(
+                                    child: PersonalizedRecommendationsSection(
+                                      allProducts: allProducts,
+                                      offerList: offerList,
+                                      currencyModel: currencyModel,
                                     ),
                                   ),
                                 ),
@@ -1870,8 +1957,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: LazySection(
                                   sectionKey: const Key(
                                       'section_category_restaurants'),
-                                  loadingPlaceholder:
-                                      const SizedBox(height: 300),
+                                  loadingPlaceholder: SizedBox(
+                                    height: 300,
+                                    child: ShimmerWidgets
+                                        .restaurantListShimmer(),
+                                  ),
                                   contentBuilder: () => RepaintBoundary(
                                     child: CategoryRestaurantsSection(
                                       categoryWiseProductList:
@@ -1890,8 +1980,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: LazySection(
                                   sectionKey:
                                       const Key('section_all_restaurants'),
-                                  loadingPlaceholder:
-                                      const SizedBox(height: 400),
+                                  loadingPlaceholder: SizedBox(
+                                    height: 400,
+                                    child: ShimmerWidgets
+                                        .restaurantListShimmer(),
+                                  ),
                                   contentBuilder: () => RepaintBoundary(
                                     child: AllRestaurantsSection(
                                       offerList: offerList,
@@ -3886,14 +3979,29 @@ class _HomeScreenState extends State<HomeScreen> {
               if (eventToProcess == null || !mounted || _isLeavingHome) return;
               if (_isProcessingRestaurants) return;
               _isProcessingRestaurants = true;
-              _hasReceivedVendorData = true;
-              _topRestaurantsError = false;
 
               try {
                 final event = eventToProcess;
                 vendors
                   ..clear()
                   ..addAll(event);
+                DataCacheService.instance.putVendors(List.from(event));
+
+                // Resolve meal-for-one vendors from stream
+                if (mealForOneProducts.isNotEmpty) {
+                  final Set<String> neededIds = mealForOneProducts
+                      .map((p) => p.vendorID)
+                      .where((id) => id.isNotEmpty)
+                      .toSet();
+                  mealForOneVendors = event
+                      .where((v) => neededIds.contains(v.id))
+                      .toList();
+                }
+
+                // Enrich sulit from vendor products when we have few
+                if (mealForOneProducts.length < 5 && event.isNotEmpty) {
+                  _fetchSulitFromVendors(event.take(8).toList());
+                }
 
                 nearbyFoodVendors
                   ..clear()
@@ -3906,6 +4014,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 // Rebuild caches after vendors update
                 _rebuildComputationCaches();
                 _populateOfferVendorLists();
+
+                _updateState();
 
                 productsFuture.then((value) async {
               // Safety check: don't process if widget is disposed
@@ -3970,78 +4080,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 _isLoadingNearbyFoods = false;
               });
             });
-
-            // Process restaurants in isolate to prevent UI freezes
-            final List<Map<String, dynamic>> restaurantMaps =
-                event.map((vendor) => vendor.toJson()).toList();
-
-            compute(filterAndSortRestaurantsForHome, restaurantMaps)
-                .then((processedMaps) {
-              // Safety check: don't process if widget is disposed
-              if (!mounted || _isLeavingHome) return;
-
-              try {
-                // Convert back to VendorModel objects
-                final List<VendorModel> processedRestaurants = processedMaps
-                    .map((map) => VendorModel.fromJson(map))
-                    .toList();
-
-                // Assign the sorted list to popularRestaurantLst
-                popularRestaurantLst = processedRestaurants;
-
-                // Debounced setState
-                _updateState();
-              } catch (e) {
-                // Fallback to synchronous processing on error
-                validRestaurants =
-                    event.where((vendor) => isRestaurantOpen(vendor)).toList();
-                validRestaurants.sort((a, b) {
-                  final double reviewsSumA = a.reviewsSum.toDouble();
-                  final double reviewsSumB = b.reviewsSum.toDouble();
-                  final num reviewsCountA = a.reviewsCount;
-                  final num reviewsCountB = b.reviewsCount;
-                  final double ratingA =
-                      reviewsCountA != 0 ? (reviewsSumA / reviewsCountA) : 0.0;
-                  final double ratingB =
-                      reviewsCountB != 0 ? (reviewsSumB / reviewsCountB) : 0.0;
-                  final int ratingComparison = ratingB.compareTo(ratingA);
-                  if (ratingComparison == 0) {
-                    return reviewsCountB.compareTo(reviewsCountA);
-                  }
-                  return ratingComparison;
-                });
-                popularRestaurantLst = validRestaurants;
-                _updateState();
-              }
-            }).catchError((error) {
-              // Fallback to synchronous processing on isolate error
-              if (!mounted || _isLeavingHome) return;
-              try {
-                validRestaurants =
-                    event.where((vendor) => isRestaurantOpen(vendor)).toList();
-                validRestaurants.sort((a, b) {
-                  final double reviewsSumA = a.reviewsSum.toDouble();
-                  final double reviewsSumB = b.reviewsSum.toDouble();
-                  final num reviewsCountA = a.reviewsCount;
-                  final num reviewsCountB = b.reviewsCount;
-                  final double ratingA =
-                      reviewsCountA != 0 ? (reviewsSumA / reviewsCountA) : 0.0;
-                  final double ratingB =
-                      reviewsCountB != 0 ? (reviewsSumB / reviewsCountB) : 0.0;
-                  final int ratingComparison = ratingB.compareTo(ratingA);
-                  if (ratingComparison == 0) {
-                    return reviewsCountB.compareTo(reviewsCountA);
-                  }
-                  return ratingComparison;
-                });
-                popularRestaurantLst = validRestaurants;
-                _updateState();
-              } catch (e) {
-                // If everything fails, just use the original list
-                popularRestaurantLst = event;
-                _updateState();
-              }
-            });
               } finally {
                 _isProcessingRestaurants = false;
               }
@@ -4064,9 +4102,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onError: (error) {
           if (!mounted || _isLeavingHome) return;
           _isProcessingRestaurants = false;
-          _updateState(callback: () {
-            _topRestaurantsError = true;
-          });
+          _updateState(callback: () {});
         },
       );
     });

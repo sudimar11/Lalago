@@ -36,11 +36,17 @@ class InboxModel {
       customerProfileImage: parsedJson['customerProfileImage'] ?? '',
       lastMessage: parsedJson['lastMessage'],
       orderId: parsedJson['orderId'],
-      restaurantId: parsedJson['restaurantId'] ?? '',
+      restaurantId: parsedJson['restaurantId'] ??
+          parsedJson['driverId'] ??
+          parsedJson['driverID'] ??
+          '',
       restaurantName: parsedJson['restaurantName'] ?? '',
       lastSenderId: parsedJson['lastSenderId'] ?? '',
       chatType: parsedJson['chatType'] ?? '',
-      restaurantProfileImage: parsedJson['restaurantProfileImage'] ?? '',
+      restaurantProfileImage: parsedJson['restaurantProfileImage'] ??
+          parsedJson['driverProfileImage'] ??
+          parsedJson['driverProfileImageURL'] ??
+          '',
       createdAt: parsedJson['createdAt'] ?? Timestamp.now(),
       unreadCount: parsedJson['unreadCount'] ?? 0,
     );

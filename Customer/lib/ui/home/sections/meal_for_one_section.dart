@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/ProductModel.dart';
 import 'package:foodie_customer/model/VendorModel.dart';
+import 'package:foodie_customer/services/data_cache_service.dart';
 import 'package:foodie_customer/services/helper.dart';
 import 'package:foodie_customer/ui/home/sections/widgets/restaurant_eta_fee_row.dart';
 import 'package:foodie_customer/ui/home/sections/home_section_utils.dart';
@@ -87,16 +88,8 @@ class MealForOneSection extends StatelessWidget {
                             : displayWithPhotos.length,
                         itemBuilder: (context, index) {
                           ProductModel product = displayWithPhotos[index];
-                          VendorModel? vendorModel;
-                          for (VendorModel vendor in vendors) {
-                            if (vendor.id == product.vendorID) {
-                              vendorModel = vendor;
-                              break;
-                            }
-                          }
-                          if (vendorModel == null) {
-                            return Container();
-                          }
+                          final vendorModel = _findVendorForProduct(product);
+                          if (vendorModel == null) return Container();
                           return _mealForOneCard(context, product, vendorModel);
                         },
                       ),
@@ -131,7 +124,9 @@ class MealForOneSection extends StatelessWidget {
         return vendor;
       }
     }
-    return null;
+    final cached = DataCacheService.instance.getVendor(product.vendorID);
+    if (cached != null) return cached;
+    return VendorModel(id: product.vendorID, title: 'Restaurant', reststatus: true);
   }
 
   bool _isRestaurantOpen(VendorModel vendorModel) {
@@ -173,13 +168,14 @@ class MealForOneSection extends StatelessWidget {
 
   Widget _mealForOneHeader(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
       child: Row(
         children: [
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
+                Icon(Icons.lunch_dining, color: Colors.orange[700], size: 22),
+                const SizedBox(width: 8),
                 RichText(
                   text: TextSpan(
                     children: [
@@ -188,7 +184,7 @@ class MealForOneSection extends StatelessWidget {
                         style: TextStyle(
                           fontFamily: 'Poppinssb',
                           fontSize: 18,
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.bold,
                           color: isDarkMode(context)
                               ? Colors.white
                               : Colors.black87,
@@ -199,8 +195,8 @@ class MealForOneSection extends StatelessWidget {
                         style: TextStyle(
                           fontFamily: 'Poppinssb',
                           fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: Color(COLOR_PRIMARY),
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange[800],
                         ),
                       ),
                     ],

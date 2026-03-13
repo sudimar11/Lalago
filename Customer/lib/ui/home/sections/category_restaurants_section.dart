@@ -207,6 +207,22 @@ class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
               setState(() => _hasError = true);
             }
           },
+          cancelOnError: false,
+          onDone: () async {
+            if (!mounted || _vendors.isNotEmpty) return;
+            final fallback = await widget.fireStoreUtils
+                .getCategoryRestaurantsPaginated(
+                    widget.category.id.toString());
+            if (!mounted) return;
+            if (fallback.isNotEmpty) {
+              setState(() {
+                _vendors = fallback;
+                _cachedCards =
+                    _computeCardCache(fallback, widget.allProducts);
+                _hasError = false;
+              });
+            }
+          },
         );
     _scrollController.addListener(_onScroll);
   }
@@ -244,19 +260,47 @@ class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
       return Container();
     }
     final count = _displayedCount.clamp(0, _vendors.length);
+    final categoryTitle = widget.category.title.toString();
     return Column(
       children: [
-        HomeSectionUtils.buildTitleRow(
-          titleValue: widget.category.title.toString(),
-          onClick: () {
-            push(
-              context,
-              ViewAllCategoryProductScreen(
-                vendorCategoryModel: widget.category,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.category, color: Colors.orange[700], size: 22),
+                  const SizedBox(width: 8),
+                  Text(
+                    categoryTitle,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange[800],
+                    ),
+                  ),
+                ],
               ),
-            );
-          },
-          isViewAll: false,
+              GestureDetector(
+                onTap: () {
+                  push(
+                    context,
+                    ViewAllCategoryProductScreen(
+                      vendorCategoryModel: widget.category,
+                    ),
+                  );
+                },
+                child: Text(
+                  'View All',
+                  style: TextStyle(
+                    color: Colors.orange[800],
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         SizedBox(
           width: MediaQuery.of(context).size.width,
@@ -275,6 +319,7 @@ class _CategoryRestaurantRowState extends State<_CategoryRestaurantRow> {
                 itemBuilder: (context, index) {
                   final cache = _cachedCards[index];
                   return _CategoryRestaurantCard(
+                    key: ValueKey(cache.vendor.id),
                     cache: cache,
                     allProducts: widget.allProducts,
                     currencyModel: widget.currencyModel,
@@ -295,6 +340,7 @@ class _CategoryRestaurantCard extends StatelessWidget {
   final CurrencyModel? currencyModel;
 
   const _CategoryRestaurantCard({
+    super.key,
     required this.cache,
     required this.allProducts,
     this.currencyModel,

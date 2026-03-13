@@ -65,8 +65,8 @@ class _OrderAgainSectionState extends State<OrderAgainSection> {
         return;
       }
 
-      var products = DataCacheService.instance.products;
-      if (products == null || products.isEmpty) {
+      var products = DataCacheService.instance.products ?? [];
+      if (products.isEmpty) {
         await Future.delayed(const Duration(seconds: 1));
         if (!mounted) return;
         products = DataCacheService.instance.products ?? [];
@@ -78,20 +78,43 @@ class _OrderAgainSectionState extends State<OrderAgainSection> {
           String baseProductId = product.id.contains('~')
               ? product.id.split('~').first
               : product.id;
-          productIds.add(baseProductId);
+          if (baseProductId.isNotEmpty) productIds.add(baseProductId);
         }
       }
+
+      final productIdsList = productIds.toList();
+      final cacheIds = products.map((p) => p.id).toSet();
+      final unmatchedIds =
+          productIdsList.where((id) => !cacheIds.contains(id)).toList();
 
       List<ProductModel> orderAgainList = [];
       for (String productId in productIds) {
         try {
-          ProductModel? product = products.firstWhere(
+          final product = products.firstWhere(
             (p) => p.id == productId,
             orElse: () => ProductModel(),
           );
           if (product.id.isNotEmpty) orderAgainList.add(product);
         } catch (_) {}
       }
+
+      // Fetch products not in cache from Firestore
+      for (final productId in unmatchedIds) {
+        if (!mounted) return;
+        try {
+          final product =
+              await FireStoreUtils().getProductByID(productId);
+          if (product.id.isNotEmpty) {
+            orderAgainList.add(product);
+            final vendor =
+                await FireStoreUtils.getVendor(product.vendorID);
+            if (vendor != null) {
+              DataCacheService.instance.putVendor(vendor);
+            }
+          }
+        } catch (_) {}
+      }
+
       orderAgainList = orderAgainList.toSet().toList();
       orderAgainList = orderAgainList.take(10).toList();
 
@@ -124,6 +147,41 @@ class _OrderAgainSectionState extends State<OrderAgainSection> {
     }
   }
 
+  Widget _orderAgainHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.replay, color: Colors.orange[700], size: 22),
+              const SizedBox(width: 8),
+              Text(
+                'Order Again',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange[800],
+                ),
+              ),
+            ],
+          ),
+          GestureDetector(
+            onTap: _onViewAll,
+            child: Text(
+              'View All',
+              style: TextStyle(
+                color: Colors.orange[800],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (MyAppState.currentUser == null) return const SizedBox.shrink();
@@ -131,24 +189,37 @@ class _OrderAgainSectionState extends State<OrderAgainSection> {
       return Column(
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
-          HomeSectionUtils.buildTitleRow(
-            titleValue: 'Order Again',
-            onClick: _onViewAll,
-          ),
+          _orderAgainHeader(),
           ShimmerWidgets.orderAgainSkeleton(),
         ],
       );
     }
     if (_products.isEmpty && !_isLoading && !_hasError) {
-      return const SizedBox.shrink();
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          _orderAgainHeader(),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: Text(
+                'No recent orders',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: isDarkMode(context)
+                      ? Colors.white70
+                      : Colors.grey.shade600,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
     }
     if (_hasError) {
       return Column(
         children: [
-          HomeSectionUtils.buildTitleRow(
-            titleValue: 'Order Again',
-            onClick: _onViewAll,
-          ),
+          _orderAgainHeader(),
           HomeSectionUtils.sectionError(
             message: 'Failed to load order again',
             onRetry: _onRetry,
@@ -163,10 +234,7 @@ class _OrderAgainSectionState extends State<OrderAgainSection> {
     return Column(
       mainAxisAlignment: MainAxisAlignment.start,
       children: [
-        HomeSectionUtils.buildTitleRow(
-          titleValue: 'Order Again',
-          onClick: _onViewAll,
-        ),
+        _orderAgainHeader(),
         RepaintBoundary(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 0, 10),

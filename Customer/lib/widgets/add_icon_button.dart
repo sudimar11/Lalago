@@ -41,6 +41,8 @@ class _AddIconButtonState extends State<AddIconButton>
   late Animation<double> _opacityAnimation;
   int _quantity = 0;
   bool _showCounter = false;
+  bool _isAdding = false;
+  bool _isRemoving = false;
   List<CartProduct> _cartProducts = [];
 
   @override
@@ -203,7 +205,7 @@ class _AddIconButtonState extends State<AddIconButton>
   }
 
   void _addToCart() async {
-    if (_quantity >= 99) return;
+    if (_quantity >= 99 || _isAdding || _isRemoving) return;
 
     // Check if restaurant is open before adding
     if (!widget.isRestaurantOpen) {
@@ -240,50 +242,51 @@ class _AddIconButtonState extends State<AddIconButton>
       return; // User cancelled, don't add
     }
 
-    // Show counter immediately for instant visual feedback
-    setState(() {
+    setState(() => _isAdding = true);
+    try {
+      // Show counter immediately for instant visual feedback
+      setState(() {
       _quantity = _quantity + 1;
       _showCounter = true;
-    });
+      });
 
-    // Start or continue width expansion animation
-    if (_expandController.value == 0.0) {
-      // If starting from 0, jump to minimum width (2.0x) then animate to full width
-      _expandController.value = 0.71; // 2.0 / 2.8 = 0.71 (2.0x out of 2.8x max)
-      _expandController.forward();
-    } else if (_expandController.value < 1.0) {
-      // Continue animation if already started
-      _expandController.forward();
+      // Start or continue width expansion animation
+      if (_expandController.value == 0.0) {
+        _expandController.value = 0.71;
+        _expandController.forward();
+      } else if (_expandController.value < 1.0) {
+        _expandController.forward();
+      }
+
+      // Tap animation
+      _tapController.forward().then((_) {
+        _tapController.reverse();
+      });
+
+      // Then sync with actual cart state
+      final stopwatch = Stopwatch()..start();
+      await cartDatabase.addProduct(widget.productModel, cartDatabase, true);
+      stopwatch.stop();
+      PerformanceLogger.logAddToCart(stopwatch.elapsed);
+
+      // Trigger cart update callback to refresh parent UI
+      if (widget.onCartUpdated != null) {
+        widget.onCartUpdated!();
+      }
+    } finally {
+      if (mounted) setState(() => _isAdding = false);
     }
-
-    // Tap animation
-    _tapController.forward().then((_) {
-      _tapController.reverse();
-    });
-
-    // Then sync with actual cart state
-    final stopwatch = Stopwatch()..start();
-    await cartDatabase.addProduct(widget.productModel, cartDatabase, true);
-    stopwatch.stop();
-    PerformanceLogger.logAddToCart(stopwatch.elapsed);
-
-    // Trigger cart update callback to refresh parent UI
-    if (widget.onCartUpdated != null) {
-      widget.onCartUpdated!();
-    }
-
-    // Don't call _loadCartQuantity() here as it resets the state
-    // The optimistic update above is sufficient for immediate feedback
-    // The cart will be synced when the widget rebuilds naturally
   }
 
   void _removeFromCart() async {
-    if (_quantity <= 0) return;
+    if (_quantity <= 0 || _isAdding || _isRemoving) return;
 
     final wasQuantityOne = _quantity == 1;
 
-    // Update quantity immediately for instant UI feedback
-    setState(() {
+    setState(() => _isRemoving = true);
+    try {
+      // Update quantity immediately for instant UI feedback
+      setState(() {
       _quantity = _quantity - 1;
       if (_quantity == 0) {
         _showCounter = false;
@@ -328,9 +331,9 @@ class _AddIconButtonState extends State<AddIconButton>
       stopwatch.stop();
       PerformanceLogger.logUpdateQuantity(stopwatch.elapsed);
     }
-
-    // Don't call _loadCartQuantity() here as it resets the state
-    // The optimistic update above is sufficient for immediate feedback
+    } finally {
+      if (mounted) setState(() => _isRemoving = false);
+    }
   }
 
   @override
@@ -359,7 +362,22 @@ class _AddIconButtonState extends State<AddIconButton>
                 ),
               ],
             ),
-            child: _showCounter ? _buildExpandedCounter() : _buildPlusOnly(),
+            child: _isAdding || _isRemoving
+                ? Center(
+                    child: SizedBox(
+                      width: widget.size * 0.5,
+                      height: widget.size * 0.5,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor:
+                            AlwaysStoppedAnimation<Color>(
+                                widget.iconColor ?? Color(COLOR_PRIMARY)),
+                      ),
+                    ),
+                  )
+                : _showCounter
+                    ? _buildExpandedCounter()
+                    : _buildPlusOnly(),
           ),
         );
       },

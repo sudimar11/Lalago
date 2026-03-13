@@ -24,6 +24,7 @@ class PromosSection extends StatefulWidget {
 
 class _PromosSectionState extends State<PromosSection> {
   List<OfferModel> _activePromos = [];
+  bool _isLoading = true;
   bool _isError = false;
   int _retryAttempt = 0;
 
@@ -37,6 +38,7 @@ class _PromosSectionState extends State<PromosSection> {
     if (!mounted) return;
     setState(() {
       _isError = false;
+      _isLoading = true;
     });
 
     try {
@@ -48,13 +50,17 @@ class _PromosSectionState extends State<PromosSection> {
         setState(() {
           _activePromos = coupons;
           _retryAttempt = 0;
+          _isLoading = false;
         });
         widget.onPromosLoaded?.call(coupons);
       }
     } catch (e) {
       if (kDebugMode) debugPrint('[PromosSection] Error: $e');
       if (mounted) {
-        setState(() => _isError = true);
+        setState(() {
+          _isError = true;
+          _isLoading = false;
+        });
       }
     }
   }
@@ -68,10 +74,13 @@ class _PromosSectionState extends State<PromosSection> {
   @override
   Widget build(BuildContext context) {
     if (_activePromos.isEmpty && !_isError) {
-      return SizedBox(
-        height: 200,
-        child: ShimmerWidgets.productListShimmer(),
-      );
+      if (_isLoading) {
+        return SizedBox(
+          height: 200,
+          child: ShimmerWidgets.productListShimmer(),
+        );
+      }
+      return const SizedBox.shrink();
     }
 
     final isDark = isDarkMode(context);

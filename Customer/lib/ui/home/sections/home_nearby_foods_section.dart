@@ -31,6 +31,41 @@ class HomeNearbyFoodsSection extends StatelessWidget {
     this.onRetry,
   }) : super(key: key);
 
+  Widget _nearbyFoodsHeader(BuildContext context, {VoidCallback? onTap}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.restaurant_menu, color: Colors.orange[700], size: 22),
+              const SizedBox(width: 8),
+              Text(
+                'Nearby Foods',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange[800],
+                ),
+              ),
+            ],
+          ),
+          GestureDetector(
+            onTap: onTap,
+            child: Text(
+              'View All',
+              style: TextStyle(
+                color: Colors.orange[800],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _writeDebugLog({
     required String runId,
     required String hypothesisId,
@@ -58,10 +93,7 @@ class HomeNearbyFoodsSection extends StatelessWidget {
       return Column(
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
-          HomeSectionUtils.buildTitleRow(
-            titleValue: "Nearby Foods",
-            onClick: () {},
-          ),
+          _nearbyFoodsHeader(context, onTap: () {}),
           HomeSectionUtils.sectionError(
             message: 'Failed to load nearby foods',
             onRetry: onRetry!,
@@ -73,10 +105,7 @@ class HomeNearbyFoodsSection extends StatelessWidget {
       return Column(
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
-          HomeSectionUtils.buildTitleRow(
-            titleValue: "Nearby Foods",
-            onClick: () {},
-          ),
+          _nearbyFoodsHeader(context, onTap: () {}),
           SizedBox(
             height: 150,
             child: ShimmerWidgets.productListShimmer(),
@@ -90,15 +119,12 @@ class HomeNearbyFoodsSection extends StatelessWidget {
     return Column(
       mainAxisAlignment: MainAxisAlignment.start,
       children: [
-        HomeSectionUtils.buildTitleRow(
-          titleValue: "Nearby Foods",
-          onClick: () {
-            push(
-              context,
-              const ViewAllPopularFoodNearByScreen(),
-            );
-          },
-        ),
+        _nearbyFoodsHeader(context, onTap: () {
+          push(
+            context,
+            const ViewAllPopularFoodNearByScreen(),
+          );
+        }),
         SizedBox(
           height: 150,
           child: displayFoods.isEmpty
@@ -124,11 +150,17 @@ class HomeNearbyFoodsSection extends StatelessWidget {
                       }
 
                       return popularNearFoodVendorModel == null
-                          ? Container()
-                          : popularFoodItem(
-                              context,
-                              displayFoods[index],
-                              popularNearFoodVendorModel,
+                          ? KeyedSubtree(
+                              key: ValueKey('empty_$index'),
+                              child: Container(),
+                            )
+                          : KeyedSubtree(
+                              key: ValueKey(displayFoods[index].id),
+                              child: popularFoodItem(
+                                context,
+                                displayFoods[index],
+                                popularNearFoodVendorModel,
+                              ),
                             );
                     },
                   ),

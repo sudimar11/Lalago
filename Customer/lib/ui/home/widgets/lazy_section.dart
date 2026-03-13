@@ -32,7 +32,6 @@ class LazySection extends StatefulWidget {
 
 class _LazySectionState extends State<LazySection> {
   bool _isActivated = false;
-  Widget? _cachedContent;
   Timer? _debounceTimer;
   bool _pendingActivation = false;
 
@@ -62,7 +61,6 @@ class _LazySectionState extends State<LazySection> {
       _pendingActivation = false;
       setState(() {
         _isActivated = true;
-        _cachedContent ??= widget.contentBuilder();
       });
       widget.onActivated?.call();
     });
@@ -73,9 +71,7 @@ class _LazySectionState extends State<LazySection> {
     return VisibilityDetector(
       key: widget.sectionKey,
       onVisibilityChanged: _onVisibilityChanged,
-      child: _isActivated && _cachedContent != null
-          ? _cachedContent!
-          : widget.loadingPlaceholder,
+      child: _isActivated ? widget.contentBuilder() : widget.loadingPlaceholder,
     );
   }
 }

@@ -1,9 +1,13 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:foodie_customer/constants.dart';
 import 'package:foodie_customer/model/LoyaltyData.dart';
 import 'package:foodie_customer/services/loyalty_service.dart';
+import 'package:foodie_customer/ui/loyalty/widgets/benefit_card.dart';
+import 'package:foodie_customer/ui/loyalty/widgets/progress_bar_with_indicator.dart';
+import 'package:foodie_customer/ui/loyalty/widgets/tier_badge.dart';
+import 'package:foodie_customer/ui/loyalty/widgets/token_counter.dart';
+import 'package:foodie_customer/widget/shimmer_widgets.dart';
 import 'package:intl/intl.dart';
 
 class LoyaltyScreen extends StatefulWidget {
@@ -20,6 +24,7 @@ class _LoyaltyScreenState extends State<LoyaltyScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: BackButton(color: Colors.white),
         title: const Text('Loyalty Program'),
         backgroundColor: Color(COLOR_PRIMARY),
         foregroundColor: Colors.white,
@@ -28,7 +33,7 @@ class _LoyaltyScreenState extends State<LoyaltyScreen> {
         stream: LoyaltyService.getLoyaltyConfigStream(),
         builder: (context, configSnap) {
           if (configSnap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return _buildLoadingShimmer();
           }
           if (!configSnap.hasData || configSnap.data?['enabled'] != true) {
             return Center(
@@ -51,24 +56,55 @@ class _LoyaltyScreenState extends State<LoyaltyScreen> {
             stream: LoyaltyService.getLoyaltyStream(widget.userId),
             builder: (context, loyaltySnap) {
               if (loyaltySnap.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
+                return _buildLoadingShimmer();
               }
 
               final loyalty = loyaltySnap.data;
-              return SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildTierBadge(loyalty, config),
-                    const SizedBox(height: 24),
-                    _buildTokenProgress(loyalty, config),
-                    const SizedBox(height: 24),
-                    _buildBenefitsSection(loyalty, config),
-                    const SizedBox(height: 24),
-                    _buildHistorySection(loyalty),
-                  ],
-                ),
+              final currentTier = loyalty?.currentTier ?? 'bronze';
+              final tokensThisCycle = loyalty?.tokensThisCycle ?? 0;
+              final nextTierName =
+                  LoyaltyService.getNextTierName(tokensThisCycle, config);
+              final minTokensForNextTier =
+                  LoyaltyService.getMinTokensForNextTier(
+                      tokensThisCycle, config);
+              final progress =
+                  LoyaltyService.getProgressToNextTier(tokensThisCycle, config);
+              final tokensNeeded = minTokensForNextTier != null
+                  ? (minTokensForNextTier - tokensThisCycle).clamp(0, 999)
+                  : 0;
+              final currentBenefits =
+                  _getBenefitsForTier(currentTier, config);
+              final nextBenefits =
+                  LoyaltyService.getNextTierBenefits(tokensThisCycle, config);
+
+              return CustomScrollView(
+                slivers: [
+                  SliverPadding(
+                    padding: const EdgeInsets.all(16),
+                    sliver: SliverList(
+                      delegate: SliverChildListDelegate([
+                        _buildHeaderCard(
+                            currentTier, tokensThisCycle, loyalty),
+                        const SizedBox(height: 16),
+                        _buildProgressCard(
+                          progress: progress,
+                          tokensThisCycle: tokensThisCycle,
+                          minTokensForNextTier: minTokensForNextTier,
+                          nextTierName: nextTierName,
+                          tokensNeeded: tokensNeeded,
+                        ),
+                        const SizedBox(height: 24),
+                        _buildBenefitsSection(
+                            loyalty, config, currentBenefits, nextBenefits,
+                            nextTierName: nextTierName),
+                        const SizedBox(height: 16),
+                        _buildHistorySection(loyalty),
+                        const SizedBox(height: 8),
+                        _buildLifetimeFooter(loyalty),
+                      ]),
+                    ),
+                  ),
+                ],
               );
             },
           );
@@ -77,148 +113,126 @@ class _LoyaltyScreenState extends State<LoyaltyScreen> {
     );
   }
 
-  Widget _buildTierBadge(LoyaltyData? loyalty, Map<String, dynamic> config) {
-    final tier = loyalty?.currentTier ?? 'bronze';
-    final tierDisplay = tier[0].toUpperCase() + tier.substring(1);
-    final color = _getTierColor(tier);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [color, color.withOpacity(0.8)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+  Widget _buildLoadingShimmer() {
+    return ShimmerWidgets.baseShimmer(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              height: 140,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              height: 100,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              height: 24,
+              width: 120,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            const SizedBox(height: 12),
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 2,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: 0.9,
+              children: List.generate(
+                4,
+                (_) => Container(
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.3),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Icon(
-            Icons.emoji_events,
-            size: 64,
-            color: Colors.white,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            tierDisplay,
-            style: const TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Current Tier',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.white.withOpacity(0.9),
-            ),
-          ),
-        ],
       ),
     );
   }
 
-  Widget _buildTokenProgress(LoyaltyData? loyalty, Map<String, dynamic> config) {
-    final tokens = loyalty?.tokensThisCycle ?? 0;
-    final tokensNeeded =
-        LoyaltyService.getTokensToNextTier(tokens, config);
-    final nextTier = LoyaltyService.getNextTierName(tokens, config);
-    final progress =
-        LoyaltyService.getProgressToNextTier(tokens, config);
+  Widget _buildHeaderCard(
+    String currentTier,
+    int tokensThisCycle,
+    LoyaltyData? loyalty,
+  ) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            TierBadge(tier: currentTier),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TokenCounter(tokens: tokensThisCycle),
+                  const SizedBox(height: 4),
+                  Text(
+                    _formatQuarter(loyalty),
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-    String cycleText = '';
-    if (loyalty != null &&
-        loyalty.currentCycle.isNotEmpty &&
-        loyalty.cycleStartDate != null &&
-        loyalty.cycleEndDate != null) {
-      final start =
-          DateFormat('MMM d').format(loyalty.cycleStartDate!.toDate());
-      final end = DateFormat('MMM d, yyyy')
-          .format(loyalty.cycleEndDate!.toDate());
-      cycleText = '$start - $end';
-    }
-
+  Widget _buildProgressCard({
+    required double progress,
+    required int tokensThisCycle,
+    required int? minTokensForNextTier,
+    required String? nextTierName,
+    required int tokensNeeded,
+  }) {
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '${tokens} tokens',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-                if (loyalty?.currentCycle.isNotEmpty == true)
-                  Text(
-                    loyalty!.currentCycle,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-              ],
-            ),
-            if (cycleText.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                cycleText,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ],
-            const SizedBox(height: 16),
-            LinearProgressIndicator(
-              value: progress,
-              backgroundColor: Colors.grey.shade200,
-              valueColor: AlwaysStoppedAnimation<Color>(
-                Color(COLOR_PRIMARY),
-              ),
-              minHeight: 8,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              tokensNeeded > 0 && nextTier != null
-                  ? '$tokensNeeded more orders to reach ${nextTier[0].toUpperCase() + nextTier.substring(1)}!'
-                  : 'You\'re at the top tier!',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[700],
-              ),
-            ),
-            if (loyalty != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                'Lifetime: ${loyalty.lifetimeTokens} tokens',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[500],
-                ),
-              ),
-            ],
-          ],
+        padding: const EdgeInsets.all(16),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: progress),
+          duration: const Duration(milliseconds: 600),
+          curve: Curves.easeOut,
+          builder: (context, value, child) {
+            return ProgressBarWithIndicator(
+              progress: value,
+              tokensCurrent: tokensThisCycle,
+              tokensForNextTier: minTokensForNextTier ?? tokensThisCycle,
+              nextTierName: nextTierName,
+              tokensNeeded: tokensNeeded,
+            );
+          },
         ),
       ),
     );
@@ -227,40 +241,10 @@ class _LoyaltyScreenState extends State<LoyaltyScreen> {
   Widget _buildBenefitsSection(
     LoyaltyData? loyalty,
     Map<String, dynamic> config,
-  ) {
-    final tier = loyalty?.currentTier ?? 'bronze';
-    final benefits = _getBenefitsForTier(tier, config);
-    if (benefits.isEmpty) {
-      return Card(
-        elevation: 2,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Your Benefits',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Earn more tokens to unlock benefits at higher tiers.',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
+    List<Map<String, dynamic>> currentBenefits,
+    List<Map<String, dynamic>> nextBenefits, {
+    String? nextTierName,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -271,89 +255,98 @@ class _LoyaltyScreenState extends State<LoyaltyScreen> {
               ),
         ),
         const SizedBox(height: 12),
-        ...benefits.map((b) => _buildBenefitCard(b, loyalty)),
+        if (currentBenefits.isEmpty)
+          Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Text(
+                'Earn more tokens to unlock benefits at higher tiers.',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ),
+          )
+        else
+          GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: 2,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+            childAspectRatio: 0.9,
+            children: currentBenefits
+                .map(
+                  (b) => BenefitCard(
+                    benefit: b,
+                    isUnlocked: true,
+                    isClaimed: _isBenefitClaimed(_benefitToRewardId(b), loyalty),
+                    onClaim: () => _onClaimTap(_benefitToRewardId(b)),
+                  ),
+                )
+                .toList(),
+          ),
+        if (nextTierName != null && nextBenefits.isNotEmpty) ...[
+          const SizedBox(height: 24),
+          Text(
+            'Unlock at ${nextTierName[0].toUpperCase() + nextTierName.substring(1)}',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[600],
+                ),
+          ),
+          const SizedBox(height: 12),
+          GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: 2,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+            childAspectRatio: 0.9,
+            children: nextBenefits
+                .map(
+                  (b) => BenefitCard(
+                    benefit: b,
+                    isUnlocked: false,
+                    isClaimed: false,
+                  ),
+                )
+                .toList(),
+          ),
+        ],
       ],
     );
   }
 
-  Widget _buildBenefitCard(
-    Map<String, dynamic> benefit,
-    LoyaltyData? loyalty,
-  ) {
-    final type = benefit['type']?.toString() ?? '';
-    final desc = benefit['description']?.toString() ?? '';
-    if (type == 'inherits') return const SizedBox.shrink();
-
-    final rewardId = _benefitToRewardId(benefit);
-    final isClaimed = _isBenefitClaimed(rewardId, loyalty);
-
-    return Card(
-      elevation: 2,
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Icon(
-              _getBenefitIcon(type),
-              color: Color(COLOR_PRIMARY),
-              size: 32,
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    desc,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  if (benefit['amount'] != null)
-                    Text(
-                      'Amount: ₱${benefit['amount']}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            if (!isClaimed && type != 'badge')
-              ElevatedButton(
-                onPressed: () => _onClaimTap(rewardId),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Color(COLOR_PRIMARY),
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('Claim'),
-              )
-            else if (isClaimed)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.green.shade100,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  'Claimed',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.green.shade800,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-          ],
+  Widget _buildLifetimeFooter(LoyaltyData? loyalty) {
+    if (loyalty == null) return const SizedBox.shrink();
+    return Center(
+      child: Text(
+        'Lifetime tokens: ${loyalty.lifetimeTokens}',
+        style: TextStyle(
+          fontSize: 12,
+          color: Colors.grey[500],
         ),
       ),
     );
+  }
+
+  String _formatQuarter(LoyaltyData? data) {
+    if (data == null ||
+        data.cycleStartDate == null ||
+        data.cycleEndDate == null) {
+      return data?.currentCycle ?? '';
+    }
+    final start =
+        DateFormat('MMM d').format(data.cycleStartDate!.toDate());
+    final end =
+        DateFormat('MMM d, yyyy').format(data.cycleEndDate!.toDate());
+    return '${data.currentCycle} • $start – $end';
   }
 
   Future<void> _onClaimTap(String rewardId) async {
@@ -406,19 +399,6 @@ class _LoyaltyScreenState extends State<LoyaltyScreen> {
     }
     if (type == 'badge') return 'badge_${b['name'] ?? 'vip'}';
     return type;
-  }
-
-  IconData _getBenefitIcon(String type) {
-    switch (type) {
-      case 'free_delivery':
-        return Icons.local_shipping;
-      case 'wallet_credit':
-        return Icons.account_balance_wallet;
-      case 'badge':
-        return Icons.verified;
-      default:
-        return Icons.card_giftcard;
-    }
   }
 
   List<Map<String, dynamic>> _getBenefitsForTier(

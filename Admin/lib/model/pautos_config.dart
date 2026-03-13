@@ -9,6 +9,7 @@ class PautosConfig {
   double minimumDistanceKm;
   double? riderCommissionPercent;
   Timestamp? updatedAt;
+  bool enabled;
 
   PautosConfig({
     this.serviceFeePercent = 10,
@@ -19,6 +20,7 @@ class PautosConfig {
     this.minimumDistanceKm = 1,
     this.riderCommissionPercent,
     this.updatedAt,
+    this.enabled = true,
   });
 
   static double _num(Map<String, dynamic> json, String key) {
@@ -47,6 +49,7 @@ class PautosConfig {
       updatedAt: json['updatedAt'] is Timestamp
           ? json['updatedAt'] as Timestamp
           : null,
+      enabled: json['enabled'] != false,
     );
   }
 
@@ -60,6 +63,7 @@ class PautosConfig {
       'minimumDistanceKm': minimumDistanceKm,
       if (riderCommissionPercent != null) 'riderCommissionPercent': riderCommissionPercent,
       'updatedAt': updatedAt ?? Timestamp.now(),
+      'enabled': enabled,
     };
   }
 }

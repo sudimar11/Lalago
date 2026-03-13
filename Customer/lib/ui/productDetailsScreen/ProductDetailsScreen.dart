@@ -32,6 +32,7 @@ import 'package:foodie_customer/model/VendorModel.dart';
 
 import 'package:foodie_customer/model/variant_info.dart';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:foodie_customer/services/FirebaseHelper.dart';
 
 import 'package:foodie_customer/services/Indicator.dart';
@@ -61,6 +62,7 @@ import '../../resources/colors.dart';
 import '../../widget/shimmer_widgets.dart';
 import '../../widgets/add_icon_button.dart';
 import '../home/sections/widgets/restaurant_eta_fee_row.dart';
+import '../home/widgets/lazy_section.dart';
 import 'package:foodie_customer/model/addon_promo_model.dart';
 import 'package:foodie_customer/services/addon_promo_service.dart';
 import 'package:foodie_customer/ui/addon/addon_promo_card.dart';
@@ -188,152 +190,141 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       }
     }
 
+    _buildProductImages();
     getData();
   }
 
   List<ReviewAttributeModel> reviewAttributeList = [];
 
-  List<ProductModel> productList = [];
-
-  List<ProductModel> storeProductList = [];
-
-  bool showLoader = true;
+  bool _attributesLoaded = false;
 
   List<FavouriteItemModel> lstFav = [];
 
   List<AttributesModel> attributesList = [];
 
-  List<RatingModel> reviewList = [];
-
-  getData() async {
-    if (MyAppState.currentUser != null) {
-      await FireStoreUtils()
-          .getFavouritesProductList(MyAppState.currentUser!.userID)
-          .then((value) {
-        setState(() {
-          lstFav = value;
-        });
-      });
-    }
-
+  void _buildProductImages() {
+    productImage.clear();
     if (widget.productModel.photos.isEmpty) {
       productImage.add(widget.productModel.photo);
     }
-
     for (var element in widget.productModel.photos) {
       productImage.add(element);
     }
-
     for (var element in variants!) {
       productImage.add(element.variantImage.toString());
     }
+  }
 
-    await FireStoreUtils.getAttributes().then((value) {
-      setState(() {
-        attributesList = value;
-        // Set variantInfo after attributesList is loaded
-        if (attributes!.isNotEmpty &&
-            variants!
-                .where((element) =>
-                    element.variantSku == selectedVariants.join('-'))
-                .isNotEmpty) {
-          Map<String, String> mapData = Map();
-          for (var element in attributes!) {
-            mapData.addEntries([
-              MapEntry(
-                  attributesList
-                      .where((element1) => element.attributesId == element1.id)
-                      .first
-                      .title
-                      .toString(),
-                  selectedVariants[attributes!.indexOf(element)])
-            ]);
-          }
+  void getData() {
+    if (MyAppState.currentUser != null) {
+      _loadFavourites();
+    }
+    _loadAttributesAndVariantInfo();
+    _loadReviewAttributes();
+  }
 
-          widget.productModel.variantInfo = VariantInfo(
-              variantPrice: variants!
-                      .where((element) =>
-                          element.variantSku == selectedVariants.join('-'))
-                      .first
-                      .variantPrice ??
-                  '0',
-              variantSku: selectedVariants.join('-'),
-              variantOptions: mapData,
-              variantImage: variants!
-                      .where((element) =>
-                          element.variantSku == selectedVariants.join('-'))
-                      .first
-                      .variantImage ??
-                  '',
-              variantId: variants!
-                      .where((element) =>
-                          element.variantSku == selectedVariants.join('-'))
-                      .first
-                      .variantId ??
-                  '0');
-        }
-      });
-    });
-
-    await FireStoreUtils.getAllReviewAttributes().then((value) {
-      reviewAttributeList = value;
-    });
-
-    await FireStoreUtils().getReviewList(widget.productModel.id).then((value) {
-      setState(() {
-        reviewList = value;
-      });
-    });
-
-    SharedPreferences sp = await SharedPreferences.getInstance();
-
-    String? foodType = sp.getString("foodType") ?? "Delivery";
-
-    await FireStoreUtils.getStoreProduct(
-            widget.productModel.vendorID.toString())
-        .then((value) {
-      if (foodType == "Delivery") {
-        for (var element in value) {
-          if (element.id != widget.productModel.id &&
-              element.takeaway == false) {
-            storeProductList.add(element);
-          }
-        }
-      } else {
-        for (var element in value) {
-          if (element.id != widget.productModel.id) {
-            storeProductList.add(element);
-          }
-        }
-      }
-
-      setState(() {});
-    });
-
-    await FireStoreUtils.getProductListByCategoryId(
-            widget.productModel.categoryID.toString())
-        .then((value) {
-      if (foodType == "Delivery") {
-        for (var element in value) {
-          if (element.id != widget.productModel.id &&
-              element.takeaway == false) {
-            productList.add(element);
-          }
-        }
-      } else {
-        for (var element in value) {
-          if (element.id != widget.productModel.id) {
-            productList.add(element);
-          }
-        }
-      }
-
-      setState(() {});
-    });
-
+  Future<void> _loadFavourites() async {
+    final value = await FireStoreUtils()
+        .getFavouritesProductList(MyAppState.currentUser!.userID);
+    if (!mounted) return;
     setState(() {
-      showLoader = false;
+      lstFav = value;
     });
+  }
+
+  Future<void> _loadAttributesAndVariantInfo() async {
+    final value = await FireStoreUtils.getAttributes();
+    if (!mounted) return;
+    setState(() {
+      attributesList = value;
+      _attributesLoaded = true;
+      if (attributes!.isNotEmpty &&
+          variants!
+              .where((element) =>
+                  element.variantSku == selectedVariants.join('-'))
+              .isNotEmpty) {
+        final mapData = <String, String>{};
+        for (var element in attributes!) {
+          mapData[attributesList
+              .where((element1) => element.attributesId == element1.id)
+              .first
+              .title
+              .toString()] = selectedVariants[attributes!.indexOf(element)];
+        }
+        widget.productModel.variantInfo = VariantInfo(
+          variantPrice: variants!
+                  .where((element) =>
+                      element.variantSku == selectedVariants.join('-'))
+                  .first
+                  .variantPrice ??
+              '0',
+          variantSku: selectedVariants.join('-'),
+          variantOptions: mapData,
+          variantImage: variants!
+                  .where((element) =>
+                      element.variantSku == selectedVariants.join('-'))
+                  .first
+                  .variantImage ??
+              '',
+          variantId: variants!
+                  .where((element) =>
+                      element.variantSku == selectedVariants.join('-'))
+                  .first
+                  .variantId ??
+              '0',
+        );
+      }
+    });
+  }
+
+  Future<void> _loadReviewAttributes() async {
+    reviewAttributeList = await FireStoreUtils.getAllReviewAttributes();
+  }
+
+  Future<List<ProductModel>> _fetchStoreProducts() async {
+    final sp = await SharedPreferences.getInstance();
+    final foodType = sp.getString("foodType") ?? "Delivery";
+    final value = await FireStoreUtils.getStoreProduct(
+        widget.productModel.vendorID.toString());
+    final result = <ProductModel>[];
+    if (foodType == "Delivery") {
+      for (var element in value) {
+        if (element.id != widget.productModel.id &&
+            element.takeaway == false) {
+          result.add(element);
+        }
+      }
+    } else {
+      for (var element in value) {
+        if (element.id != widget.productModel.id) {
+          result.add(element);
+        }
+      }
+    }
+    return result;
+  }
+
+  Future<List<ProductModel>> _fetchRelatedProducts() async {
+    final sp = await SharedPreferences.getInstance();
+    final foodType = sp.getString("foodType") ?? "Delivery";
+    final value = await FireStoreUtils.getProductListByCategoryId(
+        widget.productModel.categoryID.toString());
+    final result = <ProductModel>[];
+    if (foodType == "Delivery") {
+      for (var element in value) {
+        if (element.id != widget.productModel.id &&
+            element.takeaway == false) {
+          result.add(element);
+        }
+      }
+    } else {
+      for (var element in value) {
+        if (element.id != widget.productModel.id) {
+          result.add(element);
+        }
+      }
+    }
+    return result;
   }
 
   @override
@@ -392,10 +383,6 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (showLoader) {
-      return ShimmerWidgets.productDetailsScreenShimmer();
-    }
-
     // Cache expensive computations
     final mediaQuery = MediaQuery.of(context);
     final screenSize = mediaQuery.size;
@@ -457,19 +444,26 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
         child: Column(children: [
           Column(
             children: [
-              SizedBox(
-                height: 250.0,
-                child: PageView.builder(
-                  itemCount: productImage.length,
-                  scrollDirection: Axis.horizontal,
-                  controller: _controller,
-                  onPageChanged: (value) => setState(() {}),
-                  allowImplicitScrolling: true,
-                  itemBuilder: (context, index) {
-                    return CommonNetworkImage(
-                      imageUrl: getImageVAlidUrl(productImage[index]),
-                    );
-                  },
+              RepaintBoundary(
+                child: SizedBox(
+                  height: 250.0,
+                  child: PageView.builder(
+                    itemCount: productImage.length,
+                    scrollDirection: Axis.horizontal,
+                    controller: _controller,
+                    onPageChanged: (value) => setState(() {}),
+                    allowImplicitScrolling: true,
+                    itemBuilder: (context, index) {
+                      return CommonNetworkImage(
+                        imageUrl: getImageVAlidUrl(productImage[index]),
+                        height: 250,
+                        width: MediaQuery.of(context).size.width,
+                        placeholder: ShimmerWidgets.baseShimmer(
+                          child: ShimmerWidgets.productDetailsImageShimmer(),
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
               Padding(
@@ -743,7 +737,25 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                   ),
                   attributes!.isEmpty
                       ? Container()
-                      : Column(
+                      : attributesList.isEmpty
+                          ? RepaintBoundary(
+                              child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                ShimmerWidgets.baseShimmer(
+                                  child: ShimmerWidgets
+                                      .productDetailsListItemShimmer(),
+                                ),
+                                const SizedBox(height: 8),
+                                ShimmerWidgets.baseShimmer(
+                                  child: ShimmerWidgets
+                                      .productDetailsListItemShimmer(),
+                                ),
+                              ],
+                            ),
+                            )
+                          : RepaintBoundary(
+                              child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             ListView.builder(
@@ -982,6 +994,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                             ),
                           ],
                         ),
+                            ),
                   _CompleteYourMealSection(
                     productId: widget.productModel.id,
                     vendorId: widget.vendorModel.id,
@@ -1081,9 +1094,36 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                                 ],
                               ))),
                     ),
-                  lstAddAddonsCustom.isEmpty
-                      ? Container()
-                      : Column(
+                  lstAddAddonsCustom.isEmpty &&
+                          widget.productModel.addOnsTitle.isNotEmpty
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 15),
+                              child: Text(
+                                "Add Ons (Optional)",
+                                style: TextStyle(
+                                    fontFamily: "Poppinsm",
+                                    fontSize: 16,
+                                    color: isDark
+                                        ? const Color(0xffffffff)
+                                        : const Color(0xff000000)),
+                              ),
+                            ),
+                            ...List.generate(
+                              4,
+                              (_) => ShimmerWidgets.baseShimmer(
+                                child: ShimmerWidgets
+                                    .productDetailsListItemShimmer(),
+                              ),
+                            ),
+                          ],
+                        )
+                      : lstAddAddonsCustom.isEmpty
+                          ? Container()
+                          : Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Padding(
@@ -1457,696 +1497,202 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                       ],
                     ),
                   ),
-                  Visibility(
-                    visible: reviewList.isNotEmpty,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(4.0),
-                          child: ListView.builder(
-                            itemCount:
-                                reviewList.length > 10 ? 10 : reviewList.length,
-                            shrinkWrap: true,
-                            padding: EdgeInsets.zero,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemBuilder: (context, index) {
-                              return Padding(
-                                padding: const EdgeInsets.all(8.0),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                      width: 1.0,
-                                      color: Colors.grey.shade300,
-                                    ),
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(10.0),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            CachedNetworkImage(
-                                              height: 45,
-                                              width: 45,
-                                              imageUrl: getImageVAlidUrl(
-                                                  reviewList[index]
-                                                      .profile
-                                                      .toString()),
-                                              imageBuilder:
-                                                  (context, imageProvider) =>
-                                                      Container(
-                                                decoration: BoxDecoration(
-                                                  borderRadius:
-                                                      BorderRadius.circular(35),
-                                                  image: DecorationImage(
-                                                      image: imageProvider,
-                                                      fit: BoxFit.cover),
-                                                ),
-                                              ),
-                                              placeholder: (context, url) =>
-                                                  Center(
-                                                      child:
-                                                          CircularProgressIndicator
-                                                              .adaptive(
-                                                valueColor:
-                                                    AlwaysStoppedAnimation(
-                                                        Color(COLOR_PRIMARY)),
-                                              )),
-                                              errorWidget: (context, url,
-                                                      error) =>
-                                                  ClipRRect(
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              35),
-                                                      child: CachedNetworkImage(
-                                                        imageUrl: placeholderImage,
-                                                        memCacheWidth: 200,
-                                                        memCacheHeight: 200,
-                                                        fit: BoxFit.cover,
-                                                      )),
-                                              fit: BoxFit.cover,
-                                            ),
-                                            const SizedBox(
-                                              width: 10,
-                                            ),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    reviewList[index]
-                                                        .uname
-                                                        .toString(),
-                                                    style: const TextStyle(
-                                                        color: Colors.black,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                        letterSpacing: 1,
-                                                        fontSize: 16),
-                                                  ),
-                                                  RatingBar.builder(
-                                                    ignoreGestures: true,
-                                                    initialRating:
-                                                        reviewList[index]
-                                                                .rating ??
-                                                            0.0,
-                                                    minRating: 1,
-                                                    itemSize: 22,
-                                                    direction: Axis.horizontal,
-                                                    allowHalfRating: true,
-                                                    itemCount: 5,
-                                                    itemPadding:
-                                                        const EdgeInsets.only(
-                                                            top: 5.0),
-                                                    itemBuilder: (context, _) =>
-                                                        Icon(
-                                                      Icons.star,
-                                                      color:
-                                                          Color(COLOR_PRIMARY),
-                                                    ),
-                                                    onRatingUpdate:
-                                                        (double rate) {
-                                                      // ratings = rate;
-
-                                                      // print(ratings);
-                                                    },
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            Text(
-                                                orderDate(reviewList[index]
-                                                    .createdAt),
-                                                style: TextStyle(
-                                                    color: isDark
-                                                        ? Colors.grey.shade200
-                                                        : const Color(
-                                                            0XFF555353),
-                                                    fontFamily: "Poppinsr")),
-                                          ],
-                                        ),
-                                        Text(
-                                            reviewList[index]
-                                                .comment
-                                                .toString(),
-                                            style: TextStyle(
-                                                color: Colors.black
-                                                    .withOpacity(0.70),
-                                                fontWeight: FontWeight.w400,
-                                                letterSpacing: 1,
-                                                fontSize: 14)),
-                                        const SizedBox(
-                                          height: 10,
-                                        ),
-                                        reviewList[index].photos!.isNotEmpty
-                                            ? SizedBox(
-                                                height: 75,
-                                                child: ListView.builder(
-                                                  itemCount: reviewList[index]
-                                                      .photos!
-                                                      .length,
-                                                  shrinkWrap: true,
-                                                  scrollDirection:
-                                                      Axis.horizontal,
-                                                  itemBuilder:
-                                                      (context, index1) {
-                                                    return Padding(
-                                                      padding:
-                                                          const EdgeInsets.all(
-                                                              6.0),
-                                                      child: CachedNetworkImage(
-                                                        height: 65,
-                                                        width: 65,
-                                                        imageUrl:
-                                                            getImageVAlidUrl(
-                                                                reviewList[index]
-                                                                        .photos![
-                                                                    index1]),
-                                                        imageBuilder: (context,
-                                                                imageProvider) =>
-                                                            Container(
-                                                          decoration:
-                                                              BoxDecoration(
-                                                            borderRadius:
-                                                                BorderRadius
-                                                                    .circular(
-                                                                        10),
-                                                            image: DecorationImage(
-                                                                image:
-                                                                    imageProvider,
-                                                                fit: BoxFit
-                                                                    .cover),
-                                                          ),
-                                                        ),
-                                                        placeholder: (context,
-                                                                url) =>
-                                                            Center(
-                                                                child:
-                                                                    CircularProgressIndicator
-                                                                        .adaptive(
-                                                          valueColor:
-                                                              AlwaysStoppedAnimation(
-                                                                  Color(
-                                                                      COLOR_PRIMARY)),
-                                                        )),
-                                                        errorWidget: (context,
-                                                                url, error) =>
-                                                            ClipRRect(
-                                                                borderRadius:
-                                                                    BorderRadius
-                                                                        .circular(
-                                                                            10),
-                                                                child: Image
-                                                                    .network(
-                                                                  placeholderImage,
-                                                                  fit: BoxFit
-                                                                      .cover,
-                                                                )),
-                                                        fit: BoxFit.cover,
-                                                      ),
-                                                    );
-                                                  },
-                                                ),
-                                              )
-                                            : Container()
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
+                  LazySection(
+                    sectionKey: ValueKey('reviews_${widget.productModel.id}'),
+                    loadingPlaceholder: SizedBox(
+                      height: 400,
+                      child: Column(
+                        children: List.generate(
+                          3,
+                          (_) => ShimmerWidgets.baseShimmer(
+                            child: ShimmerWidgets
+                                .productDetailsReviewItemShimmer(),
                           ),
                         ),
+                      ),
+                    ),
+                    contentBuilder: () => _PaginatedReviewsContent(
+                      productId: widget.productModel.id,
+                      productModel: widget.productModel,
+                      isDark: isDark,
+                    ),
+                  ),
+                  LazySection(
+                    sectionKey: ValueKey(
+                        'more_from_restaurant_${widget.vendorModel.id}'),
+                    loadingPlaceholder: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 10),
                         Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 10),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: InkWell(
-                              onTap: () {
-                                push(
-                                  context,
-                                  Review(
-                                    productModel: widget.productModel,
-                                  ),
-                                );
-                              },
-                              child: Text(
-                                'See All Reviews',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                  color: Color(COLOR_PRIMARY),
-                                  decoration: TextDecoration.underline,
-                                ),
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          child: ShimmerWidgets.baseShimmer(
+                            child: Container(
+                              height: 20,
+                              width: 180,
+                              decoration: BoxDecoration(
+                                color: Colors.grey[300],
+                                borderRadius: BorderRadius.circular(8),
                               ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          height: 220,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            physics: const ClampingScrollPhysics(),
+                            itemCount: 6,
+                            itemBuilder: (context, index) =>
+                                ShimmerWidgets.baseShimmer(
+                              child: ShimmerWidgets
+                                  .productDetailsRelatedProductShimmer(),
                             ),
                           ),
                         ),
                       ],
                     ),
-                  ),
-                  Visibility(
-                      visible: storeProductList.isNotEmpty,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(
-                            height: 10,
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            child: Row(
-                              spacing: 8.0,
-                              children: [
-                                Expanded(
-                                  child: Text("More from the Restaurant",
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                          color: Colors.black,
-                                          fontFamily: "Poppinsm",
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w500)),
-                                ),
-                                InkWell(
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                  },
-                                  child: Text(
-                                    "See All",
-                                    style: TextStyle(
-                                        color: CustomColors.primary,
-                                        fontFamily: "Poppinsm",
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w500),
+                    contentBuilder: () => FutureBuilder<List<ProductModel>>(
+                      future: _fetchStoreProducts(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState != ConnectionState.done ||
+                            !snapshot.hasData) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 10),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10),
+                                child: ShimmerWidgets.baseShimmer(
+                                  child: Container(
+                                    height: 20,
+                                    width: 180,
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[300],
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
                                   ),
                                 ),
-                              ],
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                height: 220,
+                                child: ListView.builder(
+                                  scrollDirection: Axis.horizontal,
+                                  physics: const ClampingScrollPhysics(),
+                                  itemCount: 6,
+                                  itemBuilder: (context, index) =>
+                                      ShimmerWidgets.baseShimmer(
+                                    child: ShimmerWidgets
+                                        .productDetailsRelatedProductShimmer(),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        }
+                        final storeProducts = snapshot.data!;
+                        if (storeProducts.isEmpty) {
+                          return const SizedBox.shrink();
+                        }
+                        return _MoreFromRestaurantContent(
+                          products: storeProducts,
+                          screenSize: screenSize,
+                          isOpen: isOpen,
+                          updatePrice: updatePrice,
+                        );
+                      },
+                    ),
+                  ),
+                  LazySection(
+                    sectionKey: ValueKey(
+                        'related_foods_${widget.productModel.categoryID}'),
+                    loadingPlaceholder: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: ShimmerWidgets.baseShimmer(
+                            child: Container(
+                              height: 20,
+                              width: 120,
+                              decoration: BoxDecoration(
+                                color: Colors.grey[300],
+                                borderRadius: BorderRadius.circular(8),
+                              ),
                             ),
                           ),
-                          const SizedBox(height: 10),
-                          SizedBox(
-                              width: screenSize.width,
-                              height: screenSize.height * 0.28,
-                              child: ListView.builder(
-                                shrinkWrap: true,
-                                scrollDirection: Axis.horizontal,
-                                physics: const BouncingScrollPhysics(),
-                                itemCount: storeProductList.length > 6
-                                    ? 6
-                                    : storeProductList.length,
-                                itemBuilder: (context, index) {
-                                  ProductModel productModel =
-                                      storeProductList[index];
-                                  return Container(
-                                      margin:
-                                          EdgeInsets.symmetric(horizontal: 8.0),
-                                      child: CommonElevatedButton(
-                                        onButtonPressed: () async {
-                                          VendorModel? vendorModel =
-                                              await FireStoreUtils.getVendor(
-                                                  storeProductList[index]
-                                                      .vendorID);
-
-                                          if (vendorModel != null) {
-                                            push(
-                                              context,
-                                              ProductDetailsScreen(
-                                                vendorModel: vendorModel,
-                                                productModel: productModel,
-                                              ),
-                                            );
-                                          }
-                                        },
-                                        overlayColor: Colors.transparent,
-                                        backgroundColor: Colors.transparent,
-                                        padding: EdgeInsets.zero,
-                                        custom: SizedBox(
-                                          width: context.screenWidth * 0.38,
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Stack(
-                                                alignment:
-                                                    Alignment.bottomRight,
-                                                clipBehavior: Clip.none,
-                                                children: [
-                                                  CommonNetworkImage(
-                                                    imageUrl: getImageVAlidUrl(
-                                                        productModel.photo),
-                                                    height: 120.0,
-                                                    width: context.screenWidth,
-                                                  ),
-                                                  AddIconButton(
-                                                    productModel: productModel,
-                                                    size: 30.0,
-                                                    margin: EdgeInsets.all(4.0),
-                                                    onCartUpdated: updatePrice,
-                                                    isRestaurantOpen: isOpen,
-                                                  )
-                                                ],
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Flexible(
-                                                child: Text(productModel.name,
-                                                    maxLines: 2,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                        color: Colors.black,
-                                                        fontFamily: "Poppinsm",
-                                                        fontSize: 12,
-                                                        fontWeight:
-                                                            FontWeight.w600)),
-                                              ),
-                                              Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment
-                                                        .spaceBetween,
-                                                children: [
-                                                  if (productModel
-                                                          .reviewsCount !=
-                                                      0)
-                                                    Container(
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.green,
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(5),
-                                                      ),
-                                                      child: Padding(
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .symmetric(
-                                                                horizontal: 5,
-                                                                vertical: 2),
-                                                        child: Row(
-                                                          mainAxisSize:
-                                                              MainAxisSize.min,
-                                                          children: [
-                                                            Text(
-                                                                productModel.reviewsCount !=
-                                                                        0
-                                                                    ? (productModel.reviewsSum /
-                                                                            productModel
-                                                                                .reviewsCount)
-                                                                        .toStringAsFixed(
-                                                                            1)
-                                                                    : 0
-                                                                        .toString(),
-                                                                style:
-                                                                    const TextStyle(
-                                                                  fontFamily:
-                                                                      "Poppinsm",
-                                                                  letterSpacing:
-                                                                      0.5,
-                                                                  color: Colors
-                                                                      .white,
-                                                                )),
-                                                            const SizedBox(
-                                                                width: 3),
-                                                            const Icon(
-                                                              Icons.star,
-                                                              size: 16,
-                                                              color:
-                                                                  Colors.white,
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  productModel.disPrice == "" ||
-                                                          productModel
-                                                                  .disPrice ==
-                                                              "0"
-                                                      ? Text(
-                                                          "${amountShow(amount: productModel.price)}",
-                                                          style: TextStyle(
-                                                              color:
-                                                                  CustomColors
-                                                                      .primary,
-                                                              fontSize: 14.0,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w400),
-                                                        )
-                                                      : Column(
-                                                          children: [
-                                                            Text(
-                                                              "${amountShow(amount: productModel.disPrice)}",
-                                                              style: TextStyle(
-                                                                fontFamily:
-                                                                    "Poppinsm",
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold,
-                                                                fontSize: 14,
-                                                                color: Color(
-                                                                    COLOR_PRIMARY),
-                                                              ),
-                                                            ),
-                                                            Text(
-                                                              '${amountShow(amount: productModel.price)}',
-                                                              style: const TextStyle(
-                                                                  fontFamily:
-                                                                      "Poppinsm",
-                                                                  fontWeight:
-                                                                      FontWeight
-                                                                          .bold,
-                                                                  fontSize: 12,
-                                                                  color: Colors
-                                                                      .grey,
-                                                                  decoration:
-                                                                      TextDecoration
-                                                                          .lineThrough),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                ],
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ));
-                                },
-                              ))
-                        ],
-                      )),
-                  Visibility(
-                      visible: productList.isNotEmpty,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            child: Text(
-                              "Related Foods",
-                              style: TextStyle(
-                                  fontFamily: "Poppinsm",
-                                  fontSize: 16,
-                                  color: Colors.black),
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          height: 220,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            physics: const ClampingScrollPhysics(),
+                            itemCount: 6,
+                            itemBuilder: (context, index) =>
+                                ShimmerWidgets.baseShimmer(
+                              child: ShimmerWidgets
+                                  .productDetailsRelatedProductShimmer(),
                             ),
                           ),
-                          const SizedBox(height: 10),
-                          SizedBox(
-                              width: screenSize.width,
-                              height: screenSize.height * 0.28,
-                              child: ListView.builder(
-                                shrinkWrap: true,
-                                scrollDirection: Axis.horizontal,
-                                physics: const BouncingScrollPhysics(),
-                                itemCount: productList.length > 6
-                                    ? 6
-                                    : productList.length,
-                                itemBuilder: (context, index) {
-                                  ProductModel productModel =
-                                      productList[index];
-
-                                  return Container(
-                                      margin:
-                                          EdgeInsets.symmetric(horizontal: 8.0),
-                                      child: CommonElevatedButton(
-                                        onButtonPressed: () async {
-                                          VendorModel? vendorModel =
-                                              await FireStoreUtils.getVendor(
-                                                  storeProductList[index]
-                                                      .vendorID);
-
-                                          if (vendorModel != null) {
-                                            push(
-                                              context,
-                                              ProductDetailsScreen(
-                                                vendorModel: vendorModel,
-                                                productModel: productModel,
-                                              ),
-                                            );
-                                          }
-                                        },
-                                        overlayColor: Colors.transparent,
-                                        backgroundColor: Colors.transparent,
-                                        padding: EdgeInsets.zero,
-                                        custom: SizedBox(
-                                          width: context.screenWidth * 0.38,
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Stack(
-                                                alignment:
-                                                    Alignment.bottomRight,
-                                                clipBehavior: Clip.none,
-                                                children: [
-                                                  CommonNetworkImage(
-                                                    imageUrl: getImageVAlidUrl(
-                                                        productModel.photo),
-                                                    height: 120.0,
-                                                    width: context.screenWidth,
-                                                  ),
-                                                  AddIconButton(
-                                                    productModel: productModel,
-                                                    size: 30.0,
-                                                    margin: EdgeInsets.all(4.0),
-                                                    onCartUpdated: updatePrice,
-                                                    isRestaurantOpen: isOpen,
-                                                  )
-                                                ],
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Flexible(
-                                                child: Text(productModel.name,
-                                                    maxLines: 2,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                        color: Colors.black,
-                                                        fontFamily: "Poppinsm",
-                                                        fontSize: 12,
-                                                        fontWeight:
-                                                            FontWeight.w600)),
-                                              ),
-                                              Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment
-                                                        .spaceBetween,
-                                                children: [
-                                                  if (productModel
-                                                          .reviewsCount !=
-                                                      0)
-                                                    Container(
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.green,
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(5),
-                                                      ),
-                                                      child: Padding(
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .symmetric(
-                                                                horizontal: 5,
-                                                                vertical: 2),
-                                                        child: Row(
-                                                          mainAxisSize:
-                                                              MainAxisSize.min,
-                                                          children: [
-                                                            Text(
-                                                                productModel.reviewsCount !=
-                                                                        0
-                                                                    ? (productModel.reviewsSum /
-                                                                            productModel
-                                                                                .reviewsCount)
-                                                                        .toStringAsFixed(
-                                                                            1)
-                                                                    : 0
-                                                                        .toString(),
-                                                                style:
-                                                                    const TextStyle(
-                                                                  fontFamily:
-                                                                      "Poppinsm",
-                                                                  letterSpacing:
-                                                                      0.5,
-                                                                  color: Colors
-                                                                      .white,
-                                                                )),
-                                                            const SizedBox(
-                                                                width: 3),
-                                                            const Icon(
-                                                              Icons.star,
-                                                              size: 16,
-                                                              color:
-                                                                  Colors.white,
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  productModel.disPrice == "" ||
-                                                          productModel
-                                                                  .disPrice ==
-                                                              "0"
-                                                      ? Text(
-                                                          "${amountShow(amount: productModel.price)}",
-                                                          style: TextStyle(
-                                                              color:
-                                                                  CustomColors
-                                                                      .primary,
-                                                              fontSize: 14.0,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w400),
-                                                        )
-                                                      : Column(
-                                                          children: [
-                                                            Text(
-                                                              "${amountShow(amount: productModel.disPrice)}",
-                                                              style: TextStyle(
-                                                                fontFamily:
-                                                                    "Poppinsm",
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold,
-                                                                fontSize: 14,
-                                                                color: Color(
-                                                                    COLOR_PRIMARY),
-                                                              ),
-                                                            ),
-                                                            Text(
-                                                              '${amountShow(amount: productModel.price)}',
-                                                              style: const TextStyle(
-                                                                  fontFamily:
-                                                                      "Poppinsm",
-                                                                  fontWeight:
-                                                                      FontWeight
-                                                                          .bold,
-                                                                  fontSize: 12,
-                                                                  color: Colors
-                                                                      .grey,
-                                                                  decoration:
-                                                                      TextDecoration
-                                                                          .lineThrough),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                ],
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ));
-                                },
-                              ))
-                        ],
-                      )),
+                        ),
+                      ],
+                    ),
+                    contentBuilder: () => FutureBuilder<List<ProductModel>>(
+                      future: _fetchRelatedProducts(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState != ConnectionState.done ||
+                            !snapshot.hasData) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8),
+                                child: ShimmerWidgets.baseShimmer(
+                                  child: Container(
+                                    height: 20,
+                                    width: 120,
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[300],
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                height: 220,
+                                child: ListView.builder(
+                                  scrollDirection: Axis.horizontal,
+                                  physics: const ClampingScrollPhysics(),
+                                  itemCount: 6,
+                                  itemBuilder: (context, index) =>
+                                      ShimmerWidgets.baseShimmer(
+                                    child: ShimmerWidgets
+                                        .productDetailsRelatedProductShimmer(),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        }
+                        final relatedProducts = snapshot.data!;
+                        if (relatedProducts.isEmpty) {
+                          return const SizedBox.shrink();
+                        }
+                        return _RelatedFoodsContent(
+                          products: relatedProducts,
+                          screenSize: screenSize,
+                          isOpen: isOpen,
+                          updatePrice: updatePrice,
+                        );
+                      },
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -2812,6 +2358,608 @@ class AddAddonsDemo {
   }
 }
 
+class _PaginatedReviewsContent extends StatefulWidget {
+  final String productId;
+  final ProductModel productModel;
+  final bool isDark;
+
+  const _PaginatedReviewsContent({
+    required this.productId,
+    required this.productModel,
+    required this.isDark,
+  });
+
+  @override
+  State<_PaginatedReviewsContent> createState() =>
+      _PaginatedReviewsContentState();
+}
+
+class _PaginatedReviewsContentState extends State<_PaginatedReviewsContent> {
+  List<RatingModel> _reviews = [];
+  int _displayCount = 10;
+  bool _isLoading = true;
+  bool _isLoadingMore = false;
+  DocumentSnapshot<Map<String, dynamic>>? _lastDoc;
+  bool _hasMore = true;
+  bool _useFallback = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFirstPage();
+  }
+
+  Future<void> _loadFirstPage() async {
+    try {
+      final result = await FireStoreUtils()
+          .getReviewListPaginated(widget.productId, limit: 10);
+      if (!mounted) return;
+      setState(() {
+        _reviews = result.reviews;
+        _lastDoc = result.lastDocument;
+        _hasMore = result.hasMore;
+        _isLoading = false;
+      });
+    } catch (_) {
+      final all = await FireStoreUtils().getReviewList(widget.productId);
+      if (!mounted) return;
+      setState(() {
+        _reviews = all;
+        _useFallback = true;
+        _hasMore = false;
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_useFallback) {
+      setState(() => _displayCount += 10);
+      return;
+    }
+    if (_isLoadingMore || !_hasMore || _lastDoc == null) return;
+    setState(() => _isLoadingMore = true);
+    try {
+      final result = await FireStoreUtils().getReviewListPaginated(
+        widget.productId,
+        limit: 10,
+        startAfter: _lastDoc,
+      );
+      if (!mounted) return;
+      setState(() {
+        _reviews = [..._reviews, ...result.reviews];
+        _lastDoc = result.lastDocument;
+        _hasMore = result.hasMore;
+        _isLoadingMore = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingMore = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return SizedBox(
+        height: 400,
+        child: Column(
+          children: List.generate(
+            3,
+            (_) => ShimmerWidgets.baseShimmer(
+              child: ShimmerWidgets.productDetailsReviewItemShimmer(),
+            ),
+          ),
+        ),
+      );
+    }
+    if (_reviews.isEmpty) return const SizedBox.shrink();
+    final displayedCount =
+        _useFallback ? _displayCount.clamp(0, _reviews.length) : _reviews.length;
+    final canLoadMore = _useFallback
+        ? displayedCount < _reviews.length
+        : (_hasMore || _isLoadingMore);
+    final showLoadMore = canLoadMore && !_useFallback;
+    return RepaintBoundary(
+      child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(4.0),
+          child: ListView.builder(
+            shrinkWrap: true,
+            padding: EdgeInsets.zero,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: displayedCount,
+            itemBuilder: (context, index) =>
+                _buildReviewItem(_reviews[index]),
+          ),
+        ),
+        if (showLoadMore || (_useFallback && canLoadMore) || _isLoadingMore)
+          SizedBox(
+            height: 60,
+            child: Center(
+              child: _isLoadingMore
+                  ? const CircularProgressIndicator()
+                  : TextButton(
+                      onPressed: _loadMore,
+                      child: const Text('Load more'),
+                    ),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: InkWell(
+              onTap: () => push(
+                context,
+                Review(productModel: widget.productModel),
+              ),
+              child: Text(
+                'See All Reviews',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: Color(COLOR_PRIMARY),
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+    );
+  }
+
+  Widget _buildReviewItem(RatingModel review) {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            width: 1.0,
+            color: Colors.grey.shade300,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CachedNetworkImage(
+                    height: 45,
+                    width: 45,
+                    imageUrl: getImageVAlidUrl(review.profile.toString()),
+                    imageBuilder: (context, imageProvider) => Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(35),
+                        image: DecorationImage(
+                          image: imageProvider,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                    placeholder: (context, url) => Center(
+                      child: CircularProgressIndicator.adaptive(
+                        valueColor: AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
+                      ),
+                    ),
+                    errorWidget: (context, url, error) => ClipRRect(
+                      borderRadius: BorderRadius.circular(35),
+                      child: CachedNetworkImage(
+                        imageUrl: placeholderImage,
+                        memCacheWidth: 200,
+                        memCacheHeight: 200,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    fit: BoxFit.cover,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          review.uname.toString(),
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 1,
+                            fontSize: 16,
+                          ),
+                        ),
+                        RatingBar.builder(
+                          ignoreGestures: true,
+                          initialRating: review.rating ?? 0.0,
+                          minRating: 1,
+                          itemSize: 22,
+                          direction: Axis.horizontal,
+                          allowHalfRating: true,
+                          itemCount: 5,
+                          itemPadding: const EdgeInsets.only(top: 5.0),
+                          itemBuilder: (context, _) =>
+                              Icon(Icons.star, color: Color(COLOR_PRIMARY)),
+                          onRatingUpdate: (_) {},
+                        ),
+                      ],
+                    ),
+                  ),
+                  Text(
+                    orderDate(review.createdAt),
+                    style: TextStyle(
+                      color: widget.isDark
+                          ? Colors.grey.shade200
+                          : const Color(0XFF555353),
+                      fontFamily: "Poppinsr",
+                    ),
+                  ),
+                ],
+              ),
+              Text(
+                review.comment.toString(),
+                style: TextStyle(
+                  color: Colors.black.withOpacity(0.70),
+                  fontWeight: FontWeight.w400,
+                  letterSpacing: 1,
+                  fontSize: 14,
+                ),
+              ),
+              if (review.photos != null && review.photos!.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: 75,
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    scrollDirection: Axis.horizontal,
+                    itemCount: review.photos!.length,
+                    itemBuilder: (context, index1) => Padding(
+                      padding: const EdgeInsets.all(6.0),
+                      child: CachedNetworkImage(
+                        height: 65,
+                        width: 65,
+                        imageUrl: getImageVAlidUrl(
+                            review.photos![index1].toString()),
+                        imageBuilder: (context, imageProvider) => Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(10),
+                            image: DecorationImage(
+                              image: imageProvider,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                        ),
+                        placeholder: (context, url) => Center(
+                          child: CircularProgressIndicator.adaptive(
+                            valueColor:
+                                AlwaysStoppedAnimation(Color(COLOR_PRIMARY)),
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Image.network(
+                            placeholderImage,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MoreFromRestaurantContent extends StatelessWidget {
+  final List<ProductModel> products;
+  final Size screenSize;
+  final bool isOpen;
+  final VoidCallback updatePrice;
+
+  const _MoreFromRestaurantContent({
+    required this.products,
+    required this.screenSize,
+    required this.isOpen,
+    required this.updatePrice,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 10),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Row(
+            spacing: 8.0,
+            children: [
+              Expanded(
+                child: Text(
+                  "More from the Restaurant",
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontFamily: "Poppinsm",
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: () => Navigator.pop(context),
+                child: Text(
+                  "See All",
+                  style: TextStyle(
+                    color: CustomColors.primary,
+                    fontFamily: "Poppinsm",
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: screenSize.width,
+          height: screenSize.height * 0.28,
+          child: ListView.builder(
+            shrinkWrap: true,
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            itemCount: products.length > 6 ? 6 : products.length,
+            itemBuilder: (context, index) {
+              final p = products[index];
+              return Container(
+                margin: EdgeInsets.symmetric(horizontal: 8.0),
+                child: CommonElevatedButton(
+                  onButtonPressed: () async {
+                    final vm = await FireStoreUtils.getVendor(p.vendorID);
+                    if (vm != null) {
+                      push(
+                        context,
+                        ProductDetailsScreen(
+                          vendorModel: vm,
+                          productModel: p,
+                        ),
+                      );
+                    }
+                  },
+                  overlayColor: Colors.transparent,
+                  backgroundColor: Colors.transparent,
+                  padding: EdgeInsets.zero,
+                  custom: _ProductCard(
+                    product: p,
+                    isOpen: isOpen,
+                    updatePrice: updatePrice,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RelatedFoodsContent extends StatelessWidget {
+  final List<ProductModel> products;
+  final Size screenSize;
+  final bool isOpen;
+  final VoidCallback updatePrice;
+
+  const _RelatedFoodsContent({
+    required this.products,
+    required this.screenSize,
+    required this.isOpen,
+    required this.updatePrice,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text(
+            "Related Foods",
+            style: TextStyle(
+              fontFamily: "Poppinsm",
+              fontSize: 16,
+              color: Colors.black,
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: screenSize.width,
+          height: screenSize.height * 0.28,
+          child: ListView.builder(
+            shrinkWrap: true,
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            itemCount: products.length > 6 ? 6 : products.length,
+            itemBuilder: (context, index) {
+              final p = products[index];
+              return Container(
+                margin: EdgeInsets.symmetric(horizontal: 8.0),
+                child: CommonElevatedButton(
+                  onButtonPressed: () async {
+                    final vm = await FireStoreUtils.getVendor(p.vendorID);
+                    if (vm != null) {
+                      push(
+                        context,
+                        ProductDetailsScreen(
+                          vendorModel: vm,
+                          productModel: p,
+                        ),
+                      );
+                    }
+                  },
+                  overlayColor: Colors.transparent,
+                  backgroundColor: Colors.transparent,
+                  padding: EdgeInsets.zero,
+                  custom: _ProductCard(
+                    product: p,
+                    isOpen: isOpen,
+                    updatePrice: updatePrice,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ProductCard extends StatelessWidget {
+  final ProductModel product;
+  final bool isOpen;
+  final VoidCallback updatePrice;
+
+  const _ProductCard({
+    required this.product,
+    required this.isOpen,
+    required this.updatePrice,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: context.screenWidth * 0.38,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Stack(
+            alignment: Alignment.bottomRight,
+            clipBehavior: Clip.none,
+            children: [
+              CommonNetworkImage(
+                imageUrl: getImageVAlidUrl(product.photo),
+                height: 120.0,
+                width: context.screenWidth,
+              ),
+              AddIconButton(
+                productModel: product,
+                size: 30.0,
+                margin: EdgeInsets.all(4.0),
+                onCartUpdated: updatePrice,
+                isRestaurantOpen: isOpen,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Flexible(
+            child: Text(
+              product.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.black,
+                fontFamily: "Poppinsm",
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              if (product.reviewsCount != 0)
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.green,
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          product.reviewsCount != 0
+                              ? (product.reviewsSum /
+                                      product.reviewsCount)
+                                  .toStringAsFixed(1)
+                              : "0",
+                          style: const TextStyle(
+                            fontFamily: "Poppinsm",
+                            letterSpacing: 0.5,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        const Icon(
+                          Icons.star,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              product.disPrice == "" || product.disPrice == "0"
+                  ? Text(
+                      "${amountShow(amount: product.price)}",
+                      style: TextStyle(
+                        color: CustomColors.primary,
+                        fontSize: 14.0,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    )
+                  : Column(
+                      children: [
+                        Text(
+                          "${amountShow(amount: product.disPrice)}",
+                          style: TextStyle(
+                            fontFamily: "Poppinsm",
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            color: Color(COLOR_PRIMARY),
+                          ),
+                        ),
+                        Text(
+                          '${amountShow(amount: product.price)}',
+                          style: const TextStyle(
+                            fontFamily: "Poppinsm",
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            color: Colors.grey,
+                            decoration: TextDecoration.lineThrough,
+                          ),
+                        ),
+                      ],
+                    ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _CompleteYourMealSection extends StatelessWidget {
   final String productId;
   final String vendorId;
@@ -2834,9 +2982,9 @@ class _CompleteYourMealSection extends StatelessWidget {
       ),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const SizedBox(
+          return SizedBox(
             height: 180,
-            child: Center(child: CircularProgressIndicator()),
+            child: ShimmerWidgets.promoSkeleton(),
           );
         }
         final promos = snapshot.data ?? [];
