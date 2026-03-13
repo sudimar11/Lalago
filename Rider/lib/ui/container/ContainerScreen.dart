@@ -18,6 +18,7 @@ import 'package:foodie_driver/services/rider_preset_location_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/notification_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:foodie_driver/services/active_order_notifier.dart';
 import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/services/array_validation_service.dart';
 import 'package:foodie_driver/services/rider_time_config_service.dart';
@@ -1002,10 +1003,12 @@ class _ContainerScreen extends State<ContainerScreen>
 
         // Fix #6: Isolate Background Tracking from Paid APIs
         // Only call OrderLocationService after all filters pass
+        // Use selected order from ActiveOrderNotifier when rider has multiple orders
         String? activeOrderId;
         if (value.inProgressOrderID != null &&
             value.inProgressOrderID!.isNotEmpty) {
-          activeOrderId = value.inProgressOrderID!.first.toString();
+          activeOrderId = ActiveOrderNotifier.instance.selectedOrderId.value ??
+              value.inProgressOrderID!.first.toString();
         }
         await OrderLocationService.onLocationUpdate(newLocation, activeOrderId);
 

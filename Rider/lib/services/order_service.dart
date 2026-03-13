@@ -132,6 +132,14 @@ class OrderService {
         SetOptions(merge: true),
       );
 
+      // Update local state so updateRiderStatus uses correct capacity count
+      // (stream may not have propagated yet)
+      if (MyAppState.currentUser != null) {
+        final current = MyAppState.currentUser!.inProgressOrderID ?? [];
+        MyAppState.currentUser!.inProgressOrderID =
+            [...List<dynamic>.from(current), orderId];
+      }
+
       await updateRiderStatus();
       await FireStoreUtils.touchLastActivity(currentUserId);
 

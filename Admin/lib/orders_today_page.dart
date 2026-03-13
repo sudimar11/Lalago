@@ -4,6 +4,27 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'services/order_follow_up_service.dart';
+import 'services/user_segment_service.dart';
+
+Future<Map<String, String>> _fetchSegmentsForIds(Set<String> ids) async {
+  final map = <String, String>{};
+  if (ids.isEmpty) return map;
+  final list = ids.toList();
+  const chunkSize = 10;
+  for (var i = 0; i < list.length; i += chunkSize) {
+    final chunk = list.skip(i).take(chunkSize).toList();
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .where(FieldPath.documentId, whereIn: chunk)
+        .get();
+    for (final doc in snap.docs) {
+      final seg = doc.data()['segment']?.toString();
+      map[doc.id] =
+          (seg != null && seg.trim().isNotEmpty) ? seg : 'unknown';
+    }
+  }
+  return map;
+}
 
 String _formatDurationShort(Duration d) {
   if (d.inHours > 0) return '${d.inHours}h ${d.inMinutes % 60}m';
@@ -13,6 +34,15 @@ String _formatDurationShort(Duration d) {
 String _formatDurationCompact(Duration d) {
   if (d.inHours > 0) return '${d.inHours}h ${d.inMinutes % 60}m';
   return '${d.inMinutes}m';
+}
+
+String _formatAddress(dynamic addr) {
+  if (addr is! Map<String, dynamic>) return '';
+  final a = addr['address']?.toString().trim() ?? '';
+  final loc = addr['locality']?.toString().trim() ?? '';
+  final land = addr['landmark']?.toString().trim() ?? '';
+  final parts = [a, loc, land].where((s) => s.isNotEmpty);
+  return parts.join(' ').trim();
 }
 
 class OrdersTodayPage extends StatelessWidget {
@@ -217,20 +247,58 @@ class OrdersTodayPage extends StatelessWidget {
                           style: TextStyle(color: Colors.grey),
                         ),
                       )
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(8),
-                        itemCount: orders.length,
-                        itemBuilder: (context, index) {
-                          final doc = orders[index];
-                          final data = doc.data() as Map<String, dynamic>;
-                          final status = data['status']?.toString() ?? 'Unknown';
-                          final createdAt = data['createdAt'] as Timestamp?;
-                          final deliveredAt = data['deliveredAt'] as Timestamp? ??
-                              data['completedAt'] as Timestamp?;
-                          final author = data['author'] as Map<String, dynamic>?;
-                          final vendor = data['vendor'] as Map<String, dynamic>?;
-                          final products = data['products'] as List<dynamic>? ?? [];
-                          final driverID = data['driverID'] as String?;
+                    : FutureBuilder<Map<String, String>>(
+                        future: () {
+                          final uniqueIds = <String>{};
+                          for (final doc in orders) {
+                            final d = doc.data() as Map<String, dynamic>;
+                            final auth = d['author'] as Map<String, dynamic>?;
+                            final id = d['authorID']?.toString() ??
+                                auth?['id']?.toString();
+                            if (id != null && id.isNotEmpty) {
+                              uniqueIds.add(id);
+                            }
+                          }
+                          return uniqueIds.isEmpty
+                              ? Future.value(<String, String>{})
+                              : _fetchSegmentsForIds(uniqueIds);
+                        }(),
+                        builder: (context, segSnapshot) {
+                          if (segSnapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
+                          }
+                          if (segSnapshot.hasError) {
+                            return Center(
+                              child: Text(
+                                'Failed to load segments',
+                                style: TextStyle(color: Colors.red[700]),
+                              ),
+                            );
+                          }
+                          final segmentMap = segSnapshot.data ?? {};
+                          return ListView.builder(
+                            padding: const EdgeInsets.all(8),
+                            itemCount: orders.length,
+                            itemBuilder: (context, index) {
+                              final doc = orders[index];
+                              final data = doc.data() as Map<String, dynamic>;
+                              final status =
+                                  data['status']?.toString() ?? 'Unknown';
+                              final createdAt =
+                                  data['createdAt'] as Timestamp?;
+                              final deliveredAt =
+                                  data['deliveredAt'] as Timestamp? ??
+                                      data['completedAt'] as Timestamp?;
+                              final author =
+                                  data['author'] as Map<String, dynamic>?;
+                              final vendor =
+                                  data['vendor'] as Map<String, dynamic>?;
+                              final products =
+                                  data['products'] as List<dynamic>? ?? [];
+                              final driverID = data['driverID'] as String?;
 
                           final storedTotalRaw = data['totalAmount'] ??
                               data['grand_total'] ??
@@ -256,6 +324,11 @@ class OrdersTodayPage extends StatelessWidget {
                               : 'Unknown';
                           final restaurantName =
                               vendor?['title']?.toString() ?? 'Unknown';
+                          final authorId = data['authorID']?.toString() ??
+                              author?['id']?.toString() ?? '';
+                          final segment = segmentMap[authorId] ?? 'unknown';
+                          final addressText =
+                              _formatAddress(data['address']);
 
                           final isCompleted = status.toLowerCase().contains(
                                 'completed',
@@ -356,15 +429,71 @@ class OrdersTodayPage extends StatelessWidget {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Text(
-                                    createdAt == null
-                                        ? 'Customer: $customerName'
-                                        : 'Customer: $customerName • '
-                                            'Received: ${_formatDate(createdAt.toDate())}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 12),
+                                  Row(
+                                    children: [
+                                      Flexible(
+                                        child: Text(
+                                          createdAt == null
+                                              ? 'Customer: $customerName'
+                                              : 'Customer: $customerName • '
+                                                  'Received: '
+                                                  '${_formatDate(createdAt.toDate())}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                          vertical: 2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: UserSegmentService
+                                              .getSegmentColor(segment)
+                                              .withOpacity(0.2),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          border: Border.all(
+                                            color: UserSegmentService
+                                                .getSegmentColor(segment),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          UserSegmentService
+                                              .getSegmentDisplayName(segment),
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w600,
+                                            color: UserSegmentService
+                                                .getSegmentColor(segment),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
+                                  if (addressText.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      children: [
+                                        Icon(Icons.location_on,
+                                            size: 12, color: Colors.grey[600]),
+                                        const SizedBox(width: 4),
+                                        Expanded(
+                                          child: Text(
+                                            addressText,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                   if (hasCompletedTime && duration != null) ...[
                                     const SizedBox(height: 2),
                                     RichText(
@@ -754,6 +883,8 @@ class OrdersTodayPage extends StatelessWidget {
                               ],
                             ),
                           );
+                        },
+                      );
                         },
                       ),
               ),

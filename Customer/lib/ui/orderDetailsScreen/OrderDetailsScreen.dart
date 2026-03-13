@@ -687,8 +687,29 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
               stream: fireStoreUtils.watchOrderStatus(widget.orderModel.id),
               builder: (context, snapshot) {
                 if (snapshot.hasData) {
+                  final orderDocData = snapshot.data?.data();
+                  if (orderDocData == null) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: SelectableText.rich(
+                          TextSpan(
+                            text: 'Order details are still syncing. '
+                                'Please wait a moment and try again.',
+                            style: TextStyle(
+                              color: isDarkMode(context)
+                                  ? Colors.white70
+                                  : Colors.black87,
+                            ),
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    );
+                  }
+
                   OrderModel orderModel =
-                      OrderModel.fromJson(snapshot.data!.data()!);
+                      OrderModel.fromJson(orderDocData);
 
                   orderStatus = orderModel.status;
 
@@ -698,7 +719,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
                   debugPrint('_PlaceOrderScreenState.initState $orderStatus');
 
-                  final orderData = snapshot.data!.data()!;
+                  final orderData = orderDocData;
 
                   return SingleChildScrollView(
                     child: Column(

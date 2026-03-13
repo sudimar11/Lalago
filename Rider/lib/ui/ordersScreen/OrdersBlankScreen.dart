@@ -57,6 +57,7 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
       FlutterLocalNotificationsPlugin();
   final Map<String, String> _previousOrderStatuses = <String, String>{};
   StreamSubscription<QuerySnapshot>? _orderStatusSubscription;
+  bool _orderStatusInitialLoadDone = false;
 
   // New order badge: orders we haven't seen before
   final Set<String> _newOrderIds = {};
@@ -484,6 +485,24 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
         final currentStatus = (data['status'] ?? 'Unknown') as String;
         final previousStatus = _previousOrderStatuses[orderId];
 
+        // New order assigned while rider has existing orders (multi-order)
+        if (_orderStatusInitialLoadDone &&
+            change.type == DocumentChangeType.added &&
+            previousStatus == null) {
+          final existingCount = _previousOrderStatuses.length;
+          if (existingCount > 0 && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'New order assigned - ${existingCount + 1} active orders',
+                ),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+
         // Only notify if status actually changed (not on initial load)
         if (previousStatus != null && previousStatus != currentStatus) {
           _showOrderStatusChangeNotification(
@@ -496,6 +515,7 @@ class _OrdersBlankScreenState extends State<OrdersBlankScreen> {
         // Update the tracked status
         _previousOrderStatuses[orderId] = currentStatus;
       }
+      _orderStatusInitialLoadDone = true;
     });
   }
 

@@ -105,6 +105,41 @@ class CheckoutScreen extends StatefulWidget {
 }
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
+  dynamic _toCallableSafe(dynamic value) {
+    if (value == null ||
+        value is bool ||
+        value is num ||
+        value is String) {
+      return value;
+    }
+    if (value is Timestamp) {
+      return {
+        '_seconds': value.seconds,
+        '_nanoseconds': value.nanoseconds,
+      };
+    }
+    if (value is GeoPoint) {
+      return {
+        'latitude': value.latitude,
+        'longitude': value.longitude,
+      };
+    }
+    if (value is DateTime) {
+      return value.toIso8601String();
+    }
+    if (value is List) {
+      return value.map(_toCallableSafe).toList();
+    }
+    if (value is Map) {
+      final out = <String, dynamic>{};
+      value.forEach((key, val) {
+        out[key.toString()] = _toCallableSafe(val);
+      });
+      return out;
+    }
+    return value.toString();
+  }
+
   final fireStoreUtils = FireStoreUtils();
   final DispatchPrecheckService _dispatchPrecheckService =
       DispatchPrecheckService();
@@ -1210,15 +1245,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  /// Reads Remote Config flag for unified order placement. Defaults to false.
+  /// Reads Remote Config flag for unified order placement.
+  /// Defaults to true so checkout consistently uses the callable path.
   Future<bool> _useUnifiedOrderPlacement() async {
     try {
       final rc = FirebaseRemoteConfig.instance;
-      await rc.setDefaults({'use_unified_order_placement': false});
+      await rc.setDefaults({'use_unified_order_placement': true});
       await rc.fetchAndActivate();
       return rc.getBool('use_unified_order_placement');
     } catch (_) {
-      return false;
+      return true;
     }
   }
 
@@ -1236,8 +1272,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         'placeOrderWithDispatch',
         options: HttpsCallableOptions(timeout: const Duration(seconds: 60)),
       );
+      final safeOrder = _toCallableSafe(orderModel.toJson());
       final result = await callable.call({
-        'order': orderModel.toJson(),
+        'order': safeOrder,
         'idempotencyKey': idempotencyKey,
       });
 

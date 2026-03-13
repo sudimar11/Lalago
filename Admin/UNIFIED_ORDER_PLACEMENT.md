@@ -69,7 +69,7 @@ flowchart TD
 
 | Code | Meaning |
 |------|---------|
-| `NO_DRIVERS_AVAILABLE` | No eligible drivers found; cart preserved |
+| `NO_DRIVERS_AVAILABLE` | No eligible drivers found when bypass is OFF; cart preserved |
 | `RESTAURANT_CLOSED` | Vendor not open or not accepting orders |
 | `ZONE_AT_CAPACITY` | Delivery zone at max concurrent orders |
 | `VALIDATION_ERROR` | Invalid payload, restaurant not found |
@@ -81,6 +81,14 @@ flowchart TD
 - **Default**: `false`
 - **Control**: Firebase Remote Config
 - **Behavior**: When `true`, checkout uses the callable; when `false`, uses legacy Firestore write + DispatchPrecheckService
+
+## Bypass Rider Check
+
+- **Setting**: `config/dispatch_settings.bypassRiderCheck` (boolean)
+- **Default**: `false`
+- **Control**: Admin app – Dispatch Configuration page (Dashboard → Dispatch Configuration)
+- **When OFF**: If no eligible drivers are found at placement time, the order is **rejected** with `NO_DRIVERS_AVAILABLE`; the cart is preserved.
+- **When ON**: Driver search is skipped at placement; orders are created with `driverID` null and `bypassedDriverCheck: true`, and are queued until the auto-dispatcher or manual dispatch assigns a rider after restaurant acceptance.
 
 ## Idempotency
 
@@ -102,7 +110,8 @@ flowchart TD
 | Scenario | Steps | Expected |
 |----------|-------|----------|
 | Happy path | Place order with drivers available | Order created, driver assigned, PlaceOrderScreen shown |
-| No drivers | Place order with all drivers offline/busy | `NO_DRIVERS_AVAILABLE`, dialog, cart preserved |
+| No drivers | Place order with all drivers offline/busy (bypass OFF) | `NO_DRIVERS_AVAILABLE`, dialog, cart preserved |
+| Bypass ON, no drivers | Bypass rider check ON, place order with no riders | Order created, `driverID` null, `bypassedDriverCheck: true`, queued for assignment |
 | Restaurant closed | Place order when vendor `reststatus=false` or outside hours | `RESTAURANT_CLOSED` |
 | Zone at capacity | Place order when zone maxRiders reached | `ZONE_AT_CAPACITY` |
 | Duplicate (idempotency) | Call with same idempotency key twice | Second call returns cached result, no duplicate order |
@@ -132,6 +141,9 @@ firebase functions:log --only placeOrderWithDispatch --limit 50
 - `[placeOrderWithDispatch] Restaurant closed` – Vendor validation failed
 - `[placeOrderWithDispatch] Zone at capacity` – Zone limit hit
 - `[placeOrderWithDispatch] No available riders` – No drivers (logged in driver selection)
+- `[placeOrderWithDispatch] Bypass active – skipping driver search` – Bypass ON, driver search skipped
+- `[placeOrderWithDispatch] No drivers, bypass off – returning NO_DRIVERS_AVAILABLE` – Bypass OFF, no drivers, order rejected
+- `[placeOrderWithDispatch] Bypass active – order created without driver:` – Order created with bypass ON, no driver assigned
 
 ### Rollback
 
@@ -151,4 +163,6 @@ firebase functions:log --only placeOrderWithDispatch --limit 50
 |------|---------|
 | `Admin/functions/index.js` | `placeOrderWithDispatch` callable |
 | `Admin/firestore.rules` | `idempotency_keys` rule |
+| `Admin/lib/services/dispatch_config_service.dart` | Bypass rider check read/write |
+| `Admin/lib/pages/dispatch_config_page.dart` | Bypass toggle UI |
 | `Customer/lib/ui/checkoutScreen/CheckoutScreen.dart` | Callable integration, feature flag |

@@ -49,7 +49,11 @@ module.exports = functions
           riderAvailability = 'offline';
         } else if (hasOrders) {
           isOnline = true;
-          riderAvailability = 'on_delivery';
+          const maxOrders = Math.max(1, Math.floor(
+            Number(data.maxOrders || 0) || (data.multipleOrders ? 2 : 1)
+          ));
+          const activeCount = (data.inProgressOrderID || []).length;
+          riderAvailability = (activeCount < maxOrders) ? 'available' : 'on_delivery';
         } else if (legacyOnline) {
           isOnline = true;
           riderAvailability = data.riderAvailability === 'on_break'

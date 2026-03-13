@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:brgy/services/user_segment_service.dart';
 
 class NotificationProgressPage extends StatelessWidget {
@@ -167,6 +168,14 @@ class NotificationProgressPage extends StatelessWidget {
         icon = Icons.schedule;
         color = Colors.grey;
         label = 'Queued';
+        break;
+      case 'scheduled':
+        icon = Icons.schedule_send;
+        color = Colors.blue;
+        final scheduledFor = data['scheduledFor'] as Timestamp?;
+        label = scheduledFor != null
+            ? 'Scheduled for ${DateFormat.yMd().add_Hm().format(scheduledFor.toDate())}'
+            : 'Scheduled';
         break;
       case 'in_progress':
         icon = Icons.hourglass_empty;

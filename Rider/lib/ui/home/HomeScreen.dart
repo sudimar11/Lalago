@@ -18,8 +18,10 @@ import 'package:foodie_driver/services/order_chat_service.dart';
 import 'package:foodie_driver/services/proximity_config_service.dart';
 import 'package:foodie_driver/services/attendance_service.dart';
 import 'package:foodie_driver/services/remittance_enforcement_service.dart';
+import 'package:foodie_driver/services/active_order_notifier.dart';
 import 'package:foodie_driver/services/order_service.dart';
 import 'package:foodie_driver/utils/dialog_utils.dart';
+import 'package:flutter/foundation.dart';
 import 'package:foodie_driver/ui/chat_screen/chat_screen.dart';
 import 'package:foodie_driver/ui/home/pick_order.dart';
 import 'package:foodie_driver/ui/container/ContainerScreen.dart';
@@ -223,12 +225,45 @@ class HomeScreenState extends State<HomeScreen> {
   StreamSubscription<User>? _driverSubscription;
   List<String> _lastOrderRequestIds = [];
 
+  // Multi-order support
+  List<String> _activeOrderIds = [];
+  int _selectedOrderIndex = 0;
+
+  String? _getSelectedOrderId() {
+    if (_activeOrderIds.isEmpty) return null;
+    final idx = _selectedOrderIndex.clamp(0, _activeOrderIds.length - 1);
+    return _activeOrderIds[idx];
+  }
+
+  void _selectOrder(int index) {
+    if (index < 0 || index >= _activeOrderIds.length) return;
+    setState(() {
+      _selectedOrderIndex = index;
+      _lastRouteId = null;
+      _lastDriverLocation = null;
+      _lastOrderStatus = null;
+      _cachedPolylineCoordinates = null;
+    });
+    ActiveOrderNotifier.instance
+        .setSelectedOrderId(_activeOrderIds[_selectedOrderIndex]);
+    getCurrentOrder();
+  }
+
   getCurrentOrder() async {
     if (singleOrderReceive == true) {
       if (_driverModel!.inProgressOrderID != null &&
           _driverModel!.inProgressOrderID!.isNotEmpty) {
-        ordersFuture = FireStoreUtils()
-            .getOrderByID(_driverModel!.inProgressOrderID!.first.toString());
+        _activeOrderIds = (_driverModel!.inProgressOrderID ?? [])
+            .map((e) => e.toString())
+            .where((id) => id.isNotEmpty)
+            .toList();
+        if (_selectedOrderIndex >= _activeOrderIds.length) {
+          _selectedOrderIndex = 0;
+        }
+        final orderId = _getSelectedOrderId();
+        if (orderId == null) return;
+        ActiveOrderNotifier.instance.setSelectedOrderId(orderId);
+        ordersFuture = FireStoreUtils().getOrderByID(orderId);
         _orderSubscription?.cancel();
         _orderSubscription = ordersFuture.listen((event) {
           final orderChanged = event?.id != currentOrder?.id ||
@@ -257,6 +292,9 @@ class HomeScreenState extends State<HomeScreen> {
         });
       } else if (_driverModel!.orderRequestData != null &&
           _driverModel!.orderRequestData!.isNotEmpty) {
+        _activeOrderIds = [];
+        _selectedOrderIndex = 0;
+        ActiveOrderNotifier.instance.clear();
         ordersFuture = FireStoreUtils()
             .getOrderByID(_driverModel!.orderRequestData!.first.toString());
         _orderSubscription?.cancel();
@@ -322,9 +360,21 @@ class HomeScreenState extends State<HomeScreen> {
       }
       _lastOrderRequestIds = List.from(currentIds);
 
+      final inProgressIds = (event.inProgressOrderID ?? [])
+          .map((e) => e.toString())
+          .where((id) => id.isNotEmpty)
+          .toList();
+      final prevInProgressIds = (_driverModel?.inProgressOrderID ?? [])
+          .map((e) => e.toString())
+          .where((id) => id.isNotEmpty)
+          .toList();
+      final inProgressChanged = !listEquals(inProgressIds, prevInProgressIds);
+
       final driverChanged = event.userID != _driverModel?.userID ||
           event.location.latitude != _driverModel?.location.latitude ||
-          event.location.longitude != _driverModel?.location.longitude;
+          event.location.longitude != _driverModel?.location.longitude ||
+          inProgressChanged;
+
       if (driverChanged) {
         setState(() {
           _driverModel = event;
@@ -693,6 +743,7 @@ class HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    ActiveOrderNotifier.instance.clear();
     // Cancel debounce timer
     _routeRequestDebounceTimer?.cancel();
 
@@ -712,6 +763,57 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   bool isShow = false;
+
+  Widget _buildOrderSwitcher() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      color: isDarkMode(context)
+          ? Colors.grey.shade900
+          : Colors.grey.shade200,
+      child: Row(
+        children: [
+          Text(
+            '${_activeOrderIds.length} orders',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: List.generate(
+                  _activeOrderIds.length,
+                  (i) {
+                    final id = _activeOrderIds[i];
+                    final isSelected = i == _selectedOrderIndex;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(
+                          'Order #${id.length > 8 ? id.substring(0, 8) : id}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isSelected
+                                ? Colors.white
+                                : (isDarkMode(context)
+                                    ? Colors.white70
+                                    : Colors.black87),
+                          ),
+                        ),
+                        selected: isSelected,
+                        onSelected: (_) => _selectOrder(i),
+                        selectedColor: Color(COLOR_PRIMARY),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -740,6 +842,7 @@ class HomeScreenState extends State<HomeScreen> {
                         ),
                       )
                     : Container(),
+                if (_activeOrderIds.length > 1) _buildOrderSwitcher(),
                 Expanded(
                   child: mapType == "inappmap" || currentOrder == null
                       ? _MapView(

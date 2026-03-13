@@ -45,19 +45,6 @@ function getMessaging() {
   return admin.messaging();
 }
 
-function _log(hypothesisId, message, data = {}) {
-  try {
-    console.log(
-      `[DBG] ${JSON.stringify({
-        hypothesisId,
-        message,
-        data,
-        timestamp: Date.now(),
-      })}`
-    );
-  } catch (_) {}
-}
-
 function parsePreparationMinutes(prepTimeStr) {
   if (!prepTimeStr) return 30;
   const str = prepTimeStr.toString().toLowerCase().trim();
@@ -1236,11 +1223,11 @@ const IDEMPOTENCY_TTL_HOURS = 24;
 function _checkRestaurantOpen(vendorData) {
   if (!vendorData || vendorData.reststatus !== true) return false;
   const workingHours = vendorData.workingHours || [];
-  const now = new Date();
+  // Restaurant workingHours are stored in local PH time.
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' }));
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const day = dayNames[now.getDay()];
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '-');
-  const dateDDMM = `${String(now.getDate()).padStart(2, '0')}-${String(now.getMonth() + 1).padStart(2, '0')}-${now.getFullYear()}`;
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
   for (const wh of workingHours) {
     if (String(wh.day || '').trim() !== day) continue;
@@ -1251,11 +1238,20 @@ function _checkRestaurantOpen(vendorData) {
       try {
         const [fromH, fromM] = fromStr.split(':').map(Number);
         const [toH, toM] = toStr.split(':').map(Number);
-        const start = new Date(now);
-        start.setHours(fromH || 0, fromM || 0, 0, 0);
-        const end = new Date(now);
-        end.setHours(toH || 23, toM || 59, 59, 999);
-        if (now >= start && now <= end) return true;
+        const fromMinutes = (fromH || 0) * 60 + (fromM || 0);
+        const toMinutes = (toH || 23) * 60 + (toM || 59);
+
+        // Normal slot (e.g. 09:00-18:00)
+        if (fromMinutes <= toMinutes) {
+          if (nowMinutes >= fromMinutes && nowMinutes <= toMinutes) {
+            return true;
+          }
+        } else {
+          // Overnight slot (e.g. 22:00-02:00)
+          if (nowMinutes >= fromMinutes || nowMinutes <= toMinutes) {
+            return true;
+          }
+        }
       } catch (_) { /* skip invalid slot */ }
     }
   }
@@ -1375,6 +1371,11 @@ exports.placeOrderWithDispatch = functions
       }
     }
 
+    // Read bypass rider check setting
+    const dispatchSettingsSnap = await db.collection('config').doc('dispatch_settings').get();
+    const dispatchSettings = dispatchSettingsSnap.exists ? dispatchSettingsSnap.data() : {};
+    const bypassRiderCheck = dispatchSettings.bypassRiderCheck === true;
+
     // 4. Build order context for driver selection
     const restaurantLocation = _extractRestaurantLocation(orderPayload);
     const deliveryLocation = {
@@ -1389,83 +1390,96 @@ exports.placeOrderWithDispatch = functions
       vendorID: vendorId,
     };
 
-    // 5. Find best driver (same logic as autoDispatcher)
-    const searchRadiusKm = 3;
-    const driversSnapshot = await db.collection('users')
-      .where('role', '==', 'driver')
-      .get();
-
+    // 5. Find best driver (skip if bypass is active)
     let bestDriver = null;
-    if (!driversSnapshot.empty) {
-      const weights = await _loadDispatchWeights();
-      const eligibleDrivers = [];
-      for (const driverDoc of driversSnapshot.docs) {
-        const driver = { id: driverDoc.id, ...driverDoc.data() };
-        if (!_isDriverEligibleBase(driver)) continue;
-        const driverLocation = _extractDriverLocation(driver);
-        if (!driverLocation.lat && !driverLocation.lng) continue;
-        const activeOrders = _activeOrdersCount(driver);
-        const effectiveCap = _calculateDynamicCapacity(driver, weights);
-        if (activeOrders >= effectiveCap) continue;
-        const distanceKm = _distanceMeters(driverLocation, restaurantLocation) / 1000;
-        if (distanceKm > searchRadiusKm) continue;
-        const eta = calculateETA(driverLocation, restaurantLocation);
-        const headingMatch = _calculateDriverHeading(driver, driverLocation, restaurantLocation);
-        eligibleDrivers.push({
-          driver,
-          driverLocation,
-          activeOrders,
-          effectiveCap,
-          eta,
-          distanceKm,
-          headingMatch,
-        });
-      }
+    if (!bypassRiderCheck) {
+      const searchRadiusKm = 3;
+      const driversSnapshot = await db.collection('users')
+        .where('role', '==', 'driver')
+        .get();
 
-      if (eligibleDrivers.length > 0) {
-        const eligibleIds = eligibleDrivers.map(d => d.driver.id);
-        const [batchBaseRates, batchFairness] = await Promise.all([
-          getMLAcceptanceProbabilityBatch(eligibleIds),
-          Promise.resolve(calculateFairnessScoreBatch(eligibleDrivers.map(d => d.driver))),
-        ]);
-        const hour = new Date().getHours();
-        const timeBonus = (hour >= 10 && hour <= 21) ? 0.05 : 0;
-
-        let bestScore = Infinity;
-        for (const e of eligibleDrivers) {
-          const baseRate = batchBaseRates[e.driver.id] || 0.7;
-          const distancePenalty = Math.min(e.eta / 60, 0.3);
-          const workloadPenalty = e.activeOrders * 0.15;
-          const mlAcceptanceProbability = Math.max(0.05, Math.min(0.95,
-            baseRate - distancePenalty - workloadPenalty + timeBonus
-          ));
-          const fairnessScore = batchFairness[e.driver.id] || 50;
-          const compositeScore = calculateCompositeScore({
-            eta: e.eta,
-            mlAcceptanceProbability,
-            effectiveCapacity: e.effectiveCap,
-            fairnessScore,
-            headingMatch: e.headingMatch,
-            currentOrders: e.activeOrders,
-            restaurantPrepMinutes: 0,
+      if (!driversSnapshot.empty) {
+        const weights = await _loadDispatchWeights();
+        const eligibleDrivers = [];
+        for (const driverDoc of driversSnapshot.docs) {
+          const driver = { id: driverDoc.id, ...driverDoc.data() };
+          if (!_isDriverEligibleBase(driver)) continue;
+          const driverLocation = _extractDriverLocation(driver);
+          if (!driverLocation.lat && !driverLocation.lng) continue;
+          const activeOrders = _activeOrdersCount(driver);
+          const effectiveCap = _calculateDynamicCapacity(driver, weights);
+          if (activeOrders >= effectiveCap) continue;
+          const distanceKm = _distanceMeters(driverLocation, restaurantLocation) / 1000;
+          if (distanceKm > searchRadiusKm) continue;
+          const eta = calculateETA(driverLocation, restaurantLocation);
+          const headingMatch = _calculateDriverHeading(driver, driverLocation, restaurantLocation);
+          eligibleDrivers.push({
+            driver,
+            driverLocation,
+            activeOrders,
+            effectiveCap,
+            eta,
+            distanceKm,
+            headingMatch,
           });
-          if (compositeScore < bestScore) {
-            bestScore = compositeScore;
-            bestDriver = {
-              driverId: e.driver.id,
-              driverName: `${e.driver.firstName || ''} ${e.driver.lastName || ''}`.trim(),
-              fcmToken: e.driver.fcmToken,
-              driverLocation: e.driverLocation,
+        }
+
+        if (eligibleDrivers.length > 0) {
+          const eligibleIds = eligibleDrivers.map(d => d.driver.id);
+          const [batchBaseRates, batchFairness] = await Promise.all([
+            getMLAcceptanceProbabilityBatch(eligibleIds),
+            Promise.resolve(calculateFairnessScoreBatch(eligibleDrivers.map(d => d.driver))),
+          ]);
+          const hour = new Date().getHours();
+          const timeBonus = (hour >= 10 && hour <= 21) ? 0.05 : 0;
+
+          let bestScore = Infinity;
+          for (const e of eligibleDrivers) {
+            const baseRate = batchBaseRates[e.driver.id] || 0.7;
+            const distancePenalty = Math.min(e.eta / 60, 0.3);
+            const workloadPenalty = e.activeOrders * 0.15;
+            const mlAcceptanceProbability = Math.max(0.05, Math.min(0.95,
+              baseRate - distancePenalty - workloadPenalty + timeBonus
+            ));
+            const fairnessScore = batchFairness[e.driver.id] || 50;
+            const compositeScore = calculateCompositeScore({
               eta: e.eta,
-              distance: e.distanceKm,
-            };
+              mlAcceptanceProbability,
+              effectiveCapacity: e.effectiveCap,
+              fairnessScore,
+              headingMatch: e.headingMatch,
+              currentOrders: e.activeOrders,
+              restaurantPrepMinutes: 0,
+            });
+            if (compositeScore < bestScore) {
+              bestScore = compositeScore;
+              bestDriver = {
+                driverId: e.driver.id,
+                driverName: `${e.driver.firstName || ''} ${e.driver.lastName || ''}`.trim(),
+                fcmToken: e.driver.fcmToken,
+                driverLocation: e.driverLocation,
+                eta: e.eta,
+                distance: e.distanceKm,
+              };
+            }
           }
         }
       }
+
+      console.log('[placeOrderWithDispatch] Drivers considered:', driversSnapshot.size,
+        'bestDriver:', bestDriver ? bestDriver.driverId : 'none');
+    } else {
+      console.log('[placeOrderWithDispatch] Bypass active – skipping driver search');
     }
 
-    console.log('[placeOrderWithDispatch] Drivers considered:', driversSnapshot.size,
-      'bestDriver:', bestDriver ? bestDriver.driverId : 'none');
+    if (!bypassRiderCheck && !bestDriver) {
+      console.log('[placeOrderWithDispatch] No drivers, bypass off – returning NO_DRIVERS_AVAILABLE');
+      return {
+        success: false,
+        code: 'NO_DRIVERS_AVAILABLE',
+        message: 'No delivery partners are available right now. Please try again in a few minutes.',
+      };
+    }
 
     // 6. Atomic transaction: create order and optionally assign driver
     const orderRef = db.collection('restaurant_orders').doc();
@@ -1488,6 +1502,10 @@ exports.placeOrderWithDispatch = functions
     } else {
       orderData.dispatchStatus = 'no_drivers_at_placement';
       orderData.placementMethod = 'placeOrderWithDispatch';
+      if (bypassRiderCheck) {
+        orderData.bypassedDriverCheck = true;
+        console.log('[placeOrderWithDispatch] Bypass active – order created without driver: ' + orderId);
+      }
     }
 
     try {
@@ -5646,18 +5664,310 @@ exports.sendBroadcastNotifications = functions.region('us-central1').https.onReq
 });
 
 /**
+ * Core logic to process a notification job: query users by segment,
+ * batch FCM sends, update stats. Callable from onCreate (immediate)
+ * or from processScheduledNotificationJobs cron.
+ *
+ * @param {string} jobId - Document ID in notification_jobs
+ * @param {admin.firestore.DocumentSnapshot} jobSnap - Job document snapshot
+ */
+async function processNotificationJobCore(jobId, jobSnap) {
+  const job = jobSnap.data() || {};
+  const kind = String(job.kind || '').trim();
+  const payload = job.payload && typeof job.payload === 'object' ? job.payload : {};
+
+  const jobRef = jobSnap.ref;
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  if (kind !== 'broadcast' && kind !== 'happy_hour' && kind !== 'segment') {
+    await jobRef.set(
+      {
+        status: 'failed',
+        error: `Invalid kind: ${kind || '(empty)'}`,
+        completedAt: now,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+    return;
+  }
+
+  const title = String(payload.title || '').trim();
+  const body = String(payload.body || '').trim();
+  const type =
+    kind === 'happy_hour'
+      ? 'happy_hour'
+      : String(payload.type || '').trim() || 'general';
+
+  if (!title || !body) {
+    await jobRef.set(
+      {
+        status: 'failed',
+        error: 'Missing title/body in payload',
+        completedAt: now,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+    return;
+  }
+
+  // Check if job was cancelled before we started (e.g. admin cancelled quickly)
+  const freshSnap = await jobRef.get();
+  if (freshSnap.exists && (freshSnap.data() || {}).status === 'cancelled') {
+    console.log(`[processNotificationJobCore] Job ${jobId} was cancelled, skipping`);
+    return;
+  }
+
+  await jobRef.set(
+    {
+      status: 'in_progress',
+      startedAt: now,
+      updatedAt: now,
+      sentCount: 0,
+      errorCount: 0,
+      processedCount: 0,
+      totalUsers: 0,
+      errors: [],
+    },
+    { merge: true }
+  );
+
+  try {
+    const db = getDb();
+    // Build query: all active customers, optionally filtered by segment
+    let usersQuery = db
+      .collection('users')
+      .where('role', '==', 'customer')
+      .where('active', '==', true);
+
+    const segment = payload.segment;
+    const segmentFilter = (
+      kind === 'segment' &&
+      segment &&
+      typeof segment === 'string' &&
+      segment.trim() !== '' &&
+      segment.trim().toLowerCase() !== 'all'
+    );
+    if (segmentFilter) {
+      usersQuery = usersQuery.where('segment', '==', segment.trim().toLowerCase());
+    }
+    usersQuery = usersQuery.orderBy('__name__');
+    const FCM_BATCH_SIZE = 500;
+    const USER_PAGE_SIZE = 200;
+    let lastDoc = null;
+    let totalUsers = 0;
+    let sentCount = 0;
+    let errorCount = 0;
+    let processedCount = 0;
+    let batchNumber = 0;
+    const firstErrors = [];
+    let tokenAccumulator = [];
+
+    const buildMessage = (tokens) => {
+      const msg = {
+        notification: { title, body },
+        data: { type, timestamp: Date.now().toString() },
+        tokens,
+      };
+      if (payload.imageUrl && String(payload.imageUrl).trim().length > 0) {
+        msg.notification.imageUrl = String(payload.imageUrl).trim();
+      }
+      if (payload.deepLink && String(payload.deepLink).trim().length > 0) {
+        msg.data.deepLink = String(payload.deepLink).trim();
+      }
+      if (payload.targetScreen && String(payload.targetScreen).trim().length > 0) {
+        msg.data.targetScreen = String(payload.targetScreen).trim();
+      }
+      return msg;
+    };
+
+    const sendTokenBatch = async (batch) => {
+      if (batch.length === 0) return;
+      batchNumber++;
+      const message = buildMessage(batch);
+      try {
+        const resp = await getMessaging().sendEachForMulticast(message);
+        sentCount += resp.successCount;
+        errorCount += resp.failureCount;
+        processedCount += batch.length;
+        if (resp.failureCount > 0 && firstErrors.length < 10) {
+          resp.responses.forEach((r, idx) => {
+            if (firstErrors.length >= 10) return;
+            if (!r.success) {
+              firstErrors.push({
+                token: batch[idx],
+                errorCode: r.error?.code || 'UNKNOWN',
+                error: r.error?.message || 'Unknown error',
+              });
+            }
+          });
+        }
+      } catch (batchErr) {
+        errorCount += batch.length;
+        processedCount += batch.length;
+        if (firstErrors.length < 10) {
+          firstErrors.push({
+            batch: batchNumber,
+            errorCode: batchErr.code || 'BATCH_SEND_ERROR',
+            error: batchErr.message || 'Batch send failed',
+          });
+        }
+      }
+    };
+
+    await jobRef.set({
+      totalUsers: 0,
+      stats: {
+        totalRecipients: 0,
+        processedCount: 0,
+        successfulDeliveries: 0,
+        failedDeliveries: 0,
+        currentBatchNumber: 0,
+        totalBatches: 0,
+        percentComplete: 0,
+        lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      batchStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: now,
+    }, { merge: true });
+
+    let hasMore = true;
+    while (hasMore) {
+      const batchSnap = await jobRef.get();
+      if (batchSnap.exists && (batchSnap.data() || {}).status === 'cancelled') {
+        console.log(`[processNotificationJobCore] Job ${jobId} cancelled, stopping`);
+        break;
+      }
+
+      let pageQuery = usersQuery.limit(USER_PAGE_SIZE);
+      if (lastDoc) pageQuery = pageQuery.startAfter(lastDoc);
+      const usersSnapshot = await pageQuery.get();
+      if (usersSnapshot.empty) {
+        hasMore = false;
+        break;
+      }
+
+      for (const userDoc of usersSnapshot.docs) {
+        const tokens = _extractUserFcmTokensFromData(userDoc.data());
+        for (const t of tokens) {
+          tokenAccumulator.push(t);
+          if (tokenAccumulator.length >= FCM_BATCH_SIZE) {
+            await sendTokenBatch(tokenAccumulator);
+            tokenAccumulator = [];
+            const knownTotal = processedCount + tokenAccumulator.length;
+            const pct = knownTotal > 0 ? Math.round((processedCount / knownTotal) * 100) : 0;
+            await jobRef.set({
+              totalUsers: processedCount,
+              sentCount,
+              errorCount,
+              processedCount,
+              errors: firstErrors,
+              stats: {
+                totalRecipients: processedCount,
+                processedCount,
+                successfulDeliveries: sentCount,
+                failedDeliveries: errorCount,
+                currentBatchNumber: batchNumber,
+                totalBatches: batchNumber,
+                percentComplete: pct,
+                lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true });
+          }
+        }
+      }
+
+      const knownTotal = processedCount + tokenAccumulator.length;
+      if (knownTotal > 0) {
+        const pct = Math.round((processedCount / knownTotal) * 100);
+        await jobRef.set({
+          totalUsers: knownTotal,
+          sentCount,
+          errorCount,
+          processedCount,
+          errors: firstErrors,
+          stats: {
+            totalRecipients: knownTotal,
+            processedCount,
+            successfulDeliveries: sentCount,
+            failedDeliveries: errorCount,
+            currentBatchNumber: batchNumber,
+            totalBatches: batchNumber,
+            percentComplete: pct,
+            lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+
+      lastDoc = usersSnapshot.docs[usersSnapshot.docs.length - 1];
+      hasMore = usersSnapshot.size === USER_PAGE_SIZE;
+    }
+
+    if (tokenAccumulator.length > 0) {
+      await sendTokenBatch(tokenAccumulator);
+    }
+    totalUsers = processedCount;
+    await jobRef.set({
+      status: 'completed',
+      totalUsers,
+      sentCount,
+      errorCount,
+      processedCount,
+      errors: firstErrors,
+      stats: {
+        totalRecipients: totalUsers,
+        processedCount,
+        successfulDeliveries: sentCount,
+        failedDeliveries: errorCount,
+        currentBatchNumber: batchNumber,
+        totalBatches: batchNumber,
+        percentComplete: 100,
+        lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    console.error(`[processNotificationJobCore] Fatal error jobId=${jobId}`, error);
+    const code = error.code || (error.errorInfo && error.errorInfo.code);
+    const msg = error.message || String(error);
+    const isPermissionDenied =
+      code === 'permission-denied' ||
+      (typeof msg === 'string' && msg.toLowerCase().includes('permission'));
+    const errorForUser = isPermissionDenied
+      ? 'Firestore permission denied in Cloud Function. Grant the Functions '
+      + 'service account (e.g. Project ID@appspot.gserviceaccount.com) the '
+      + '"Cloud Datastore User" or "Editor" role in Google Cloud IAM.'
+      : msg;
+    await jobRef.set(
+      {
+        status: 'failed',
+        error: errorForUser,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+}
+
+/**
  * Background notification job processor (no HTTP, no web timeouts).
  *
  * Admin app creates a Firestore document in `notification_jobs/{jobId}`:
  * {
- *   kind: 'broadcast' | 'happy_hour',
+ *   kind: 'broadcast' | 'happy_hour' | 'segment',
  *   payload: { title, body, type?, imageUrl?, deepLink?, targetScreen? },
  *   createdAt: serverTimestamp(),
- *   status: 'queued'
+ *   status: 'queued' | 'scheduled'
+ *   scheduledFor?: Timestamp  // when status is 'scheduled'
  * }
  *
- * This trigger sends notifications in batches and updates progress fields:
- * sentCount, errorCount, processedCount, totalUsers, status.
+ * This trigger sends notifications in batches. If scheduledFor exists and is
+ * in the future, processing is deferred to processScheduledNotificationJobs.
  */
 exports.processNotificationJob = functions
   .region('us-central1')
@@ -5666,299 +5976,49 @@ exports.processNotificationJob = functions
   .onCreate(async (snap, context) => {
     const jobId = context.params.jobId;
     const job = snap.data() || {};
-    const kind = String(job.kind || '').trim();
-    const payload = job.payload && typeof job.payload === 'object' ? job.payload : {};
+    const scheduledFor = job.scheduledFor;
 
-    const jobRef = snap.ref;
-    const now = admin.firestore.FieldValue.serverTimestamp();
-
-    if (kind !== 'broadcast' && kind !== 'happy_hour' && kind !== 'segment') {
-      await jobRef.set(
-        {
-          status: 'failed',
-          error: `Invalid kind: ${kind || '(empty)'}`,
-          completedAt: now,
-          updatedAt: now,
-        },
-        { merge: true }
-      );
+    // Defer to cron if job is scheduled for the future
+    if (scheduledFor && scheduledFor.toDate && scheduledFor.toDate() > new Date()) {
+      console.log(`[processNotificationJob] Job ${jobId} scheduled for later, skipping`);
       return;
     }
 
-    const title = String(payload.title || '').trim();
-    const body = String(payload.body || '').trim();
-    const type =
-      kind === 'happy_hour'
-        ? 'happy_hour'
-        : String(payload.type || '').trim() || 'general';
+    await processNotificationJobCore(jobId, snap);
+  });
 
-    if (!title || !body) {
-      await jobRef.set(
-        {
-          status: 'failed',
-          error: 'Missing title/body in payload',
-          completedAt: now,
-          updatedAt: now,
-        },
-        { merge: true }
-      );
-      return;
-    }
+/**
+ * Scheduled: Process due segment notification jobs every minute.
+ * Queries notification_jobs where status='scheduled' and scheduledFor <= now,
+ * atomically claims each, then processes via processNotificationJobCore.
+ */
+exports.processScheduledNotificationJobs = functions
+  .region('us-central1')
+  .runWith({ timeoutSeconds: 300, memory: '512MB' })
+  .pubsub.schedule('* * * * *')
+  .timeZone('Asia/Manila')
+  .onRun(async () => {
+    const db = getDb();
+    const now = admin.firestore.Timestamp.now();
+    const dueSnap = await db.collection('notification_jobs')
+      .where('status', '==', 'scheduled')
+      .where('scheduledFor', '<=', now)
+      .limit(10)
+      .get();
 
-    // Check if job was cancelled before we started (e.g. admin cancelled quickly)
-    const freshSnap = await jobRef.get();
-    if (freshSnap.exists && (freshSnap.data() || {}).status === 'cancelled') {
-      console.log(`[processNotificationJob] Job ${jobId} was cancelled, skipping`);
-      return;
-    }
-
-    await jobRef.set(
-      {
-        status: 'in_progress',
-        startedAt: now,
-        updatedAt: now,
-        sentCount: 0,
-        errorCount: 0,
-        processedCount: 0,
-        totalUsers: 0,
-        errors: [],
-      },
-      { merge: true }
-    );
-
-    try {
-      const db = getDb();
-      // Build query: all active customers, optionally filtered by segment
-      let usersQuery = db
-        .collection('users')
-        .where('role', '==', 'customer')
-        .where('active', '==', true);
-
-      const segment = payload.segment;
-      const segmentFilter = (
-        kind === 'segment' &&
-        segment &&
-        typeof segment === 'string' &&
-        segment.trim() !== '' &&
-        segment.trim().toLowerCase() !== 'all'
-      );
-      if (segmentFilter) {
-        usersQuery = usersQuery.where('segment', '==', segment.trim().toLowerCase());
-      }
-      usersQuery = usersQuery.orderBy('__name__');
-      // #region agent log
-      _log('H2', 'before_query', { segment: payload.segment, segmentFilter, kind });
-      // #endregion
-
-      const FCM_BATCH_SIZE = 500;
-      const USER_PAGE_SIZE = 200;
-      let lastDoc = null;
-      let totalUsers = 0;
-      let sentCount = 0;
-      let errorCount = 0;
-      let processedCount = 0;
-      let batchNumber = 0;
-      const firstErrors = [];
-      let tokenAccumulator = [];
-
-      const buildMessage = (tokens) => {
-        const msg = {
-          notification: { title, body },
-          data: { type, timestamp: Date.now().toString() },
-          tokens,
-        };
-        if (payload.imageUrl && String(payload.imageUrl).trim().length > 0) {
-          msg.notification.imageUrl = String(payload.imageUrl).trim();
-        }
-        if (payload.deepLink && String(payload.deepLink).trim().length > 0) {
-          msg.data.deepLink = String(payload.deepLink).trim();
-        }
-        if (payload.targetScreen && String(payload.targetScreen).trim().length > 0) {
-          msg.data.targetScreen = String(payload.targetScreen).trim();
-        }
-        return msg;
-      };
-
-      const sendTokenBatch = async (batch) => {
-        if (batch.length === 0) return;
-        batchNumber++;
-        const message = buildMessage(batch);
-        try {
-          const resp = await getMessaging().sendEachForMulticast(message);
-          sentCount += resp.successCount;
-          errorCount += resp.failureCount;
-          processedCount += batch.length;
-          if (resp.failureCount > 0 && firstErrors.length < 10) {
-            resp.responses.forEach((r, idx) => {
-              if (firstErrors.length >= 10) return;
-              if (!r.success) {
-                firstErrors.push({
-                  token: batch[idx],
-                  errorCode: r.error?.code || 'UNKNOWN',
-                  error: r.error?.message || 'Unknown error',
-                });
-              }
-            });
-          }
-        } catch (batchErr) {
-          errorCount += batch.length;
-          processedCount += batch.length;
-          if (firstErrors.length < 10) {
-            firstErrors.push({
-              batch: batchNumber,
-              errorCode: batchErr.code || 'BATCH_SEND_ERROR',
-              error: batchErr.message || 'Batch send failed',
-            });
-          }
-        }
-      };
-
-      await jobRef.set({
-        totalUsers: 0,
-        stats: {
-          totalRecipients: 0,
-          processedCount: 0,
-          successfulDeliveries: 0,
-          failedDeliveries: 0,
-          currentBatchNumber: 0,
-          totalBatches: 0,
-          percentComplete: 0,
-          lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        batchStartedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: now,
-      }, { merge: true });
-
-      let hasMore = true;
-      while (hasMore) {
-        const batchSnap = await jobRef.get();
-        if (batchSnap.exists && (batchSnap.data() || {}).status === 'cancelled') {
-          console.log(`[processNotificationJob] Job ${jobId} cancelled, stopping`);
-          break;
-        }
-
-        let pageQuery = usersQuery.limit(USER_PAGE_SIZE);
-        if (lastDoc) pageQuery = pageQuery.startAfter(lastDoc);
-        const usersSnapshot = await pageQuery.get();
-        // #region agent log
-        _log('H2', 'after_query_page', { pageSize: usersSnapshot.size });
-        // #endregion
-
-        if (usersSnapshot.empty) {
-          hasMore = false;
-          break;
-        }
-
-        for (const userDoc of usersSnapshot.docs) {
-          const tokens = _extractUserFcmTokensFromData(userDoc.data());
-          for (const t of tokens) {
-            tokenAccumulator.push(t);
-            if (tokenAccumulator.length >= FCM_BATCH_SIZE) {
-              await sendTokenBatch(tokenAccumulator);
-              tokenAccumulator = [];
-              const knownTotal = processedCount + tokenAccumulator.length;
-              const pct = knownTotal > 0 ? Math.round((processedCount / knownTotal) * 100) : 0;
-              await jobRef.set({
-                totalUsers: processedCount,
-                sentCount,
-                errorCount,
-                processedCount,
-                errors: firstErrors,
-                stats: {
-                  totalRecipients: processedCount,
-                  processedCount,
-                  successfulDeliveries: sentCount,
-                  failedDeliveries: errorCount,
-                  currentBatchNumber: batchNumber,
-                  totalBatches: batchNumber,
-                  percentComplete: pct,
-                  lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                },
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              }, { merge: true });
-            }
-          }
-        }
-
-        const knownTotal = processedCount + tokenAccumulator.length;
-        if (knownTotal > 0) {
-          const pct = Math.round((processedCount / knownTotal) * 100);
-          await jobRef.set({
-            totalUsers: knownTotal,
-            sentCount,
-            errorCount,
-            processedCount,
-            errors: firstErrors,
-            stats: {
-              totalRecipients: knownTotal,
-              processedCount,
-              successfulDeliveries: sentCount,
-              failedDeliveries: errorCount,
-              currentBatchNumber: batchNumber,
-              totalBatches: batchNumber,
-              percentComplete: pct,
-              lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          }, { merge: true });
-        }
-
-        lastDoc = usersSnapshot.docs[usersSnapshot.docs.length - 1];
-        hasMore = usersSnapshot.size === USER_PAGE_SIZE;
-      }
-
-      if (tokenAccumulator.length > 0) {
-        await sendTokenBatch(tokenAccumulator);
-      }
-      totalUsers = processedCount;
-      // #region agent log
-      _log('H3', 'after_all', { totalUsers, sentCount, errorCount });
-      // #endregion
-
-      await jobRef.set({
-        status: 'completed',
-        totalUsers,
-        sentCount,
-        errorCount,
-        processedCount,
-        errors: firstErrors,
-        stats: {
-          totalRecipients: totalUsers,
-          processedCount,
-          successfulDeliveries: sentCount,
-          failedDeliveries: errorCount,
-          currentBatchNumber: batchNumber,
-          totalBatches: batchNumber,
-          percentComplete: 100,
-          lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-    } catch (error) {
-      // #region agent log
-      _log('H4', 'catch_error', { errorCode: error.code, errorMessage: error.message, jobId });
-      // #endregion
-      console.error(`[processNotificationJob] Fatal error jobId=${jobId}`, error);
-      const code = error.code || (error.errorInfo && error.errorInfo.code);
-      const msg = error.message || String(error);
-      const isPermissionDenied =
-        code === 'permission-denied' ||
-        (typeof msg === 'string' && msg.toLowerCase().includes('permission'));
-      const errorForUser = isPermissionDenied
-        ? 'Firestore permission denied in Cloud Function. Grant the Functions '
-        + 'service account (e.g. Project ID@appspot.gserviceaccount.com) the '
-        + '"Cloud Datastore User" or "Editor" role in Google Cloud IAM.'
-        : msg;
-      await jobRef.set(
-        {
-          status: 'failed',
-          error: errorForUser,
-          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    for (const doc of dueSnap.docs) {
+      const claimed = await db.runTransaction(async (t) => {
+        const snap = await t.get(doc.ref);
+        const data = snap.data();
+        if (data?.status !== 'scheduled') return false;
+        t.update(doc.ref, {
+          status: 'queued',
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
+        });
+        return true;
+      });
+      if (!claimed) continue;
+      await processNotificationJobCore(doc.id, doc);
     }
   });
 
@@ -9345,6 +9405,74 @@ exports.migrateRiderStatus = functions.https.onRequest(async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+/**
+ * One-time callable to fix riderAvailability for drivers affected by the
+ * migration bug (incorrectly set to on_delivery when they have spare capacity).
+ * Only updates drivers where current riderAvailability differs from computed.
+ */
+exports.fixRiderAvailabilityCallable = functions.region('us-central1')
+  .https.onCall(async (data, context) => {
+    const db = getDb();
+    await _loadDispatchWeights();
+    const limit = Math.min(
+      Math.max(parseInt(data?.limit || '500', 10) || 500, 1),
+      2000,
+    );
+
+    const driversSnap = await db.collection('users')
+      .where('role', '==', 'driver')
+      .limit(limit)
+      .get();
+
+    let fixed = 0;
+    const weights = await _loadDispatchWeights();
+
+    for (const doc of driversSnap.docs) {
+      const driverData = doc.data() || {};
+      const expected = _computeRiderStatus(driverData, weights);
+      const current = String(driverData.riderAvailability || '');
+      if (current !== expected.riderAvailability) {
+        await doc.ref.update({
+          riderAvailability: expected.riderAvailability,
+          riderDisplayStatus: expected.riderDisplayStatus,
+        });
+        fixed++;
+      }
+    }
+
+    return {
+      success: true,
+      processed: driversSnap.size,
+      fixed,
+      limit,
+    };
+  });
+
+/**
+ * Firestore trigger: recompute riderAvailability when inProgressOrderID changes.
+ * Catches missed updates from other code paths.
+ */
+exports.onDriverInProgressOrderIDChange = functions.firestore
+  .document('users/{driverId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    const beforeIds = JSON.stringify(before?.inProgressOrderID || []);
+    const afterIds = JSON.stringify(after?.inProgressOrderID || []);
+    if (beforeIds === afterIds) return null;
+
+    const weights = await _loadDispatchWeights();
+    const expected = _computeRiderStatus(after, weights);
+    const current = String(after?.riderAvailability || '');
+    if (current !== expected.riderAvailability) {
+      await change.after.ref.update({
+        riderAvailability: expected.riderAvailability,
+        riderDisplayStatus: expected.riderDisplayStatus,
+      });
+    }
+    return null;
+  });
 
 // ============================================================
 // Rider Performance Recalculation (server-side weighted formula)

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import 'package:brgy/pages/notification_actions_dashboard.dart';
 import 'package:brgy/pages/notification_progress_page.dart';
 import 'package:brgy/services/user_segment_service.dart';
@@ -38,6 +39,8 @@ class _NotificationManagementPageState
     'snack': true,
     'dinner': true,
   };
+  bool _scheduleEnabled = false;
+  DateTime? _scheduledDateTime;
 
   final List<String> _targetScreenOptions = [
     'home',
@@ -215,6 +218,35 @@ class _NotificationManagementPageState
     setState(() {
       _targetScreen = null;
       _selectedSegment = 'all';
+      _scheduleEnabled = false;
+      _scheduledDateTime = null;
+    });
+  }
+
+  Future<void> _pickScheduleDateTime() async {
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
+      initialDate: _scheduledDateTime ?? now.add(const Duration(days: 1)),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: _scheduledDateTime != null
+          ? TimeOfDay.fromDateTime(_scheduledDateTime!)
+          : const TimeOfDay(hour: 10, minute: 0),
+    );
+    if (time == null || !mounted) return;
+    setState(() {
+      _scheduledDateTime = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      );
     });
   }
 
@@ -258,21 +290,58 @@ class _NotificationManagementPageState
       return;
     }
 
+    // Schedule validation
+    if (_scheduleEnabled && _scheduledDateTime == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please pick a date and time'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+    if (_scheduleEnabled &&
+        _scheduledDateTime != null &&
+        _scheduledDateTime!.isBefore(DateTime.now())) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please pick a future date and time'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
     final segmentName = _getSegmentDisplayName();
+    final isScheduled = _scheduleEnabled && _scheduledDateTime != null;
+    final scheduledLabel = isScheduled
+        ? DateFormat.yMd().add_Hm().format(_scheduledDateTime!)
+        : null;
 
     // Show confirmation dialog with preview
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Queue Segment Notification'),
+        title: Text(
+          isScheduled
+              ? 'Schedule Segment Notification'
+              : 'Queue Segment Notification',
+        ),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'This will queue a notification to $segmentName. '
-                'It will be sent in the background. Continue?',
+                isScheduled
+                    ? 'This will schedule a notification to $segmentName '
+                        'to be sent at $scheduledLabel. Continue?'
+                    : 'This will queue a notification to $segmentName. '
+                        'It will be sent in the background. Continue?',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
@@ -288,7 +357,7 @@ class _NotificationManagementPageState
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: TextButton.styleFrom(foregroundColor: Colors.orange),
-            child: const Text('Queue'),
+            child: Text(isScheduled ? 'Schedule' : 'Queue'),
           ),
         ],
       ),
@@ -325,11 +394,8 @@ class _NotificationManagementPageState
         payload['segment'] = _selectedSegment;
       }
 
-      final ref = await FirebaseFirestore.instance
-          .collection('notification_jobs')
-          .add({
+      final docData = <String, dynamic>{
         'kind': 'segment',
-        'status': 'queued',
         'createdAt': FieldValue.serverTimestamp(),
         'payload': payload,
         'stats': {
@@ -342,7 +408,18 @@ class _NotificationManagementPageState
           'percentComplete': 0.0,
           'lastUpdatedAt': FieldValue.serverTimestamp(),
         },
-      });
+      };
+
+      if (isScheduled) {
+        docData['status'] = 'scheduled';
+        docData['scheduledFor'] = Timestamp.fromDate(_scheduledDateTime!);
+      } else {
+        docData['status'] = 'queued';
+      }
+
+      final ref = await FirebaseFirestore.instance
+          .collection('notification_jobs')
+          .add(docData);
 
       if (mounted) {
         _titleController.clear();
@@ -352,6 +429,8 @@ class _NotificationManagementPageState
         setState(() {
           _targetScreen = null;
           _selectedSegment = 'all';
+          _scheduleEnabled = false;
+          _scheduledDateTime = null;
         });
 
         final jobId = ref.id;
@@ -359,10 +438,15 @@ class _NotificationManagementPageState
         showDialog<void>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('Notification queued'),
+            title: Text(
+              isScheduled ? 'Notification scheduled' : 'Notification queued',
+            ),
             content: Text(
-              'Your notification to $segmentName has been queued '
-              'and will be sent in the background.',
+              isScheduled
+                  ? 'Your notification to $segmentName has been scheduled '
+                      'for $scheduledLabel and will be sent automatically.'
+                  : 'Your notification to $segmentName has been queued '
+                      'and will be sent in the background.',
             ),
             actions: [
               TextButton(
@@ -1008,6 +1092,46 @@ class _NotificationManagementPageState
                   ),
                 ],
               ),
+              const SizedBox(height: 16),
+
+              // Schedule for later
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Schedule for later'),
+                value: _scheduleEnabled,
+                onChanged: (v) {
+                  setState(() {
+                    _scheduleEnabled = v;
+                    if (!v) _scheduledDateTime = null;
+                  });
+                },
+              ),
+              if (_scheduleEnabled) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _isSending ? null : _pickScheduleDateTime,
+                      icon: const Icon(Icons.calendar_today, size: 18),
+                      label: Text(
+                        _scheduledDateTime != null
+                            ? DateFormat.yMd().add_Hm().format(_scheduledDateTime!)
+                            : 'Pick date and time',
+                      ),
+                    ),
+                    if (_scheduledDateTime != null) ...[
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: () {
+                          setState(() => _scheduledDateTime = null);
+                        },
+                        icon: const Icon(Icons.clear),
+                        tooltip: 'Clear',
+                      ),
+                    ],
+                  ],
+                ),
+              ],
               const SizedBox(height: 24),
 
               // Cancel and Send Buttons
@@ -1033,7 +1157,9 @@ class _NotificationManagementPageState
                             )
                           : const Icon(Icons.send),
                       label: Text(
-                        _isSending ? 'Queuing...' : 'Send Notification',
+                        _isSending
+                            ? (_scheduleEnabled ? 'Scheduling...' : 'Queuing...')
+                            : 'Send Notification',
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.orange,
@@ -1174,10 +1300,17 @@ class _NotificationManagementPageState
                     statusColor = Colors.orange;
                   } else if (status == 'cancelled') {
                     statusColor = Colors.amber;
+                  } else if (status == 'scheduled') {
+                    statusColor = Colors.blue;
                   }
 
                   String progressText;
-                  if (status == 'in_progress' &&
+                  if (status == 'scheduled') {
+                    final sf = data['scheduledFor'] as Timestamp?;
+                    progressText = sf != null
+                        ? ' (${DateFormat.yMd().add_Hm().format(sf.toDate())})'
+                        : '';
+                  } else if (status == 'in_progress' &&
                       percentComplete != null &&
                       totalUsers > 0) {
                     progressText = ' $percentComplete%';
@@ -1194,7 +1327,8 @@ class _NotificationManagementPageState
                   }
 
                   final canCancel = status == 'queued' ||
-                      status == 'in_progress';
+                      status == 'in_progress' ||
+                      status == 'scheduled';
 
                   return InkWell(
                     onTap: () {
@@ -1277,6 +1411,8 @@ class _NotificationManagementPageState
         return Icons.hourglass_empty;
       case 'cancelled':
         return Icons.cancel;
+      case 'scheduled':
+        return Icons.schedule_send;
       default:
         return Icons.schedule;
     }

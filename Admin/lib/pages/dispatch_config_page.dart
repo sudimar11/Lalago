@@ -21,6 +21,7 @@ class _DispatchConfigPageState
   bool _isLoading = true;
   bool _isSaving = false;
   bool _autoDispatchEnabled = true;
+  bool _bypassRiderCheck = false;
 
   double _weightETA = 0.35;
   double _weightWorkload = 0.20;
@@ -85,6 +86,7 @@ class _DispatchConfigPageState
           .doc('performance_tiers')
           .get(),
       _dispatchConfigService.getAutoDispatchEnabled(),
+      _dispatchConfigService.getBypassRiderCheck(),
     ]);
 
     final weights = results[0] as Map<String, double>;
@@ -93,6 +95,7 @@ class _DispatchConfigPageState
         results[2] as List<Map<String, dynamic>>;
     final tierDoc = results[3] as DocumentSnapshot;
     final autoDispatchEnabled = results[4] as bool;
+    final bypassRiderCheck = results[5] as bool;
 
     final tierData =
         tierDoc.data() as Map<String, dynamic>?;
@@ -221,8 +224,56 @@ class _DispatchConfigPageState
 
       _history = history;
       _autoDispatchEnabled = autoDispatchEnabled;
+      _bypassRiderCheck = bypassRiderCheck;
       _isLoading = false;
     });
+  }
+
+  Future<void> _onBypassRiderCheckToggleChanged(bool value) async {
+    if (value) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Enable Bypass?'),
+          content: const Text(
+            'This allows orders to be placed even when no delivery partners '
+            'are available. Orders will queue until a rider becomes available. '
+            'Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Enable'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    try {
+      await _dispatchConfigService.setBypassRiderCheck(value);
+      if (mounted) {
+        setState(() => _bypassRiderCheck = value);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Bypass rider check: ${value ? "ON" : "OFF"}'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _onAutoDispatchToggleChanged(bool value) async {
@@ -314,6 +365,53 @@ class _DispatchConfigPageState
               value: _autoDispatchEnabled,
               activeColor: Colors.black,
               onChanged: (v) => _onAutoDispatchToggleChanged(v),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBypassRiderCheckSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Bypass rider availability check',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'When ON, orders are accepted even when no riders are available; '
+              'they queue until a rider is assigned. When OFF, orders are '
+              'rejected with a message if no rider can be assigned.',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Bypass rider availability check',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              ),
+              subtitle: Text(
+                _bypassRiderCheck
+                    ? 'Orders allowed even when no riders available'
+                    : 'Orders require at least one available rider',
+                style: const TextStyle(fontSize: 12),
+              ),
+              value: _bypassRiderCheck,
+              activeColor: Colors.black,
+              onChanged: _onBypassRiderCheckToggleChanged,
             ),
           ],
         ),
@@ -483,6 +581,8 @@ class _DispatchConfigPageState
               padding: const EdgeInsets.all(16),
               children: [
                 _buildAutoDispatchSection(),
+                const SizedBox(height: 24),
+                _buildBypassRiderCheckSection(),
                 const SizedBox(height: 24),
                 _buildWeightsSection(),
                 const SizedBox(height: 24),

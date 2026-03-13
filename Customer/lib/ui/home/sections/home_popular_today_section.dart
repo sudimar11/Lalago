@@ -30,6 +30,27 @@ class HomePopularTodaySection extends StatelessWidget {
     this.onRetry,
   }) : super(key: key);
 
+  void _writeDebugLog({
+    required String runId,
+    required String hypothesisId,
+    required String location,
+    required String message,
+    required Map<String, dynamic> data,
+  }) {
+    try {
+      final payload = <String, dynamic>{
+        'sessionId': 'cb7231',
+        'runId': runId,
+        'hypothesisId': hypothesisId,
+        'location': location,
+        'message': message,
+        'data': data,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      };
+      debugPrint(jsonEncode(payload));
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     if (hasError && onRetry != null) {
@@ -130,17 +151,54 @@ class HomePopularTodaySection extends StatelessWidget {
         : 0.0;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onTap: () async {
-        VendorModel? vendorModel =
-            await FireStoreUtils.getVendor(product.vendorID);
+      onTap: () {
+        final int tapStartMs = DateTime.now().millisecondsSinceEpoch;
+        // #region agent log
+        _writeDebugLog(
+          runId: 'baseline',
+          hypothesisId: 'B',
+          location: 'home_popular_today_section.dart:onTap:start',
+          message: 'popular_today_tap_started',
+          data: {
+            'productId': product.id,
+            'vendorId': product.vendorID,
+            'localVendorAvailable': popularTodayVendorModel.id.isNotEmpty,
+          },
+        );
+        // #endregion
+        final VendorModel? vendorModel =
+            popularTodayVendorModel.id.isNotEmpty
+                ? popularTodayVendorModel
+                : null;
 
         if (vendorModel != null) {
+          final int navigateMs = DateTime.now().millisecondsSinceEpoch;
+          // #region agent log
+          _writeDebugLog(
+            runId: 'post-fix',
+            hypothesisId: 'A',
+            location: 'home_popular_today_section.dart:onTap:navigate',
+            message: 'popular_today_navigating_product_details',
+            data: {
+              'productId': product.id,
+              'vendorId': product.vendorID,
+              'usedLocalVendor': true,
+              'tapToNavigateMs': navigateMs - tapStartMs,
+            },
+          );
+          // #endregion
           push(
             context,
             ProductDetailsScreen(
               vendorModel: vendorModel,
               productModel: product,
             ),
+          );
+        } else {
+          _navigateWithFallbackFetch(
+            context: context,
+            product: product,
+            tapStartMs: tapStartMs,
           );
         }
       },
@@ -302,5 +360,50 @@ class HomePopularTodaySection extends StatelessWidget {
   bool _hasPhoto(String photo) {
     final String trimmed = photo.trim();
     return trimmed.isNotEmpty && trimmed.toLowerCase() != 'null';
+  }
+
+  void _navigateWithFallbackFetch({
+    required BuildContext context,
+    required ProductModel product,
+    required int tapStartMs,
+  }) {
+    // #region agent log
+    _writeDebugLog(
+      runId: 'post-fix',
+      hypothesisId: 'D',
+      location: 'home_popular_today_section.dart:onTap:fallbackStart',
+      message: 'popular_today_fallback_fetch_started',
+      data: {
+        'productId': product.id,
+        'vendorId': product.vendorID,
+      },
+    );
+    // #endregion
+    FireStoreUtils.getVendor(product.vendorID).then((vendorModel) {
+      final int fetchDoneMs = DateTime.now().millisecondsSinceEpoch;
+      // #region agent log
+      _writeDebugLog(
+        runId: 'post-fix',
+        hypothesisId: 'D',
+        location: 'home_popular_today_section.dart:onTap:fallbackDone',
+        message: 'popular_today_fallback_fetch_completed',
+        data: {
+          'productId': product.id,
+          'vendorId': product.vendorID,
+          'durationMs': fetchDoneMs - tapStartMs,
+          'fetchedVendorNull': vendorModel == null,
+        },
+      );
+      // #endregion
+      if (vendorModel != null) {
+        push(
+          context,
+          ProductDetailsScreen(
+            vendorModel: vendorModel,
+            productModel: product,
+          ),
+        );
+      }
+    });
   }
 }

@@ -56,6 +56,40 @@ class DispatchConfigService {
     );
   }
 
+  /// Read bypass rider check flag. Defaults to false if document/field missing.
+  Future<bool> getBypassRiderCheck() async {
+    final doc = await _settingsRef.get();
+    if (!doc.exists || doc.data() == null) return false;
+    final data = doc.data()! as Map<String, dynamic>;
+    return data['bypassRiderCheck'] as bool? ?? false;
+  }
+
+  /// Stream bypass rider check for real-time UI updates.
+  Stream<bool> streamBypassRiderCheck() {
+    return _settingsRef.snapshots().map((snap) {
+      if (!snap.exists || snap.data() == null) return false;
+      final data = snap.data()! as Map<String, dynamic>;
+      return data['bypassRiderCheck'] as bool? ?? false;
+    });
+  }
+
+  /// Update bypass rider check. Merges so other settings (e.g. autoDispatchEnabled) are preserved.
+  Future<void> setBypassRiderCheck(bool value, {String? adminUid}) async {
+    final uid = adminUid ??
+        FirebaseAuth.instance.currentUser?.uid ??
+        'admin_ui';
+    await _settingsRef.set(
+      {
+        'bypassRiderCheck': value,
+        'bypassRiderCheckUpdatedAt': FieldValue.serverTimestamp(),
+        'bypassRiderCheckUpdatedBy': uid,
+        'lastModified': FieldValue.serverTimestamp(),
+        'lastModifiedBy': uid,
+      },
+      SetOptions(merge: true),
+    );
+  }
+
   Future<void> _logToggle({
     required bool newValue,
     required bool previousValue,

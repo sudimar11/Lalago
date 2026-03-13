@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:brgy/constants.dart';
+import 'package:brgy/pages/customer_information_page.dart';
 import 'package:brgy/active_buyers_today_page.dart';
 import 'package:brgy/active_buyers_this_week_page.dart';
 import 'package:brgy/orders_this_week_page.dart';
@@ -59,6 +61,125 @@ bool analyticsIsFoodPublished(Map<String, dynamic> data) {
   return false;
 }
 
+Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+    _fetchNewCustomersToday() async {
+  final now = DateTime.now();
+  final startOfDay = DateTime(now.year, now.month, now.day);
+  final startOfTomorrow = startOfDay.add(const Duration(days: 1));
+
+  final snap = await FirebaseFirestore.instance
+      .collection(USERS)
+      .where('role', isEqualTo: USER_ROLE_CUSTOMER)
+      .where(
+        'createdAt',
+        isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+      )
+      .where(
+        'createdAt',
+        isLessThan: Timestamp.fromDate(startOfTomorrow),
+      )
+      .orderBy('createdAt', descending: true)
+      .limit(100)
+      .get();
+
+  return snap.docs;
+}
+
+void _showNewCustomersTodayBottomSheet(BuildContext context) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (sheetContext) => DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      maxChildSize: 0.9,
+      minChildSize: 0.3,
+      expand: false,
+      builder: (_, scrollController) => FutureBuilder<
+          List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+        future: _fetchNewCustomersToday(),
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return Padding(
+              padding: const EdgeInsets.all(24),
+              child: SelectableText.rich(
+                TextSpan(
+                  text: 'Error: ${snap.error}',
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+            );
+          }
+          final docs = snap.data ?? [];
+          if (docs.isEmpty) {
+            return const Center(child: Text('No new customers today'));
+          }
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'New customers today (${docs.length})',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollController,
+                  itemCount: docs.length,
+                  itemBuilder: (context, index) {
+                    final doc = docs[index];
+                    final data = doc.data() ?? {};
+                    final firstName =
+                        (data['firstName'] ?? '').toString();
+                    final lastName = (data['lastName'] ?? '').toString();
+                    final name = '$firstName $lastName'.trim();
+                    final email = (data['email'] ?? '').toString();
+                    final phone =
+                        (data['phoneNumber'] ?? '').toString();
+                    final ts = data['createdAt'] ?? data['created_at'];
+                    final timeStr = ts is Timestamp
+                        ? DateFormat('HH:mm')
+                            .format(ts.toDate().toLocal())
+                        : '';
+                    final subtitleParts = [
+                      if (email.isNotEmpty) email,
+                      if (phone.isNotEmpty) phone,
+                      if (timeStr.isNotEmpty) timeStr,
+                    ];
+
+                    return ListTile(
+                      leading: const CircleAvatar(
+                        child: Icon(Icons.person),
+                      ),
+                      title: Text(name.isEmpty ? 'Unknown' : name),
+                      subtitle: Text(subtitleParts.join(' • ')),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) => CustomerInformationPage(
+                              userId: doc.id,
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+}
+
 /// Builder-style widget - parent provides KpiCard builder since it's private.
 class NewCustomersTodayKpi extends StatelessWidget {
   const NewCustomersTodayKpi({
@@ -79,11 +200,8 @@ class NewCustomersTodayKpi extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<QuerySnapshot>(
-      future: FirebaseFirestore.instance
-          .collection(USERS)
-          .where('role', isEqualTo: USER_ROLE_CUSTOMER)
-          .get(),
+    return FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+      future: _fetchNewCustomersToday(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return buildCard(
@@ -95,28 +213,13 @@ class NewCustomersTodayKpi extends StatelessWidget {
             isLoading: true,
           );
         }
-        int count = 0;
-        final now = DateTime.now();
-        if (snap.hasData) {
-          for (final doc in snap.data!.docs) {
-            final data = doc.data() as Map<String, dynamic>?;
-            if (data == null) continue;
-            final ts = data['createdAt'] ?? data['created_at'];
-            if (ts == null || ts is! Timestamp) continue;
-            final dt = ts.toDate().toLocal();
-            if (dt.year == now.year &&
-                dt.month == now.month &&
-                dt.day == now.day) {
-              count++;
-            }
-          }
-        }
+        final count = snap.data?.length ?? 0;
         return buildCard(
           icon: Icons.person_add,
           label: 'New customers today',
           value: '${snap.hasError ? '-' : count}',
           helper: 'Today',
-          onTap: () => onNavigate(const CustomersPage()),
+          onTap: () => _showNewCustomersTodayBottomSheet(context),
           isLoading: false,
         );
       },
